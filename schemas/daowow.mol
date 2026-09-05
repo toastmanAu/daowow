@@ -1,0 +1,54 @@
+/*
+ * DAOWOW candidate Molecule schema skeleton.
+ * DO NOT freeze field widths or layouts until occupied-capacity and cycle benchmarks.
+ * The coding agent should refine this after the prototype phase.
+ */
+
+array Byte32 [byte; 32];
+array Uint32 [byte; 4];
+array Uint64 [byte; 8];
+
+struct RoundConfigV1 {
+    version: Uint32,
+    round_id: Byte32,
+    ticket_price: Uint64,
+    minimum_tickets: Uint64,
+    maximum_tickets: Uint64,
+    entry_start: Uint64,
+    entry_end: Uint64,
+    aggregation_deadline: Uint64,
+    dao_term_periods: Uint32,
+    entry_shard_count: Uint32,
+    prize_schedule_hash: Byte32,
+    fee_policy_hash: Byte32,
+    keeper_policy_hash: Byte32,
+}
+
+struct EntryShardDataV1 {
+    round_id: Byte32,
+    shard_id: Uint32,
+    sequence: Uint64,
+    entry_count: Uint64,
+    ticket_count: Uint64,
+    principal_total: Uint64,
+    accumulator_root: Byte32,
+}
+
+struct EntryDataV1 {
+    round_id: Byte32,
+    shard_id: Uint32,
+    participant_lock_hash: Byte32,
+    ticket_count: Uint64,
+    principal: Uint64,
+    nonce: Uint64,
+    entropy_commitment: Byte32,
+}
+
+struct BatchDataV1 {
+    round_id: Byte32,
+    batch_id: Uint64,
+    entry_count: Uint64,
+    ticket_count: Uint64,
+    principal: Uint64,
+    entries_subroot: Byte32,
+}

@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DAOWOW — local round model</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="wordmark">DAO<span>WOW</span></div>
+  <span class="badge badge-model" title="All balances, transactions and cycles are simulated locally — no chain connection">LOCAL MODEL</span>
+  <span class="badge" id="core-badge" title="JS mirror of daowow-core checked against Rust-generated vectors">core check…</span>
+  <span class="flex-spacer"></span>
+  <span class="topstat" id="stat-round" title="Round id (blake2b-256, truncated)"></span>
+  <button class="btn ghost" id="btn-export" disabled title="Download the full round state as JSON — what an independent verifier would consume">Export verifier bundle</button>
+</header>
+
+<nav class="stepper" id="stepper" aria-label="Round lifecycle"></nav>
+
+<main class="layout">
+
+  <!-- ===================== controls column ===================== -->
+  <section class="col">
+
+    <div class="card" id="card-config">
+      <h2>Round configuration</h2>
+      <p class="hint">Creates the immutable RoundConfig cell (TX-01) and one EntryShard cell per shard.</p>
+      <div class="form-grid">
+        <label>Round name <input id="cfg-name" type="text" value="demo-round"></label>
+        <label>Ticket price <span class="unit">CKB</span><input id="cfg-price" type="number" value="100" min="1" step="1"></label>
+        <label>Shards <input id="cfg-shards" type="number" value="4" min="1" max="32" step="1"></label>
+        <label>Min tickets <input id="cfg-mintickets" type="number" value="5" min="1" step="1"></label>
+        <label>Keeper fee <span class="unit">CKB</span><input id="cfg-keeper" type="number" value="5" min="0" step="1"></label>
+        <label>DAO yield <span class="unit">%/term</span><input id="cfg-yield" type="number" value="2" min="0" max="20" step="0.5"></label>
+        <label>Batch size <span class="unit">entries/tx</span><input id="cfg-batch" type="number" value="3" min="1" max="16" step="1"></label>
+      </div>
+
+      <h3>Participants <span class="hint-inline">secret is hashed into an entropy commitment at join time</span></h3>
+      <div id="draft-participants" class="draft-list"></div>
+      <div class="row">
+        <button class="btn ghost small" id="btn-add-participant">+ add participant</button>
+        <button class="btn ghost small" id="btn-demo-participants">load demo 8</button>
+      </div>
+
+      <button class="btn primary wide" id="btn-create">Create round&nbsp;(TX-01)</button>
+    </div>
+
+    <div class="card" id="card-actions">
+      <h2>Round progression</h2>
+      <p class="hint">Every transition is permissionless — the buttons just sign and submit what any keeper could.</p>
+      <div id="actions-body" class="actions"></div>
+      <button class="btn accent wide" id="btn-autorun" disabled>Run full round automatically</button>
+    </div>
+
+    <div class="card adv" id="card-adv">
+      <h2>Adversarial attempts</h2>
+      <p class="hint">Each button tries a real protocol violation. The engine rejects it with the same error code the on-chain script returns — <strong>checks mirror the on-chain scripts</strong>, they are not UI-only validation.</p>
+      <div class="adv-grid">
+        <button class="btn danger small" id="adv-forge" title="Submit an aggregation whose shard accumulator root omits an entry">Forge shard root</button>
+        <button class="btn danger small" id="adv-double" title="Claim a second payout for an already-settled lock">Double payout</button>
+        <button class="btn danger small" id="adv-operator" title="Settle prize capacity to the operator's own lock">Payout to operator</button>
+        <button class="btn danger small" id="adv-substitute" title="Replace the DAO withdrawing output lock in phase 1">Phase-1 lock substitution</button>
+      </div>
+      <div id="adv-log" class="adv-log mono"></div>
+    </div>
+
+  </section>
+
+  <!-- ===================== state column ===================== -->
+  <section class="col">
+
+    <div class="card" id="card-shards">
+      <h2>Entry shards</h2>
+      <p class="hint">Each shard keeps an MMR accumulator of accepted entries; contended shard heads serialize through the UTXO model.</p>
+      <div id="shards-body" class="shard-grid"></div>
+    </div>
+
+    <div class="card" id="card-entries">
+      <h2>Entries &amp; participants</h2>
+      <p class="hint">One entry cell per participant tx. Position ranges are assigned by the shard at entry time.</p>
+      <div id="entries-body"></div>
+    </div>
+
+    <div class="card" id="card-entropy">
+      <h2>Entropy &amp; draw</h2>
+      <div id="entropy-body"></div>
+    </div>
+
+    <div class="card" id="card-dao">
+      <h2>Nervos DAO custody</h2>
+      <div id="dao-body"></div>
+    </div>
+
+    <div class="card" id="card-settle">
+      <h2>Settlement</h2>
+      <div id="settle-body"></div>
+    </div>
+
+  </section>
+</main>
+
+<!-- ===================== ledger drawer ===================== -->
+<div class="ledger" id="ledger">
+  <button class="ledger-bar" id="ledger-bar">
+    <span class="ledger-title">Ledger</span>
+    <span class="mono" id="ledger-stats">0 txs · Σ 0 cycles</span>
+    <span class="ledger-chevron" id="ledger-chevron">▲</span>
+  </button>
+  <div class="ledger-body" id="ledger-body"></div>
+</div>
+
+<div class="toasts" id="toasts"></div>
+
+<footer class="foot">
+  <p><strong>DAOWOW</strong> is a non-custodial prize-linked savings protocol on Nervos CKB.
+  This page is a <strong>protocol model and testnet driver</strong>, not a wallet: balances and cycles are
+  simulated locally (cycles from CKB-VM measurements, see prototype-report.md). The JS core is checked
+  against the same deterministic vectors as the Rust contracts. Wallet integration (CCC) is a later milestone.</p>
+</footer>
+
+<script src="vectors.js"></script>
+<script src="core.js"></script>
+<script src="engine.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

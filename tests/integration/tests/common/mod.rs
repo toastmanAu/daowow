@@ -1,0 +1,466 @@
+//! Shared test harness: deploys the DAOWOW contracts into a ckb-testtool
+//! context and provides builders for round/shard/entry/DAO/settlement
+//! transactions.
+
+use ckb_testtool::ckb_types::{bytes::Bytes, core::{TransactionView, ScriptHashType, DepType, TransactionBuilder}, packed::*, prelude::*};
+use ckb_testtool::context::Context;
+use daowow_core::accumulator::nonce_key;
+pub use daowow_core::encoding::*;
+pub use daowow_core::hash::Hash32;
+pub use daowow_core::accumulator::smt::host::SmtHost;
+use std::path::PathBuf;
+
+pub const MAX_CYCLES: u64 = 70_000_000;
+pub const SHANNONS: u64 = 100_000_000;
+
+/// Unambiguous packed-value constructors (dual Pack traits are in scope via
+/// glob imports).
+pub fn pack_u64(v: u64) -> Uint64 {
+    use ckb_testtool::ckb_types::prelude::Pack;
+    v.pack()
+}
+
+pub fn pack_byte(v: u8) -> Byte {
+    Byte::from(v)
+}
+
+/// Convert raw bytes into the molecule `packed::Bytes` wrapper (length
+/// handled by the Pack impl).
+pub fn pack_pbytes(b: &[u8]) -> ckb_testtool::ckb_types::packed::Bytes {
+    use ckb_testtool::ckb_types::prelude::Pack;
+    ckb_testtool::ckb_types::bytes::Bytes::from(b.to_vec()).pack()
+}
+
+pub fn bin_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../target/riscv64imac-unknown-none-elf/release")
+}
+
+pub fn read_bin(name: &str) -> Bytes {
+    std::fs::read(bin_dir().join(name))
+        .expect("contract binary (build with: cargo build --target riscv64imac-unknown-none-elf --release -p <contract>)")
+        .into()
+}
+
+/// Script references recorded in the round config (hash_type = data = 0 for
+/// our contracts, type = 1 for the native DAO).
+#[derive(Clone, Copy)]
+pub struct Deps {
+    pub round_type: ScriptRef,
+    pub entry_shard_type: ScriptRef,
+    pub entry_lock: ScriptRef,
+    pub dao_lock: ScriptRef,
+    pub settlement_type: ScriptRef,
+    pub dao_type: ScriptRef,
+    pub accumulator_id: u8,
+}
+
+pub struct World {
+    pub context: Context,
+    pub deps: Deps,
+    /// cell carrying the native DAO type script (for cell deps)
+    pub dao_cell_op: OutPoint,
+    /// the DAO type script as used in transaction outputs (code_hash =
+    /// registered holder type hash)
+    dao_type_script: Script,
+}
+
+pub fn dao_binary() -> Bytes {
+    let data: Vec<u8> = ckb_system_scripts::BUNDLED_CELL
+        .get("specs/cells/dao")
+        .expect("bundled dao binary")
+        .to_vec();
+    Bytes::from(data)
+}
+
+pub fn full_config(cfg: &RoundConfigV1, deps: &Deps) -> RoundConfigV1 {
+    let mut c = *cfg;
+    c.entry_lock = deps.entry_lock;
+    c.dao_lock = deps.dao_lock;
+    c.settlement_type = deps.settlement_type;
+    c.entry_shard_type = deps.entry_shard_type;
+    c.dao_type = deps.dao_type;
+    c
+}
+
+pub fn default_config(round_id: Hash32, accumulator_id: u8) -> RoundConfigV1 {
+    RoundConfigV1 {
+        version: 1,
+        round_id,
+        ticket_price: 100 * SHANNONS,
+        minimum_tickets: 1,
+        maximum_tickets: 0,
+        entry_start: 0,
+        entry_end: 100,
+        aggregation_deadline: 200,
+        dao_term_periods: 1,
+        entry_shard_count: 4,
+        prize_schedule_hash: [9; 32],
+        fee_policy_hash: [8; 32],
+        keeper_policy_hash: [7; 32],
+        flags: 0,
+        accumulator_id,
+        entry_lock: ScriptRef { code_hash: [0; 32], hash_type: 0 },
+        dao_lock: ScriptRef { code_hash: [0; 32], hash_type: 0 },
+        settlement_type: ScriptRef { code_hash: [0; 32], hash_type: 0 },
+        entry_shard_type: ScriptRef { code_hash: [0; 32], hash_type: 0 },
+        dao_type: ScriptRef { code_hash: [0; 32], hash_type: 1 },
+    }
+}
+
+pub fn empty_root(accumulator_id: u8) -> Hash32 {
+    match accumulator_id {
+        ACC_SMT => [0u8; 32],
+        ACC_MMR => daowow_core::accumulator::mmr::bag_peaks(&[]).unwrap(),
+        ACC_IMT => {
+            daowow_core::accumulator::imt::zero_at(daowow_core::accumulator::imt::IMT_DEPTH)
+        }
+        _ => panic!("bad accumulator id"),
+    }
+}
+
+impl World {
+    /// Deploy every contract and the native DAO cell.
+    pub fn new(accumulator_id: u8) -> Self {
+        let mut context = Context::new_with_deterministic_rng();
+
+        let round_type_op = context.deploy_cell(read_bin("round-type"));
+        let shard_type_op = context.deploy_cell(read_bin("entry-shard-type"));
+        let entry_lock_op = context.deploy_cell(read_bin("entry-lock"));
+        let dao_lock_op = context.deploy_cell(read_bin("dao-lock"));
+        let settle_type_op = context.deploy_cell(read_bin("settlement-type"));
+        let _dao_raw_op = context.deploy_cell(dao_binary());
+
+        fn script_ref_of(op: &OutPoint, context: &mut Context) -> ScriptRef {
+            let script = context
+                .build_script_with_hash_type(op, ScriptHashType::Data1, Bytes::new())
+                .unwrap();
+            ScriptRef {
+                code_hash: script
+                    .code_hash()
+                    .raw_data()
+                    .as_ref()
+                    .try_into()
+                    .unwrap(),
+                hash_type: 2,
+            }
+        }
+        let round_type = script_ref_of(&round_type_op, &mut context);
+        let entry_shard_type = script_ref_of(&shard_type_op, &mut context);
+        let entry_lock = script_ref_of(&entry_lock_op, &mut context);
+        let dao_lock = script_ref_of(&dao_lock_op, &mut context);
+        let settlement_type = script_ref_of(&settle_type_op, &mut context);
+
+        // Native DAO holder cell: its type script is registered under the
+        // script's own hash (calc_script_hash), mirroring how genesis
+        // self-consistently deploys system scripts. The effective DAO type
+        // script for transactions uses that hash as its code_hash.
+        let holder_type = {
+            let op = context
+                .deploy_cell(ckb_testtool::builtin::ALWAYS_SUCCESS.clone());
+            ScriptBuilder::default()
+                .code_hash(Byte32::new({
+                    let t = context.get_cell(&op).unwrap().0.type_().to_opt().unwrap();
+                    t.calc_script_hash().raw_data().as_ref().try_into().unwrap()
+                }))
+                .hash_type(pack_byte(ScriptHashType::Type as u8))
+                .args(Bytes::new())
+                .build()
+        };
+        // script used in outputs: code_hash = the registered holder hash
+        let dao_type_script = ScriptBuilder::default()
+            .code_hash(holder_type.calc_script_hash())
+            .hash_type(pack_byte(ScriptHashType::Type as u8))
+            .args(Bytes::new())
+            .build();
+        // what on-chain `load_cell_type_hash` returns for DAO cells — this is
+        // what cfg.dao_type.code_hash must equal
+        let dao_type_code_hash: [u8; 32] = dao_type_script
+            .calc_script_hash()
+            .raw_data()
+            .as_ref()
+            .try_into()
+            .unwrap();
+        let holder_lock = {
+            let op = context
+                .deploy_cell(ckb_testtool::builtin::ALWAYS_SUCCESS.clone());
+            context.build_script(&op, Bytes::new()).unwrap()
+        };
+        let dao_output = CellOutputBuilder::default()
+            .capacity(pack_u64(200 * SHANNONS))
+            .lock(holder_lock)
+            .type_(Some(holder_type.clone()).pack())
+            .build();
+        let dao_cell_op = context.create_cell(dao_output, dao_binary());
+
+
+
+        let deps = Deps {
+            round_type,
+            entry_shard_type,
+            entry_lock,
+            dao_lock,
+            settlement_type,
+            dao_type: ScriptRef {
+                code_hash: dao_type_code_hash,
+                hash_type: 1,
+            },
+            accumulator_id,
+        };
+
+        context.set_capture_debug(true);
+        World { context, deps, dao_cell_op, dao_type_script }
+    }
+
+    pub fn always_success(&mut self) -> (OutPoint, Script) {
+        let op = self
+            .context
+            .deploy_cell(ckb_testtool::builtin::ALWAYS_SUCCESS.clone());
+        // data1 deployment => VM V1 (matches our contracts)
+        let lock = self
+            .context
+            .build_script_with_hash_type(&op, ScriptHashType::Data1, Bytes::new())
+            .unwrap();
+        (op, lock)
+    }
+
+    /// A fresh funding cell; returns out point + lock script.
+    pub fn funding_cell(&mut self, capacity: u64) -> (OutPoint, Script) {
+        let (op, lock) = self.always_success();
+        let output = CellOutputBuilder::default()
+            .capacity(pack_u64(capacity))
+            .lock(lock.clone())
+            .build();
+        let op = self.context.create_cell(output, Bytes::new());
+        (op, lock)
+    }
+
+    pub fn participant_hash(lock: &Script) -> Hash32 {
+        lock.calc_script_hash()
+            .raw_data()
+            .as_ref()
+            .try_into()
+            .unwrap()
+    }
+
+    pub fn script_for(&mut self, r: &ScriptRef, args: Bytes) -> Script {
+        let code_hash = r.code_hash;
+        let hash_type = r.hash_type;
+        let op = self
+            .context
+            .get_cell_by_data_hash(&Byte32::new(code_hash))
+            .expect("deployed contract");
+        self.context
+            .build_script_with_hash_type(
+                &op,
+                match hash_type {
+                    0 => ScriptHashType::Data,
+                    2 => ScriptHashType::Data1,
+                    1 => ScriptHashType::Type,
+                    _ => panic!("bad hash type"),
+                },
+                args,
+            )
+            .unwrap()
+    }
+
+    pub fn round_config_dep(&mut self, op: &OutPoint) -> CellDep {
+        CellDepBuilder::default()
+            .out_point(op.clone())
+            .dep_type(pack_byte(DepType::Code as u8))
+            .build()
+    }
+
+    /// Create the immutable round config cell.
+    pub fn create_round(&mut self, cfg: &RoundConfigV1) -> OutPoint {
+        let (_, lock) = self.always_success();
+        let c = full_config(cfg, &self.deps);
+        let args = Bytes::from(vec![0xAA, 0, 0, 0, 0, 0, 0, 0]);
+        let round_type_ref = self.deps.round_type;
+        let round_type_script = self.script_for(&round_type_ref, args);
+        let output = CellOutputBuilder::default()
+            .capacity(pack_u64(400 * SHANNONS))
+            .lock(lock)
+            .type_(Some(round_type_script).pack())
+            .build();
+        self.context
+            .create_cell(output, Bytes::from(c.encode().to_vec()))
+    }
+
+    /// Create an initial (empty, OPEN) shard cell.
+    pub fn create_shard(
+        &mut self,
+        cfg: &RoundConfigV1,
+        shard_id: u32,
+        type_id: u64,
+    ) -> (OutPoint, EntryShardDataV1) {
+        let (_, lock) = self.always_success();
+        let shard = EntryShardDataV1 {
+            round_id: cfg.round_id,
+            shard_id,
+            state: SHARD_STATE_OPEN,
+            sequence: 0,
+            entry_count: 0,
+            ticket_count: 0,
+            principal_total: 0,
+            accumulator_root: empty_root(cfg.accumulator_id),
+        };
+        let shard_type_ref = self.deps.entry_shard_type;
+        let shard_type_script = self
+            .script_for(&shard_type_ref, Bytes::from(type_id.to_le_bytes().to_vec()));
+        let output = CellOutputBuilder::default()
+            .capacity(pack_u64(300 * SHANNONS))
+            .lock(lock)
+            .type_(Some(shard_type_script).pack())
+            .build();
+        let op = self
+            .context
+            .create_cell(output, Bytes::from(shard.encode().to_vec()));
+        (op, shard)
+    }
+
+    pub fn entry_lock_script(&mut self, participant_lock_hash: &Hash32) -> Script {
+        let r = self.deps.entry_lock;
+        self.script_for(&r, Bytes::from(participant_lock_hash.to_vec()))
+    }
+
+    pub fn dao_lock_script(&mut self, round_id: &Hash32, batch_id: u64) -> Script {
+        let r = self.deps.dao_lock;
+        let mut args = round_id.to_vec();
+        args.extend_from_slice(&batch_id.to_le_bytes());
+        self.script_for(&r, Bytes::from(args))
+    }
+
+    /// The native DAO type script for transaction outputs (its code_hash
+    /// resolves to the holder cell registered in this context).
+    pub fn dao_type_script(&self) -> Script {
+        self.dao_type_script.clone()
+    }
+
+    pub fn settlement_script(&mut self, type_id: u64) -> Script {
+        let r = self.deps.settlement_type;
+        self.script_for(&r, Bytes::from(type_id.to_le_bytes().to_vec()))
+    }
+
+    pub fn cell(&self, op: &OutPoint) -> (CellOutput, Bytes) {
+        self.context.get_cell(op).unwrap()
+    }
+}
+
+pub fn make_entry(
+    cfg: &RoundConfigV1,
+    shard: &EntryShardDataV1,
+    participant_lock_hash: &Hash32,
+    tickets: u64,
+    entropy_commitment: &Hash32,
+) -> EntryDataV1 {
+    EntryDataV1 {
+        round_id: cfg.round_id,
+        shard_id: shard.shard_id,
+        participant_lock_hash: *participant_lock_hash,
+        ticket_count: tickets,
+        principal: tickets * cfg.ticket_price,
+        position_base: shard.ticket_count,
+        entry_nonce: shard.entry_count,
+        entropy_commitment: *entropy_commitment,
+    }
+}
+
+/// Build a batch of entries with nonce/position advancing correctly inside
+/// the transaction.
+pub fn make_entry_batch(
+    cfg: &RoundConfigV1,
+    shard: &EntryShardDataV1,
+    participant_lock_hash: &Hash32,
+    ticket_counts: &[u64],
+    commitments: &[Hash32],
+) -> Vec<EntryDataV1> {
+    let mut out = Vec::new();
+    let mut running_tickets = shard.ticket_count;
+    for (i, t) in ticket_counts.iter().enumerate() {
+        out.push(EntryDataV1 {
+            round_id: cfg.round_id,
+            shard_id: shard.shard_id,
+            participant_lock_hash: *participant_lock_hash,
+            ticket_count: *t,
+            principal: t * cfg.ticket_price,
+            position_base: running_tickets,
+            entry_nonce: shard.entry_count + i as u64,
+            entropy_commitment: commitments[i],
+        });
+        running_tickets += t;
+    }
+    out
+}
+
+pub fn entry_cell_capacity(entry: &EntryDataV1) -> u64 {
+    // capacity field (8) + data (132) + lock (33 + 32 args); no type script
+    entry.principal + (8 + ENTRY_DATA_SIZE as u64) + (33 + 32)
+}
+
+pub fn smt_leaf(entry: &EntryDataV1) -> Hash32 {
+    daowow_core::leaf::entry_leaf(entry)
+}
+
+pub fn smt_key(entry: &EntryDataV1) -> Hash32 {
+    nonce_key(entry.entry_nonce)
+}
+
+pub fn smt_append_witness(entries: &[EntryDataV1], certs: &[(&[u8], &[u8])]) -> Bytes {
+    daowow_core::witness::encode_shard_append_witness_smt(entries, certs).into()
+}
+
+pub fn aggregation_witness(proof: &[u8]) -> Bytes {
+    daowow_core::witness::encode_aggregation_witness(proof).into()
+}
+
+pub fn expect_ok(context: &mut Context, tx: &TransactionView) -> u64 {
+    let tx = context.complete_tx(tx.clone());
+    match context.verify_tx(&tx, MAX_CYCLES) {
+        Ok(cycles) => cycles,
+        Err(e) => {
+            for m in context.captured_messages() {
+                eprintln!("[script] {}", m.message);
+            }
+            panic!(
+                "tx should pass but failed: {}\ntx: {}",
+                e,
+                hex_tx(&tx)
+            )
+        }
+    }
+}
+
+/// Dump a tx as mock JSON for external ckb-debugger runs.
+pub fn dump_tx_json(context: &Context, tx: &TransactionView) -> String {
+    let repr = context.dump_tx(tx).expect("dump tx");
+    serde_json::to_string_pretty(&repr).expect("json")
+}
+
+/// Replace the mock cell at `op` with `tx`'s output at `out_index`, chaining
+/// transactions (testtool mocks don't consume inputs).
+pub fn chain_cell(world: &mut World, op: &OutPoint, tx: &TransactionView, out_index: usize) {
+    let output = tx.outputs().get(out_index).unwrap();
+    let data = tx.outputs_data().get(out_index).unwrap().raw_data();
+    world
+        .context
+        .create_cell_with_out_point(op.clone(), output, data);
+}
+
+pub fn expect_fail(context: &mut Context, tx: &TransactionView) -> ckb_testtool::ckb_error::Error {
+    let tx = context.complete_tx(tx.clone());
+    match context.verify_tx(&tx, MAX_CYCLES) {
+        Ok(_) => panic!("tx should fail but passed:\n{}", hex_tx(&tx)),
+        Err(e) => e,
+    }
+}
+
+pub fn hex_tx(tx: &TransactionView) -> String {
+    // serialize the transaction for debugging
+    let v = migraph_hex(tx.data().as_bytes());
+    v
+}
+
+fn migraph_hex(b: impl AsRef<[u8]>) -> String {
+    b.as_ref().iter().map(|x| format!("{:02x}", x)).collect()
+}

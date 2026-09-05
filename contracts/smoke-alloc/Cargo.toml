@@ -1,0 +1,12 @@
+[package]
+name = "smoke-alloc"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+ckb-std = { version = "=1.1.0", default-features = false, features = ["calc-hash", "ckb-types", "dummy-atomic", "type-id"] }
+daowow-contracts-common = { path = "../../crates/daowow-contracts-common" }
+
+[[bin]]
+name = "smoke-alloc"
+path = "src/main.rs"

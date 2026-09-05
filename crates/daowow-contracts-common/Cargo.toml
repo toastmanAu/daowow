@@ -1,0 +1,11 @@
+[package]
+name = "daowow-contracts-common"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+ckb-std = { version = "=1.1.0", default-features = false, features = ["allocator", "calc-hash", "ckb-types", "dummy-atomic", "type-id"] }
+daowow-core = { path = "../daowow-core", default-features = false }
+
+[lib]
+crate-type = ["cdylib", "rlib"]

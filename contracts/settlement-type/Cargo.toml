@@ -1,0 +1,14 @@
+[package]
+name = "settlement-type"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+ckb-std = { version = "=1.1.0", default-features = false, features = ["allocator", "calc-hash", "ckb-types", "dummy-atomic", "type-id"] }
+daowow-core = { path = "../../crates/daowow-core", default-features = false }
+daowow-contracts-common = { path = "../../crates/daowow-contracts-common" }
+
+
+[[bin]]
+name = "settlement-type"
+path = "src/main.rs"

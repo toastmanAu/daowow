@@ -1,0 +1,119 @@
+{
+  "description": "DAOWOW accumulator bakeoff, measured with ckb-testtool (ckb-vm), rustc/ckb versions in toolchain.lock.md",
+  "samples": [
+    {
+      "accumulator": "SMT",
+      "append_cycles": 833357,
+      "append_proof_bytes": 6,
+      "append_witness_bytes": 146,
+      "leaves_before": 0,
+      "membership_cycles_per_op": 472465,
+      "membership_proof_bytes": 3
+    },
+    {
+      "accumulator": "MMR",
+      "append_cycles": 74983,
+      "append_proof_bytes": 34,
+      "append_witness_bytes": 150,
+      "leaves_before": 0,
+      "membership_cycles_per_op": 14463,
+      "membership_proof_bytes": 35
+    },
+    {
+      "accumulator": "IMT",
+      "append_cycles": 8024178,
+      "append_proof_bytes": 1024,
+      "append_witness_bytes": 1132,
+      "leaves_before": 0,
+      "membership_cycles_per_op": 249082,
+      "membership_proof_bytes": 1024
+    },
+    {
+      "accumulator": "SMT",
+      "append_cycles": 948164,
+      "append_proof_bytes": 340,
+      "append_witness_bytes": 480,
+      "leaves_before": 15,
+      "membership_cycles_per_op": 528449,
+      "membership_proof_bytes": 170
+    },
+    {
+      "accumulator": "MMR",
+      "append_cycles": 112312,
+      "append_proof_bytes": 162,
+      "append_witness_bytes": 278,
+      "leaves_before": 15,
+      "membership_cycles_per_op": 45654,
+      "membership_proof_bytes": 163
+    },
+    {
+      "accumulator": "IMT",
+      "append_cycles": 8055154,
+      "append_proof_bytes": 1024,
+      "append_witness_bytes": 1132,
+      "leaves_before": 15,
+      "membership_cycles_per_op": 249086,
+      "membership_proof_bytes": 1024
+    },
+    {
+      "accumulator": "SMT",
+      "append_cycles": 991016,
+      "append_proof_bytes": 600,
+      "append_witness_bytes": 740,
+      "leaves_before": 255,
+      "membership_cycles_per_op": 546179,
+      "membership_proof_bytes": 300
+    },
+    {
+      "accumulator": "MMR",
+      "append_cycles": 148450,
+      "append_proof_bytes": 290,
+      "append_witness_bytes": 406,
+      "leaves_before": 255,
+      "membership_cycles_per_op": 76783,
+      "membership_proof_bytes": 291
+    },
+    {
+      "accumulator": "IMT",
+      "append_cycles": 8086130,
+      "append_proof_bytes": 1024,
+      "append_witness_bytes": 1132,
+      "leaves_before": 255,
+      "membership_cycles_per_op": 249090,
+      "membership_proof_bytes": 1024
+    },
+    {
+      "accumulator": "SMT",
+      "append_cycles": 1112176,
+      "append_proof_bytes": 934,
+      "append_witness_bytes": 1074,
+      "leaves_before": 4095,
+      "membership_cycles_per_op": 602231,
+      "membership_proof_bytes": 467
+    },
+    {
+      "accumulator": "MMR",
+      "append_cycles": 184588,
+      "append_proof_bytes": 418,
+      "append_witness_bytes": 534,
+      "leaves_before": 4095,
+      "membership_cycles_per_op": 107912,
+      "membership_proof_bytes": 419
+    },
+    {
+      "accumulator": "IMT",
+      "append_cycles": 8117106,
+      "append_proof_bytes": 1024,
+      "append_witness_bytes": 1132,
+      "leaves_before": 4095,
+      "membership_cycles_per_op": 249094,
+      "membership_proof_bytes": 1024
+    }
+  ],
+  "sizes": [
+    0,
+    15,
+    255,
+    4095
+  ]
+}

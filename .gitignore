@@ -1,0 +1,22 @@
+# Rust / CKB build artifacts
+/target/
+**/*.rs.bk
+
+# Node
+node_modules/
+npm-debug.log*
+
+# Local tooling installed in /tmp (see apps/web/PROGRESS.md)
+*.tar.xz
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+
+# Local deployment state (deployed-scripts manifests with testnet keys stay out)
+.env
+.env.*
+*.local.json

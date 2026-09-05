@@ -1,0 +1,16 @@
+[package]
+name = "daowow-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "DAOWOW deterministic protocol primitives (no_std on-chain core)"
+
+[features]
+default = ["std"]
+std = []
+
+[dependencies]
+blake2b-ref = "=0.3.1"
+
+[dev-dependencies]
+serde_json = "1"

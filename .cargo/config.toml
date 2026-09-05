@@ -1,0 +1,12 @@
+# CKB contract build configuration
+#
+# --no-rosegment is required on this VM build: without it .rodata lands in an
+# executable page and script startup faults with MemWriteOnExecutablePage.
+#
+# NOTE: deliberately plain RV64IMAC — no B-extension (zba/zbb/zbc/zbs) flags,
+# they produce instructions CKB-VM v1 does not implement.
+[target.riscv64imac-unknown-none-elf]
+rustflags = [
+    "--cfg", "daowow_noatomic",
+    "-C", "link-arg=--no-rosegment",
+]

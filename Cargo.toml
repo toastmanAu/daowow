@@ -1,0 +1,50 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/daowow-core",
+    "crates/daowow-contracts-common",
+    "contracts/smoke-minimal",
+    "contracts/smoke-alloc",
+    "contracts/round-type",
+    "contracts/entry-shard-type",
+    "contracts/entry-lock",
+    "contracts/dao-lock",
+    "contracts/settlement-type",
+    "contracts/accumulator-bench",
+    "tests/integration",
+]
+
+# Vendored `bytes` with single-threaded (non-atomic) refcounting: the base
+# CKB-VM ISA has no RISC-V A-extension instructions and rustc 1.98 no longer
+# supports the `lower-atomic` LLVM pass. Contracts are single-threaded.
+[patch.crates-io]
+bytes = { path = "vendor/bytes" }
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+# Pinned CKB stack (see toolchain.lock.md)
+ckb-std = { version = "=1.1.0", default-features = false, features = ["allocator", "calc-hash", "ckb-types", "dummy-atomic", "type-id"] }
+ckb-testtool = "=1.1.1"
+blake2b-ref = "=0.3.1"
+
+# internal
+daowow-core = { path = "crates/daowow-core", default-features = false }
+daowow-contracts-common = { path = "crates/daowow-contracts-common" }
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+overflow-checks = true
+
+[profile.contract-release]
+inherits = "release"
+strip = true
+
+# RISC-V contract profile used by `cargo build -p <contract> --target riscv64imac-unknown-none-elf`
+[profile.release.package."*"]
+opt-level = "z"

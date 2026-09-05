@@ -1,0 +1,11 @@
+[package]
+name = "smoke-minimal"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+ckb-std = { version = "=1.1.0", default-features = false, features = ["allocator", "calc-hash", "ckb-types", "dummy-atomic", "type-id"] }
+
+[[bin]]
+name = "smoke-minimal"
+path = "src/main.rs"
