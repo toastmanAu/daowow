@@ -1,5 +1,5 @@
-use alloc::string::String;
 use super::H256;
+use alloc::string::String;
 
 pub type Result<T> = ::core::result::Result<T, Error>;
 

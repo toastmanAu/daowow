@@ -1,5 +1,11 @@
 # DAOWOW UI sprint — progress notes
 
+2026-09-15: a separate consumer-facing `entry.html` preview now provides ticket
+selection/review and wallet-availability information. The existing simulator
+below is preserved. See [entry preview notes](ENTRY-README.md); this is not a
+live wallet or chain-connected entry UI. Historical completion claims below
+refer to the local simulator only.
+
 Date: 2026-09-05 (session 2). **The UI sprint is complete and verified.**
 Context: protocol prototype (M0–M3) was complete and green — see
 `prototype-report.md`; session 1 built `core.js`/`vectors.js` and most of

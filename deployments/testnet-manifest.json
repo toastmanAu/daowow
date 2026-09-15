@@ -1,0 +1,111 @@
+{
+  "schemaVersion": 1,
+  "status": "confirmed",
+  "purpose": "prototype-code-cells-only",
+  "fundedRoundsReady": false,
+  "network": "ckb_testnet",
+  "rpcUrl": "https://testnet.ckb.dev/rpc",
+  "genesisHash": "0x10639e0895502b5688a6be8cf69460d76541bfa4821629d86d62ba0aae3f9606",
+  "buildProfile": "contract-release",
+  "sourceBaseCommit": "975467e",
+  "sourceNotes": "Includes uncommitted round-type validation bypass repair. Artifact SHA-256 values below identify the exact payloads; this is not a pristine build of the base commit.",
+  "expectedTransactionHash": "0x12c1ec3a523bff74caaefa329ce8b115854be61cc3b50521dd7d9efd0d4b8006",
+  "confirmationBlockHash": "0xd8ebd265f8f1aca1b1e92b617c5019f884c036cc64992a237b59b40027fdea36",
+  "fundingInput": {
+    "txHash": "0xf17f13d4a6407e1d510f0a131df062eb4705fe21c8255c8c8265ce5969caefc4",
+    "index": 0
+  },
+  "inputCapacityShannons": "30000000000000",
+  "codeCapacityShannons": "18077700000000",
+  "feeShannons": "362744",
+  "changeCapacityShannons": "11922299637256",
+  "changeOutputIndex": 5,
+  "codeCellOwnerLock": {
+    "codeHash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+    "hashType": "type",
+    "args": "0x5ea0977c3cab6898817c9860fe70d26acf559f76"
+  },
+  "scripts": {
+    "round-type": {
+      "outputIndex": 0,
+      "codeHash": "0xd7f7be340ef42b63f298ccde9b34067eb13b90e32fa008d35daa59d89a51112c",
+      "hashType": "data1",
+      "depType": "code",
+      "binaryBytes": 11016,
+      "sha256": "dbf4a87e34489b801f833f7f1cb5fbad8ae0077f647606ada4c236ac57a556ef",
+      "cellDep": {
+        "outPoint": {
+          "txHash": "0x12c1ec3a523bff74caaefa329ce8b115854be61cc3b50521dd7d9efd0d4b8006",
+          "index": 0
+        },
+        "depType": "code"
+      }
+    },
+    "entry-shard-type": {
+      "outputIndex": 1,
+      "codeHash": "0xd33e3c9dbd19cc49ed786731dbd51acbc48536effbf8368b5d303c46c787f227",
+      "hashType": "data1",
+      "depType": "code",
+      "binaryBytes": 64576,
+      "sha256": "8742f7fa0958ee112e9f47a68950518e754b05ddf248bb3c6232ff399a5e6ee0",
+      "cellDep": {
+        "outPoint": {
+          "txHash": "0x12c1ec3a523bff74caaefa329ce8b115854be61cc3b50521dd7d9efd0d4b8006",
+          "index": 1
+        },
+        "depType": "code"
+      }
+    },
+    "entry-lock": {
+      "outputIndex": 2,
+      "codeHash": "0xd49df3eec3e35ef7b557f76c9cd162f3e2ea9a412caea74f21b5c1cce7f7600e",
+      "hashType": "data1",
+      "depType": "code",
+      "binaryBytes": 49880,
+      "sha256": "f0f8ded3bf956398794576b9a22cc6b552ab16655194e6a2d6c31e02a72fcb86",
+      "cellDep": {
+        "outPoint": {
+          "txHash": "0x12c1ec3a523bff74caaefa329ce8b115854be61cc3b50521dd7d9efd0d4b8006",
+          "index": 2
+        },
+        "depType": "code"
+      }
+    },
+    "dao-lock": {
+      "outputIndex": 3,
+      "codeHash": "0xe7d1c3f6a3cb25a30ccd56b88ea447d2b5dd95033c7a312ed8c74a16253cc882",
+      "hashType": "data1",
+      "depType": "code",
+      "binaryBytes": 21152,
+      "sha256": "3b71b4669a8692eaa489b280af7f1feb728f5c29b48c6c8c1c38a0372c67c69d",
+      "cellDep": {
+        "outPoint": {
+          "txHash": "0x12c1ec3a523bff74caaefa329ce8b115854be61cc3b50521dd7d9efd0d4b8006",
+          "index": 3
+        },
+        "depType": "code"
+      }
+    },
+    "settlement-type": {
+      "outputIndex": 4,
+      "codeHash": "0xe6a2f7c433149807df898bfd868c27114374306d1df7f5fac3eae87eaf78543e",
+      "hashType": "data1",
+      "depType": "code",
+      "binaryBytes": 33848,
+      "sha256": "cb393e3dcb08b900d3fcec8381da8c2fa3e0a251f35b23d0be879f6d4037fb05",
+      "cellDep": {
+        "outPoint": {
+          "txHash": "0x12c1ec3a523bff74caaefa329ce8b115854be61cc3b50521dd7d9efd0d4b8006",
+          "index": 4
+        },
+        "depType": "code"
+      }
+    }
+  },
+  "transactionHash": "0x12c1ec3a523bff74caaefa329ce8b115854be61cc3b50521dd7d9efd0d4b8006",
+  "confirmationBlockNumber": 22314903,
+  "verifiedAt": "2026-09-05T04:47:27.709Z",
+  "confirmationsAtVerification": 9,
+  "deploymentTransactionCycles": 1658029,
+  "migrationReceipt": "deployments/migrations/2026-09-05-044628.json"
+}

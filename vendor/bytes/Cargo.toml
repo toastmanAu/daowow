@@ -132,4 +132,4 @@ version = "0.7"
 [lints.rust.unexpected_cfgs]
 level = "warn"
 priority = 0
-check-cfg = ["cfg(loom)"]
+check-cfg = ["cfg(loom)", "cfg(daowow_noatomic)"]

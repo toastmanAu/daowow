@@ -8,18 +8,16 @@
 //! The verify machinery (merkle_proof.rs) is no_std + alloc and is used
 //! on-chain unchanged.
 
+#[cfg(feature = "std")]
+pub mod default_store;
 pub mod error;
 pub mod h256;
 pub mod hasher;
 pub mod merge;
 pub mod merkle_proof;
-#[cfg(feature = "std")]
-pub mod default_store;
 pub mod traits;
 pub mod tree;
 
-/// Expected path size: log2(256) * 2, used for hint vector capacity
-pub(crate) const EXPECTED_PATH_SIZE: usize = 16;
 /// Max stack size can be used when verify compiled proof
 pub(crate) const MAX_STACK_SIZE: usize = 257;
 

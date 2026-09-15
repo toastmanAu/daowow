@@ -28,7 +28,13 @@ fn repro_settlement_proof() {
     for (lh, p, z) in &parts {
         let proof = host.inclusion_proof(&[*lh]).unwrap();
         assert!(
-            daowow_core::accumulator::smt::verify_membership(&root, lh, &liability_leaf(lh, *p, *z), &proof).is_ok(),
+            daowow_core::accumulator::smt::verify_membership(
+                &root,
+                lh,
+                &liability_leaf(lh, *p, *z),
+                &proof
+            )
+            .is_ok(),
             "proof should verify for {:?}",
             lh
         );

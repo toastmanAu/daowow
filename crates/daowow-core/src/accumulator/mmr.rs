@@ -85,7 +85,7 @@ pub mod host {
     use super::*;
     use std::vec::Vec;
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, Default)]
     pub struct MmrHost {
         leaves: Vec<Hash32>,
         peaks: Vec<Hash32>,
@@ -94,7 +94,11 @@ pub mod host {
 
     impl MmrHost {
         pub fn new() -> Self {
-            Self { leaves: Vec::new(), peaks: Vec::new(), count: 0 }
+            Self {
+                leaves: Vec::new(),
+                peaks: Vec::new(),
+                count: 0,
+            }
         }
 
         pub fn count(&self) -> u64 {
@@ -126,7 +130,7 @@ pub mod host {
                 return Err(CoreError::InvalidArgument);
             }
             // locate the subtree containing pos (bits of count, high->low)
-            let mut remaining = self.count;
+            let remaining = self.count;
             let mut base = 0u64;
             let mut slot = 0u8;
             let mut height: u32 = 0;
@@ -148,7 +152,11 @@ pub mod host {
             let mut idx = local as usize;
             let mut path: Vec<Hash32> = Vec::new();
             while level.len() > 1 {
-                let sib = if idx & 1 == 0 { level[idx + 1] } else { level[idx - 1] };
+                let sib = if idx & 1 == 0 {
+                    level[idx + 1]
+                } else {
+                    level[idx - 1]
+                };
                 path.push(sib);
                 let mut next = Vec::with_capacity(level.len() / 2);
                 for pair in level.chunks(2) {
@@ -189,6 +197,25 @@ pub fn verify_membership(
         return Err(CoreError::MembershipProof);
     }
     let path_len = proof[0] as usize;
+    // The position selects exactly one mountain. A witness cannot choose
+    // another peak with coincidentally identical low direction bits.
+    let mut base = 0u64;
+    let mut expected_slot = 0usize;
+    let mut expected_height = 0usize;
+    for height in (0..64).rev() {
+        if count >> height & 1 == 1 {
+            let size = 1u64 << height;
+            if pos - base < size {
+                expected_height = height;
+                break;
+            }
+            base += size;
+            expected_slot += 1;
+        }
+    }
+    if path_len != expected_height {
+        return Err(CoreError::MembershipProof);
+    }
     let mut off = 1;
     if proof.len() < off + path_len * 32 + 2 {
         return Err(CoreError::MembershipProof);
@@ -208,15 +235,19 @@ pub fn verify_membership(
     let slot = proof[off] as usize;
     let peaks_len = proof[off + 1] as usize;
     off += 2;
-    if peaks_len > MAX_PEAKS || slot >= peaks_len || proof.len() < off + peaks_len * 32 {
+    if peaks_len > MAX_PEAKS
+        || slot >= peaks_len
+        || slot != expected_slot
+        || proof.len() != off + peaks_len * 32
+    {
         return Err(CoreError::MembershipProof);
     }
     if peaks_len as u32 != count.count_ones() {
         return Err(CoreError::MembershipProof);
     }
     let mut peaks = [[0u8; 32]; MAX_PEAKS];
-    for i in 0..peaks_len {
-        peaks[i].copy_from_slice(&proof[off..off + 32]);
+    for peak in peaks.iter_mut().take(peaks_len) {
+        peak.copy_from_slice(&proof[off..off + 32]);
         off += 32;
     }
     peaks[slot] = cur;
@@ -317,6 +348,18 @@ mod tests {
     }
 
     #[test]
+    fn membership_proof_is_bound_to_position_in_mixed_peaks() {
+        let m = build(5);
+        let root = m.root().unwrap();
+        let proof = m.membership_proof(0).unwrap();
+
+        assert!(verify_membership(&root, 5, 4, &leaf(0), &proof).is_err());
+        let mut extended = proof;
+        extended.push(0);
+        assert!(verify_membership(&root, 5, 0, &leaf(0), &extended).is_err());
+    }
+
+    #[test]
     fn append_certificates_all_lengths() {
         for n in 0u64..70 {
             let m = build(n);
@@ -325,7 +368,7 @@ mod tests {
             for p in m.peaks() {
                 wire_old.extend_from_slice(p);
             }
-            let mut m2 = build(n + 1);
+            let m2 = build(n + 1);
             let new_root = m2.root().unwrap();
             let mut wire_new = vec![m2.peaks().len() as u8];
             for p in m2.peaks() {
@@ -358,7 +401,7 @@ mod tests {
         for p in &m.peaks()[..n] {
             wire.extend_from_slice(p);
         }
-        let mut m2 = build(6);
+        let m2 = build(6);
         let new_root = m2.root().unwrap();
         let mut wire_new = vec![m2.peaks().len() as u8];
         for p in m2.peaks() {
@@ -368,7 +411,6 @@ mod tests {
         let _ = ckb_hash256_one(b"x");
     }
 }
-
 
 #[cfg(test)]
 mod debug_print {
@@ -383,8 +425,14 @@ mod debug_print {
     fn print_roots() {
         let mut m = host::MmrHost::new();
         for i in 0u64..5 {
-            m.append(&ckb_hash256_one(format!("mmr-{i}").as_bytes())).unwrap();
-            println!("MMRDEBUG n={} root={} peaks={}", i + 1, hx(&m.root().unwrap()), m.peaks().len());
+            m.append(&ckb_hash256_one(format!("mmr-{i}").as_bytes()))
+                .unwrap();
+            println!(
+                "MMRDEBUG n={} root={} peaks={}",
+                i + 1,
+                hx(&m.root().unwrap()),
+                m.peaks().len()
+            );
         }
         let mut im = super::super::imt::host::ImtHost::new();
         for i in 0u64..5 {

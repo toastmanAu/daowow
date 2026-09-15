@@ -19,10 +19,6 @@ pub(crate) mod sync {
                 unsafe { *self.0.get() }
             }
             #[allow(unused_variables)]
-            pub(crate) fn store(&self, v: usize, order: Ordering) {
-                unsafe { *self.0.get() = v }
-            }
-            #[allow(unused_variables)]
             pub(crate) fn fetch_add(&self, v: usize, order: Ordering) -> usize {
                 unsafe {
                     let p = self.0.get();
@@ -72,10 +68,6 @@ pub(crate) mod sync {
                 unsafe { *self.0.get() }
             }
             #[allow(unused_variables)]
-            pub(crate) fn store(&self, p: *mut T, order: Ordering) {
-                unsafe { *self.0.get() = p }
-            }
-            #[allow(unused_variables)]
             pub(crate) fn compare_exchange(
                 &self,
                 current: *mut T,
@@ -117,11 +109,6 @@ pub(crate) mod sync {
             Acquire,
             Release,
             AcqRel,
-            SeqCst,
-        }
-        #[allow(non_upper_case_globals)]
-        pub(crate) mod OrderingNs {
-            pub use super::Ordering::*;
         }
     }
 }

@@ -97,6 +97,12 @@ pub struct RoundConfigV1 {
 }
 
 impl RoundConfigV1 {
+    /// A content commitment carried in every protocol script's args. Copies
+    /// of these bytes are equivalent; a matching round_id alone is not proof.
+    pub fn commitment(&self) -> Hash32 {
+        crate::hash::ckb_hash256(&[b"DAOWOW_CONFIG_V2", &self.encode()])
+    }
+
     pub fn encode(&self) -> [u8; ROUND_CONFIG_SIZE] {
         let mut out = [0u8; ROUND_CONFIG_SIZE];
         write_u32(&mut out, 0, self.version);
@@ -109,9 +115,18 @@ impl RoundConfigV1 {
         write_u64(&mut out, 76, self.aggregation_deadline);
         write_u32(&mut out, 84, self.dao_term_periods);
         write_u32(&mut out, 88, self.entry_shard_count);
-        self.prize_schedule_hash.iter().enumerate().for_each(|(i, b)| out[92 + i] = *b);
-        self.fee_policy_hash.iter().enumerate().for_each(|(i, b)| out[124 + i] = *b);
-        self.keeper_policy_hash.iter().enumerate().for_each(|(i, b)| out[156 + i] = *b);
+        self.prize_schedule_hash
+            .iter()
+            .enumerate()
+            .for_each(|(i, b)| out[92 + i] = *b);
+        self.fee_policy_hash
+            .iter()
+            .enumerate()
+            .for_each(|(i, b)| out[124 + i] = *b);
+        self.keeper_policy_hash
+            .iter()
+            .enumerate()
+            .for_each(|(i, b)| out[156 + i] = *b);
         write_u32(&mut out, 188, self.flags);
         out[192] = self.accumulator_id;
         let mut w = 193;
@@ -135,13 +150,19 @@ impl RoundConfigV1 {
             return Err(CoreError::Encoding);
         }
         let mut hashes = [[0u8; 32]; 3];
-        for i in 0..3 {
-            hashes[i] = read_hash(data, 92 + i * 32);
+        for (i, hash) in hashes.iter_mut().enumerate() {
+            *hash = read_hash(data, 92 + i * 32);
         }
-        let mut scripts = [ScriptRef { code_hash: [0u8; 32], hash_type: 0 }; 5];
-        for i in 0..5 {
+        let mut scripts = [ScriptRef {
+            code_hash: [0u8; 32],
+            hash_type: 0,
+        }; 5];
+        for (i, script) in scripts.iter_mut().enumerate() {
             let w = 193 + i * 33;
-            scripts[i] = ScriptRef { code_hash: read_hash(data, w), hash_type: data[w + 32] };
+            *script = ScriptRef {
+                code_hash: read_hash(data, w),
+                hash_type: data[w + 32],
+            };
         }
         Ok(Self {
             version: read_u32(data, 0),
@@ -179,6 +200,9 @@ impl RoundConfigV1 {
             return Err(CoreError::InvalidArgument);
         }
         if self.entry_start > self.entry_end || self.entry_end > self.aggregation_deadline {
+            return Err(CoreError::InvalidArgument);
+        }
+        if self.aggregation_deadline > crate::epoch::MAX_EPOCH_NUMBER {
             return Err(CoreError::InvalidArgument);
         }
         if self.dao_term_periods == 0 {
@@ -343,13 +367,13 @@ impl BatchDataV1 {
 }
 
 // ---------------------------------------------------------------------------
-// SettlementFundingDataV1
+// SettlementFundingDataV2
 // ---------------------------------------------------------------------------
 
-pub const SETTLEMENT_FUNDING_SIZE: usize = 128;
+pub const SETTLEMENT_FUNDING_SIZE: usize = 112;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SettlementFundingDataV1 {
+pub struct SettlementFundingDataV2 {
     pub round_id: Hash32,
     pub batch_id: u64,
     /// gross realised capacity from the DAO (principal surplus + compensation)
@@ -358,13 +382,15 @@ pub struct SettlementFundingDataV1 {
     pub principal_liability: u64,
     /// authorised prize pool (<= realised compensation after costs)
     pub prize_pool: u64,
-    /// payouts are strictly ordered by participant_lock_hash; cursor = last paid
-    pub payout_cursor: Hash32,
-    /// accumulator root over liabilities leaves
+    /// Index of the next liability to pay in the immutable tree.
+    pub payout_cursor: u64,
+    /// Immutable number of leaves in the liabilities tree; must be nonzero.
+    pub liability_count: u64,
+    /// Immutable accumulator root over liability leaves.
     pub liabilities_root: Hash32,
 }
 
-impl SettlementFundingDataV1 {
+impl SettlementFundingDataV2 {
     pub fn encode(&self) -> [u8; SETTLEMENT_FUNDING_SIZE] {
         let mut out = [0u8; SETTLEMENT_FUNDING_SIZE];
         out[0..32].copy_from_slice(&self.round_id);
@@ -372,13 +398,19 @@ impl SettlementFundingDataV1 {
         write_u64(&mut out, 40, self.realized_total);
         write_u64(&mut out, 48, self.principal_liability);
         write_u64(&mut out, 56, self.prize_pool);
-        out[64..96].copy_from_slice(&self.payout_cursor);
-        out[96..128].copy_from_slice(&self.liabilities_root);
+        write_u64(&mut out, 64, self.payout_cursor);
+        write_u64(&mut out, 72, self.liability_count);
+        out[80..112].copy_from_slice(&self.liabilities_root);
         out
     }
 
     pub fn decode(data: &[u8]) -> Result<Self, CoreError> {
         if data.len() != SETTLEMENT_FUNDING_SIZE {
+            return Err(CoreError::Encoding);
+        }
+        let payout_cursor = read_u64(data, 64);
+        let liability_count = read_u64(data, 72);
+        if liability_count == 0 || payout_cursor > liability_count {
             return Err(CoreError::Encoding);
         }
         Ok(Self {
@@ -387,8 +419,9 @@ impl SettlementFundingDataV1 {
             realized_total: read_u64(data, 40),
             principal_liability: read_u64(data, 48),
             prize_pool: read_u64(data, 56),
-            payout_cursor: read_hash(data, 64),
-            liabilities_root: read_hash(data, 96),
+            payout_cursor,
+            liability_count,
+            liabilities_root: read_hash(data, 80),
         })
     }
 }
@@ -445,11 +478,26 @@ mod tests {
             keeper_policy_hash: [3; 32],
             flags: 0,
             accumulator_id: ACC_SMT,
-            entry_lock: ScriptRef { code_hash: [4; 32], hash_type: 1 },
-            dao_lock: ScriptRef { code_hash: [5; 32], hash_type: 1 },
-            settlement_type: ScriptRef { code_hash: [6; 32], hash_type: 1 },
-            entry_shard_type: ScriptRef { code_hash: [7; 32], hash_type: 1 },
-            dao_type: ScriptRef { code_hash: [8; 32], hash_type: 1 },
+            entry_lock: ScriptRef {
+                code_hash: [4; 32],
+                hash_type: 1,
+            },
+            dao_lock: ScriptRef {
+                code_hash: [5; 32],
+                hash_type: 1,
+            },
+            settlement_type: ScriptRef {
+                code_hash: [6; 32],
+                hash_type: 1,
+            },
+            entry_shard_type: ScriptRef {
+                code_hash: [7; 32],
+                hash_type: 1,
+            },
+            dao_type: ScriptRef {
+                code_hash: [8; 32],
+                hash_type: 1,
+            },
         }
     }
 
@@ -508,21 +556,88 @@ mod tests {
         };
         assert_eq!(BatchDataV1::decode(&b.encode()).unwrap(), b);
 
-        let mut cursor = [0u8; 32];
-        cursor[0] = 0xAA;
-        let f = SettlementFundingDataV1 {
+        let f = SettlementFundingDataV2 {
             round_id: [9; 32],
             batch_id: 1,
             realized_total: 1100,
             principal_liability: 1000,
             prize_pool: 90,
-            payout_cursor: cursor,
+            payout_cursor: 2,
+            liability_count: 3,
             liabilities_root: [14; 32],
         };
-        assert_eq!(SettlementFundingDataV1::decode(&f.encode()).unwrap(), f);
+        assert_eq!(SettlementFundingDataV2::decode(&f.encode()).unwrap(), f);
 
-        let p = PayoutItem { participant_lock_hash: [15; 32], principal: 100, prize: 9 };
+        let p = PayoutItem {
+            participant_lock_hash: [15; 32],
+            principal: 100,
+            prize: 9,
+        };
         assert_eq!(PayoutItem::decode(&p.encode()).unwrap(), p);
+    }
+
+    #[test]
+    fn funding_v2_wire_layout_and_cursor_boundaries() {
+        let funding = SettlementFundingDataV2 {
+            round_id: [9; 32],
+            batch_id: 0x0102,
+            realized_total: 0x0304,
+            principal_liability: 0x0506,
+            prize_pool: 0x0708,
+            payout_cursor: 0x090a,
+            liability_count: 0x0b0c,
+            liabilities_root: [14; 32],
+        };
+        let encoded = funding.encode();
+        assert_eq!(encoded.len(), 112);
+        assert_eq!(&encoded[..32], &[9; 32]);
+        assert_eq!(
+            &encoded[32..80],
+            &[
+                2, 1, 0, 0, 0, 0, 0, 0, 4, 3, 0, 0, 0, 0, 0, 0, 6, 5, 0, 0, 0, 0, 0, 0, 8, 7, 0, 0,
+                0, 0, 0, 0, 10, 9, 0, 0, 0, 0, 0, 0, 12, 11, 0, 0, 0, 0, 0, 0,
+            ]
+        );
+        assert_eq!(&encoded[80..], &[14; 32]);
+        assert_eq!(SettlementFundingDataV2::decode(&encoded).unwrap(), funding);
+        for cursor in [0, 1, u64::MAX] {
+            let mut bytes = encoded;
+            bytes[64..72].copy_from_slice(&cursor.to_le_bytes());
+            bytes[72..80].copy_from_slice(&u64::MAX.to_le_bytes());
+            let decoded = SettlementFundingDataV2::decode(&bytes).unwrap();
+            assert_eq!(decoded.payout_cursor, cursor);
+            assert_eq!(decoded.liability_count, u64::MAX);
+        }
+    }
+
+    #[test]
+    fn funding_v2_rejects_bad_lengths_empty_tree_and_cursor_past_end() {
+        let mut bytes = [0u8; 112];
+        bytes[72] = 1;
+        assert!(SettlementFundingDataV2::decode(&bytes).is_ok());
+        assert_eq!(
+            SettlementFundingDataV2::decode(&bytes[..111]),
+            Err(CoreError::Encoding)
+        );
+        assert_eq!(
+            SettlementFundingDataV2::decode(&[0; 113]),
+            Err(CoreError::Encoding)
+        );
+        assert_eq!(
+            SettlementFundingDataV2::decode(&[0; 128]),
+            Err(CoreError::Encoding)
+        );
+        bytes[72] = 0;
+        assert_eq!(
+            SettlementFundingDataV2::decode(&bytes),
+            Err(CoreError::Encoding)
+        );
+        bytes[72] = 1;
+        bytes[64] = 2;
+        assert_eq!(
+            SettlementFundingDataV2::decode(&bytes),
+            Err(CoreError::Encoding)
+        );
     }
 
     #[test]

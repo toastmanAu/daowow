@@ -80,7 +80,9 @@ pub fn apply_entry_batch(
     // Cap check.
     if config.maximum_tickets != 0 {
         let base = shard_before.map(|s| s.ticket_count).unwrap_or(0);
-        let total = base.checked_add(n_ticket_delta).ok_or(CoreError::Overflow)?;
+        let total = base
+            .checked_add(n_ticket_delta)
+            .ok_or(CoreError::Overflow)?;
         if total > config.maximum_tickets {
             return Err(CoreError::StateTransition);
         }
@@ -183,11 +185,26 @@ mod tests {
             keeper_policy_hash: [0; 32],
             flags: 0,
             accumulator_id: ACC_SMT,
-            entry_lock: ScriptRef { code_hash: [0; 32], hash_type: 1 },
-            dao_lock: ScriptRef { code_hash: [0; 32], hash_type: 1 },
-            settlement_type: ScriptRef { code_hash: [0; 32], hash_type: 1 },
-            entry_shard_type: ScriptRef { code_hash: [0; 32], hash_type: 1 },
-            dao_type: ScriptRef { code_hash: [0; 32], hash_type: 1 },
+            entry_lock: ScriptRef {
+                code_hash: [0; 32],
+                hash_type: 1,
+            },
+            dao_lock: ScriptRef {
+                code_hash: [0; 32],
+                hash_type: 1,
+            },
+            settlement_type: ScriptRef {
+                code_hash: [0; 32],
+                hash_type: 1,
+            },
+            entry_shard_type: ScriptRef {
+                code_hash: [0; 32],
+                hash_type: 1,
+            },
+            dao_type: ScriptRef {
+                code_hash: [0; 32],
+                hash_type: 1,
+            },
         }
     }
 

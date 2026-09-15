@@ -1,0 +1,826 @@
+"""Actual DAOWOW creation, using Rust-exported canonical protocol bytes."""
+
+import copy
+import json
+import os
+from pathlib import Path
+import subprocess
+import unittest
+
+from node_harness import IsolatedNode
+from reorg_history import replace_entropy_branch
+from refund_history import refund_excluded_entry
+from settlement_reorg import recover_settlement_history
+from test_native_dao import CKB, commit, input_cell
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def epoch_parts(epoch):
+    return epoch & 0xFFFFFF, (epoch >> 24) & 0xFFFF, (epoch >> 40) & 0xFFFF
+
+
+def mine_to_epoch(node, target):
+    number, index, length = epoch_parts(target)
+    for mined in range(4000):
+        tip = node.rpc("get_tip_header")
+        n, i, size = epoch_parts(int(tip["epoch"], 16))
+        if n > number or (n == number and i * length >= index * size):
+            return tip
+        node.rpc("generate_block")
+        if mined % 300 == 0:
+            print(
+                "DAOWOW maturity mining",
+                mined,
+                "epoch",
+                n,
+                "target",
+                number,
+                flush=True,
+            )
+    raise AssertionError("DAO maturity not reached within bounded mining budget")
+
+
+@unittest.skipUnless(
+    os.environ.get("DAOWOW_RUN_ISOLATED_NODE") == "1", "explicit Docker opt-in required"
+)
+class RoundCreationTests(unittest.TestCase):
+    def test_creation_entry_freeze_and_aggregation_history(self):
+        self.run_history(reorg=False)
+
+    def test_orphaned_entropy_rebuild_and_payout(self):
+        self.run_history(reorg=True)
+
+    def test_excluded_entry_refund_after_deadline(self):
+        self.run_history(reorg=False, refund=True)
+
+    def test_orphaned_funding_and_payout_recovery(self):
+        self.run_history(reorg=False, recover=True)
+
+    def test_orphaned_refund_recovery(self):
+        self.run_history(reorg=True, refund=True)
+
+    def test_partial_acceptance_refunds_only_excluded_entry(self):
+        self.run_history(reorg=False, partial=True)
+
+    def test_partial_round_completes_payout(self):
+        self.run_history(reorg=False, partial=True, partial_full=True)
+
+    def run_history(
+        self, *, reorg, refund=False, recover=False, partial=False, partial_full=False
+    ):
+        with IsolatedNode(daowow=True) as node:
+            genesis = node.rpc("get_block_by_number", ["0x0"])
+            fixture_tx, index, fixture = next(
+                (tx, i, output)
+                for tx in genesis["transactions"]
+                for i, output in enumerate(tx["outputs"])
+                if output["lock"]["args"] == "0x64616f776f772d66697874757265"
+            )
+            exported = json.loads(
+                subprocess.run(
+                    [
+                        str(ROOT / "target/debug/examples/devnet_round"),
+                        fixture_tx["hash"],
+                        str(index),
+                        node.rpc("get_consensus")["dao_type_hash"],
+                        *(["partial"] if partial else []),
+                    ],
+                    cwd=ROOT,
+                    check=True,
+                    capture_output=True,
+                    timeout=30,
+                ).stdout
+            )
+            self.assertEqual(len(exported["shards"]), 2)
+            if partial:
+                self.assertTrue(exported["partial"])
+            code_bytes = [node.fixture_code, *node.protocol_codes.values()]
+            deps = [
+                {
+                    "out_point": {"tx_hash": tx["hash"], "index": hex(i)},
+                    "dep_type": "code",
+                }
+                for tx in genesis["transactions"]
+                for i, data in enumerate(tx["outputs_data"])
+                if any(data == "0x" + code.hex() for code in code_bytes)
+            ]
+            self.assertEqual(len(deps), 6)
+            outputs = [
+                {
+                    "capacity": hex(600 * CKB),
+                    "lock": fixture["lock"],
+                    "type": exported["round_type"],
+                }
+            ]
+            data = [exported["config"]]
+            for shard in exported["shards"]:
+                outputs.append(
+                    {
+                        "capacity": hex(400 * CKB),
+                        "lock": exported["public_lock"],
+                        "type": shard["type"],
+                    }
+                )
+                data.append(shard["data"])
+            outputs.append(
+                {
+                    **fixture,
+                    "capacity": hex(
+                        int(fixture["capacity"], 16) - 1400 * CKB - 100_000
+                    ),
+                }
+            )
+            data.append("0x")
+            tx = {
+                "version": "0x0",
+                "cell_deps": deps,
+                "header_deps": [],
+                "inputs": [input_cell(fixture_tx["hash"], index)],
+                "outputs": outputs,
+                "outputs_data": data,
+                "witnesses": [exported["witness"]],
+            }
+            invalid = copy.deepcopy(tx)
+            invalid["outputs"].pop(2)
+            invalid["outputs_data"].pop(2)
+            invalid["outputs"][-1]["capacity"] = hex(
+                int(outputs[-1]["capacity"], 16) + 400 * CKB
+            )
+            with self.assertRaisesRegex(RuntimeError, "ValidationFailure"):
+                node.rpc("send_transaction", [invalid, "passthrough"])
+            missing_schedule = copy.deepcopy(tx)
+            missing_schedule["witnesses"] = ["0x"]
+            with self.assertRaisesRegex(RuntimeError, "ValidationFailure"):
+                node.rpc("send_transaction", [missing_schedule, "passthrough"])
+            tx_hash, header = commit(node, tx)
+            for i in range(3):
+                live = node.rpc(
+                    "get_live_cell", [{"tx_hash": tx_hash, "index": hex(i)}, True]
+                )
+                self.assertEqual(live["status"], "live")
+                self.assertEqual(live["cell"]["output"], outputs[i])
+                self.assertEqual(live["cell"]["data"]["content"], data[i])
+            print(
+                "DAOWOW round and two shards committed",
+                tx_hash,
+                header["number"],
+                flush=True,
+            )
+            self.assertIn(
+                "append", exported, "missing canonical entry transition fixture"
+            )
+            append = exported["append"]
+            protocol_deps = deps + [
+                {"out_point": {"tx_hash": tx_hash, "index": "0x0"}, "dep_type": "code"}
+            ]
+            change = {
+                **outputs[-1],
+                "capacity": hex(int(outputs[-1]["capacity"], 16) - 400 * CKB - 100_000),
+            }
+            entry_tx = {
+                "version": "0x0",
+                "cell_deps": protocol_deps,
+                "header_deps": [],
+                "inputs": [input_cell(tx_hash, 1), input_cell(tx_hash, 3)],
+                "outputs": [
+                    outputs[1],
+                    {
+                        "capacity": hex(400 * CKB),
+                        "lock": append["entry_lock"],
+                        "type": None,
+                    },
+                    change,
+                ],
+                "outputs_data": [append["shard_data"], append["entry_data"], "0x"],
+                "witnesses": [append["witness"], "0x"],
+            }
+            if partial:
+                entry_tx["outputs"].append(copy.deepcopy(entry_tx["outputs"][1]))
+                entry_tx["outputs_data"].append(append["excluded_data"])
+                change["capacity"] = hex(int(change["capacity"], 16) - 400 * CKB)
+            corrupt = copy.deepcopy(entry_tx)
+            corrupt["outputs_data"][0] = corrupt["outputs_data"][0][:-2] + (
+                "00" if corrupt["outputs_data"][0][-2:] != "00" else "01"
+            )
+            with self.assertRaisesRegex(RuntimeError, "ValidationFailure"):
+                node.rpc("send_transaction", [corrupt, "passthrough"])
+            entry_hash, _ = commit(node, entry_tx)
+            for i in (0, 1):
+                live = node.rpc(
+                    "get_live_cell", [{"tx_hash": entry_hash, "index": hex(i)}, True]
+                )
+                self.assertEqual(live["status"], "live")
+                self.assertEqual(
+                    live["cell"]["data"]["content"], entry_tx["outputs_data"][i]
+                )
+            freeze = exported["freeze"]
+            freeze_tx = {
+                "version": "0x0",
+                "cell_deps": protocol_deps,
+                "header_deps": [],
+                "inputs": [
+                    input_cell(entry_hash, 0, int(freeze["since"], 16)),
+                    input_cell(tx_hash, 2, int(freeze["since"], 16)),
+                    input_cell(entry_hash, 2),
+                ],
+                "outputs": [
+                    outputs[1],
+                    outputs[2],
+                    {**change, "capacity": hex(int(change["capacity"], 16) - 100_000)},
+                ],
+                "outputs_data": [*freeze["shard_data"], "0x"],
+                "witnesses": ["0x", "0x", "0x"],
+            }
+            with self.assertRaisesRegex(RuntimeError, "Immature"):
+                node.rpc("send_transaction", [freeze_tx, "passthrough"])
+            for _ in range(30):
+                if int(node.rpc("get_tip_header")["epoch"], 16) & 0xFFFFFF >= 2:
+                    break
+                node.rpc("generate_block")
+            else:
+                self.fail("entry-end epoch not reached")
+            frozen_hash, frozen_header = commit(node, freeze_tx)
+            for i in (0, 1):
+                live = node.rpc(
+                    "get_live_cell", [{"tx_hash": frozen_hash, "index": hex(i)}, True]
+                )
+                self.assertEqual(live["status"], "live")
+                self.assertEqual(
+                    live["cell"]["data"]["content"], freeze["shard_data"][i]
+                )
+            print(
+                "DAOWOW entry appended and both shards frozen",
+                entry_hash,
+                frozen_hash,
+                frozen_header["number"],
+                flush=True,
+            )
+            self.assertIn(
+                "aggregation", exported, "missing canonical aggregation fixture"
+            )
+            aggregation = exported["aggregation"]
+            init_change = {
+                **freeze_tx["outputs"][-1],
+                "capacity": hex(
+                    int(freeze_tx["outputs"][-1]["capacity"], 16) - 100_000
+                ),
+            }
+            init = {
+                "version": "0x0",
+                "cell_deps": protocol_deps,
+                "header_deps": [],
+                "inputs": [input_cell(frozen_hash, 0), input_cell(frozen_hash, 2)],
+                "outputs": [outputs[1], init_change],
+                "outputs_data": [aggregation["initial_ledger"], "0x"],
+                "witnesses": ["0x", "0x"],
+            }
+            ledger_hash, _ = commit(node, init)
+            if refund:
+                self.assertIn("refund", exported, "missing canonical refund fixture")
+                refund_excluded_entry(
+                    self,
+                    node,
+                    exported["refund"],
+                    protocol_deps,
+                    init,
+                    ledger_hash,
+                    entry_hash,
+                    fixture["lock"],
+                    reorg=reorg,
+                )
+                return
+            native_dao_dep = {
+                "out_point": {
+                    "tx_hash": genesis["transactions"][0]["hash"],
+                    "index": "0x2",
+                },
+                "dep_type": "code",
+            }
+            aggregate = {
+                "version": "0x0",
+                "cell_deps": protocol_deps + [native_dao_dep],
+                "header_deps": [],
+                "inputs": [
+                    input_cell(ledger_hash, 0),
+                    input_cell(entry_hash, 1),
+                    input_cell(ledger_hash, 1),
+                ],
+                "outputs": [
+                    outputs[1],
+                    {
+                        "capacity": hex(400 * CKB),
+                        "lock": aggregation["dao_lock"],
+                        "type": {
+                            "code_hash": node.rpc("get_consensus")["dao_type_hash"],
+                            "hash_type": "type",
+                            "args": "0x",
+                        },
+                    },
+                    {
+                        "capacity": hex(400 * CKB),
+                        "lock": exported["public_lock"],
+                        "type": aggregation["receipt_type"],
+                    },
+                    {
+                        **init_change,
+                        "capacity": hex(
+                            int(init_change["capacity"], 16) - 400 * CKB - 100_000
+                        ),
+                    },
+                ],
+                "outputs_data": [
+                    aggregation["next_ledger"],
+                    "0x0000000000000000",
+                    aggregation["receipt_data"],
+                    "0x",
+                ],
+                "witnesses": [aggregation["witness"], "0x", "0x"],
+            }
+            wrong_amount = copy.deepcopy(aggregate)
+            wrong_amount["outputs"][1]["capacity"] = hex(400 * CKB - 1)
+            wrong_amount["outputs"][-1]["capacity"] = hex(
+                int(aggregate["outputs"][-1]["capacity"], 16) + 1
+            )
+            with self.assertRaisesRegex(RuntimeError, "ValidationFailure"):
+                node.rpc("send_transaction", [wrong_amount, "passthrough"])
+            aggregate_hash, aggregate_header = commit(node, aggregate)
+            for i in range(3):
+                live = node.rpc(
+                    "get_live_cell",
+                    [{"tx_hash": aggregate_hash, "index": hex(i)}, True],
+                )
+                self.assertEqual(live["status"], "live")
+                self.assertEqual(live["cell"]["output"], aggregate["outputs"][i])
+                self.assertEqual(
+                    live["cell"]["data"]["content"], aggregate["outputs_data"][i]
+                )
+            print(
+                "DAOWOW ledger, full-capacity DAO deposit and receipt committed",
+                aggregate_hash,
+                aggregate_header["number"],
+                flush=True,
+            )
+            if partial:
+                accepted = node.rpc(
+                    "get_live_cell", [{"tx_hash": entry_hash, "index": "0x1"}, True]
+                )
+                self.assertIn(accepted["status"], ("dead", "unknown"))
+                partial_refund = refund_excluded_entry(
+                    self,
+                    node,
+                    exported["refund"],
+                    protocol_deps,
+                    {"outputs": [aggregate["outputs"][0], aggregate["outputs"][3]]},
+                    aggregate_hash,
+                    entry_hash,
+                    fixture["lock"],
+                    entry_index=3,
+                    sponsor_index=3,
+                )
+                for i in (1, 2):
+                    live = node.rpc(
+                        "get_live_cell",
+                        [{"tx_hash": aggregate_hash, "index": hex(i)}, True],
+                    )
+                    self.assertEqual(live["status"], "live")
+                    self.assertEqual(live["cell"]["output"], aggregate["outputs"][i])
+                    self.assertEqual(
+                        live["cell"]["data"]["content"], aggregate["outputs_data"][i]
+                    )
+                print(
+                    "DAOWOW partial acceptance preserved DAO and receipt while excluded entry refunded",
+                    aggregate_hash,
+                    flush=True,
+                )
+                if not partial_full:
+                    return
+            self.assertIn("seal", exported, "missing closed-universe seal fixture")
+            seal = exported["seal"]
+            continuing_sponsor = (
+                partial_refund["transaction"]["outputs"][1]
+                if partial
+                else aggregate["outputs"][-1]
+            )
+            continuing_input = (
+                input_cell(partial_refund["refund_hash"], 1)
+                if partial
+                else input_cell(aggregate_hash, 3)
+            )
+            sponsor = {
+                **continuing_sponsor,
+                "capacity": hex(int(continuing_sponsor["capacity"], 16) - 100_000),
+            }
+            empty_init = {
+                "version": "0x0",
+                "cell_deps": protocol_deps,
+                "header_deps": [],
+                "inputs": [input_cell(frozen_hash, 1), continuing_input],
+                "outputs": [outputs[2], sponsor],
+                "outputs_data": [seal["empty_ledger"], "0x"],
+                "witnesses": ["0x", "0x"],
+            }
+            empty_hash, _ = commit(node, empty_init)
+            sponsor = {
+                **sponsor,
+                "capacity": hex(int(sponsor["capacity"], 16) - 100_000),
+            }
+            close = {
+                "version": "0x0",
+                "cell_deps": protocol_deps,
+                "header_deps": [],
+                "inputs": [
+                    input_cell(aggregate_hash, 0, int(freeze["since"], 16)),
+                    input_cell(empty_hash, 0, int(freeze["since"], 16)),
+                    input_cell(empty_hash, 1),
+                ],
+                "outputs": [outputs[1], outputs[2], sponsor],
+                "outputs_data": [*seal["closed"], "0x"],
+                "witnesses": ["0x", "0x", "0x"],
+            }
+            if partial:
+                # Shard zero was already closed to authorize the refund.
+                close["inputs"].pop(0)
+                close["outputs"].pop(0)
+                close["outputs_data"].pop(0)
+                close["witnesses"].pop(0)
+            close_hash, _ = commit(node, close)
+            sponsor = {
+                **sponsor,
+                "capacity": hex(int(sponsor["capacity"], 16) - 400 * CKB - 100_000),
+            }
+            seal_cell = {**outputs[1], "capacity": hex(800 * CKB)}
+            seal_tx = {
+                "version": "0x0",
+                "cell_deps": protocol_deps
+                + [
+                    {
+                        "out_point": {"tx_hash": close_hash, "index": "0x1"},
+                        "dep_type": "code",
+                    }
+                ],
+                "header_deps": [],
+                "inputs": [input_cell(close_hash, 0), input_cell(close_hash, 2)],
+                "outputs": [seal_cell, sponsor],
+                "outputs_data": [seal["data"], "0x"],
+                "witnesses": ["0x", "0x"],
+            }
+            if partial:
+                seal_tx["cell_deps"][-1]["out_point"]["index"] = "0x0"
+                seal_tx["inputs"] = [
+                    input_cell(partial_refund["closed_hash"], 0),
+                    input_cell(close_hash, 1),
+                ]
+            missing_shard = copy.deepcopy(seal_tx)
+            missing_shard["cell_deps"].pop()
+            with self.assertRaisesRegex(RuntimeError, "ValidationFailure"):
+                node.rpc("send_transaction", [missing_shard, "passthrough"])
+            seal_hash, seal_header = commit(node, seal_tx)
+            live = node.rpc(
+                "get_live_cell", [{"tx_hash": seal_hash, "index": "0x0"}, True]
+            )
+            self.assertEqual(live["status"], "live")
+            self.assertEqual(live["cell"]["data"]["content"], seal["data"])
+            print(
+                "DAOWOW closed-universe seal committed",
+                seal_hash,
+                seal_header["number"],
+                flush=True,
+            )
+            self.assertIn("entropy", exported, "missing scheduled entropy export")
+            seal_height = int(seal_header["number"], 16)
+            # Use the actual committed seal anchor, not its submission height.
+            for _ in range(192):
+                node.rpc("generate_block")
+            headers = [seal_header["hash"]] + [
+                node.rpc("get_block_hash", [hex(seal_height + offset)])
+                for offset in (64, 128, 192)
+            ]
+            entropy_export = json.loads(
+                subprocess.run(
+                    [
+                        str(ROOT / "target/debug/examples/devnet_round"),
+                        fixture_tx["hash"],
+                        str(index),
+                        node.rpc("get_consensus")["dao_type_hash"],
+                        str(seal_height),
+                        *headers,
+                        *(["partial"] if partial else []),
+                    ],
+                    cwd=ROOT,
+                    check=True,
+                    capture_output=True,
+                    timeout=30,
+                ).stdout
+            )
+            self.assertEqual(entropy_export["seal"], seal)
+            self.assertIsInstance(entropy_export["entropy"], str)
+            entropy_tx = {
+                "version": "0x0",
+                "cell_deps": protocol_deps,
+                "header_deps": headers,
+                "inputs": [
+                    input_cell(seal_hash, 0, 0x8000000000000100),
+                    input_cell(seal_hash, 1),
+                ],
+                "outputs": [
+                    seal_cell,
+                    {
+                        **sponsor,
+                        "capacity": hex(int(sponsor["capacity"], 16) - 100_000),
+                    },
+                ],
+                "outputs_data": [entropy_export["entropy"], "0x"],
+                "witnesses": ["0x", "0x"],
+            }
+            with self.assertRaisesRegex(RuntimeError, "Immature"):
+                node.rpc("send_transaction", [entropy_tx, "passthrough"])
+            # Pool admission can anticipate maturity through its proposal
+            # window. Check block inclusion, not an assumed pool cutoff.
+            for _ in range(64):
+                node.rpc("generate_block")
+            self.assertEqual(
+                int(node.rpc("get_tip_block_number"), 16), seal_height + 256
+            )
+            wrong_header = copy.deepcopy(entropy_tx)
+            wrong_header["header_deps"][1] = node.rpc(
+                "get_block_hash", [hex(seal_height + 63)]
+            )
+            with self.assertRaisesRegex(RuntimeError, "ValidationFailure"):
+                node.rpc("send_transaction", [wrong_header, "passthrough"])
+            forged = copy.deepcopy(entropy_tx)
+            forged["outputs_data"][0] = forged["outputs_data"][0][:-2] + (
+                "00" if forged["outputs_data"][0][-2:] != "00" else "01"
+            )
+            with self.assertRaisesRegex(RuntimeError, "ValidationFailure"):
+                node.rpc("send_transaction", [forged, "passthrough"])
+            entropy_hash, entropy_header = commit(node, entropy_tx)
+            self.assertGreaterEqual(
+                int(entropy_header["number"], 16), seal_height + 256
+            )
+            live = node.rpc(
+                "get_live_cell", [{"tx_hash": entropy_hash, "index": "0x0"}, True]
+            )
+            self.assertEqual(live["status"], "live")
+            self.assertEqual(live["cell"]["output"], seal_cell)
+            self.assertEqual(live["cell"]["data"]["content"], entropy_export["entropy"])
+            print(
+                "DAOWOW authenticated scheduled entropy committed",
+                entropy_hash,
+                entropy_header["number"],
+                "seal height",
+                seal_height,
+                flush=True,
+            )
+            self.assertIn(
+                "settlement", entropy_export, "missing computed settlement fixture"
+            )
+            sponsor_input = input_cell(entropy_hash, 1)
+            if reorg:
+                (
+                    entropy_hash,
+                    entropy_tx,
+                    entropy_export,
+                    seal_height,
+                    headers,
+                    sponsor_input,
+                    sponsor_cell,
+                ) = replace_entropy_branch(
+                    self,
+                    node,
+                    seal_tx,
+                    seal_header,
+                    entropy_tx,
+                    entropy_hash,
+                    [
+                        str(ROOT / "target/debug/examples/devnet_round"),
+                        fixture_tx["hash"],
+                        str(index),
+                        node.rpc("get_consensus")["dao_type_hash"],
+                    ],
+                    ROOT,
+                    protocol_deps,
+                )
+                entropy_tx["outputs"][1] = sponsor_cell
+            deposit_epoch = int(aggregate_header["epoch"], 16)
+            term_epoch = deposit_epoch + 180
+            term_since = 0x2000000000000000 | term_epoch
+            receipt_dep = {
+                "out_point": {"tx_hash": aggregate_hash, "index": "0x2"},
+                "dep_type": "code",
+            }
+            dao_deps = protocol_deps + [native_dao_dep, receipt_dep]
+            withdrawing_data = (
+                "0x" + int(aggregate_header["number"], 16).to_bytes(8, "little").hex()
+            )
+            withdrawal = {
+                "version": "0x0",
+                "cell_deps": dao_deps,
+                "header_deps": [aggregate_header["hash"]],
+                "inputs": [
+                    input_cell(aggregate_hash, 1, term_since),
+                    sponsor_input,
+                ],
+                "outputs": [
+                    aggregate["outputs"][1],
+                    {
+                        **entropy_tx["outputs"][1],
+                        "capacity": hex(
+                            int(entropy_tx["outputs"][1]["capacity"], 16) - 100_000
+                        ),
+                    },
+                ],
+                "outputs_data": [withdrawing_data, "0x"],
+                "witnesses": ["0x", "0x"],
+            }
+            short_term = copy.deepcopy(withdrawal)
+            short_term["inputs"][0]["since"] = "0x0"
+            with self.assertRaisesRegex(RuntimeError, "ValidationFailure"):
+                node.rpc("send_transaction", [short_term, "passthrough"])
+            with self.assertRaisesRegex(RuntimeError, "Immature"):
+                node.rpc("send_transaction", [withdrawal, "passthrough"])
+            mine_to_epoch(node, term_epoch)
+            missing_receipt = copy.deepcopy(withdrawal)
+            missing_receipt["cell_deps"].pop()
+            with self.assertRaisesRegex(RuntimeError, "ValidationFailure"):
+                node.rpc("send_transaction", [missing_receipt, "passthrough"])
+            withdrawal_hash, withdrawal_header = commit(node, withdrawal)
+            print(
+                "DAOWOW withdrawal preparation committed",
+                withdrawal_hash,
+                withdrawal_header["epoch"],
+                flush=True,
+            )
+            live = node.rpc(
+                "get_live_cell", [{"tx_hash": withdrawal_hash, "index": "0x0"}, True]
+            )
+            self.assertEqual(live["cell"]["output"], aggregate["outputs"][1])
+            self.assertEqual(live["cell"]["data"]["content"], withdrawing_data)
+            dn, di, dl = epoch_parts(deposit_epoch)
+            wn, wi, wl = epoch_parts(int(withdrawal_header["epoch"], 16))
+            elapsed = wn - dn + int(wi * dl > di * wl)
+            periods = (elapsed + 179) // 180
+            final_epoch = (deposit_epoch & ~0xFFFFFF) | (dn + periods * 180)
+            # Actual occupied capacity: 8 + (32+1+104) + (32+1) + 8 = 186 CKB.
+            deposit_ar = int.from_bytes(
+                bytes.fromhex(aggregate_header["dao"][2:])[8:16], "little"
+            )
+            withdraw_ar = int.from_bytes(
+                bytes.fromhex(withdrawal_header["dao"][2:])[8:16], "little"
+            )
+            realized = 186 * CKB + (400 - 186) * CKB * withdraw_ar // deposit_ar
+            funding_export = json.loads(
+                subprocess.run(
+                    [
+                        str(ROOT / "target/debug/examples/devnet_round"),
+                        fixture_tx["hash"],
+                        str(index),
+                        node.rpc("get_consensus")["dao_type_hash"],
+                        str(seal_height),
+                        *headers,
+                        str(realized),
+                        *(["partial"] if partial else []),
+                    ],
+                    cwd=ROOT,
+                    check=True,
+                    capture_output=True,
+                    timeout=30,
+                ).stdout
+            )
+            self.assertEqual(funding_export["entropy"], entropy_export["entropy"])
+            settlement = funding_export["settlement"]
+            self.assertEqual(settlement["principal"], 400 * CKB)
+            self.assertEqual(settlement["prize"], realized - 400 * CKB)
+            self.assertGreater(settlement["prize"], 0)
+            funding_tx = {
+                "version": "0x0",
+                "cell_deps": dao_deps
+                + [
+                    {
+                        "out_point": {"tx_hash": entropy_hash, "index": "0x0"},
+                        "dep_type": "code",
+                    }
+                ],
+                "header_deps": [aggregate_header["hash"], withdrawal_header["hash"]],
+                "inputs": [
+                    input_cell(withdrawal_hash, 0, 0x2000000000000000 | final_epoch),
+                    input_cell(withdrawal_hash, 1),
+                ],
+                "outputs": [
+                    {
+                        "capacity": hex(realized),
+                        "lock": settlement["lock"],
+                        "type": settlement["type"],
+                    },
+                    {
+                        **withdrawal["outputs"][1],
+                        "capacity": hex(
+                            int(withdrawal["outputs"][1]["capacity"], 16) - 100_000
+                        ),
+                    },
+                ],
+                "outputs_data": [settlement["data"], "0x"],
+                "witnesses": [settlement["witness"], "0x"],
+            }
+            with self.assertRaisesRegex(RuntimeError, "Immature"):
+                node.rpc("send_transaction", [funding_tx, "passthrough"])
+            mine_to_epoch(node, final_epoch)
+            forged_funding = copy.deepcopy(funding_tx)
+            forged_funding["outputs_data"][0] = forged_funding["outputs_data"][0][
+                :-2
+            ] + ("00" if forged_funding["outputs_data"][0][-2:] != "00" else "01")
+            with self.assertRaisesRegex(RuntimeError, "ValidationFailure"):
+                node.rpc("send_transaction", [forged_funding, "passthrough"])
+            funding_hash, _ = commit(node, funding_tx)
+            live = node.rpc(
+                "get_live_cell", [{"tx_hash": funding_hash, "index": "0x0"}, True]
+            )
+            self.assertEqual(live["status"], "live")
+            self.assertEqual(live["cell"]["output"], funding_tx["outputs"][0])
+            self.assertEqual(live["cell"]["data"]["content"], settlement["data"])
+            payout_change = copy.deepcopy(funding_tx["outputs"][1])
+            payout_change["capacity"] = hex(
+                int(payout_change["capacity"], 16) - 100_000
+            )
+            payout_change["lock"]["args"] = "0x73706f6e736f72"
+            payout = {
+                "version": "0x0",
+                "cell_deps": protocol_deps,
+                "header_deps": [],
+                "inputs": [input_cell(funding_hash, 0), input_cell(funding_hash, 1)],
+                "outputs": [
+                    {"capacity": hex(realized), "lock": fixture["lock"], "type": None},
+                    payout_change,
+                ],
+                "outputs_data": ["0x", "0x"],
+                "witnesses": [settlement["payout_witness"], "0x"],
+            }
+            underpaid = copy.deepcopy(payout)
+            underpaid["outputs"][0]["capacity"] = hex(realized - 1)
+            underpaid["outputs"][1]["capacity"] = hex(
+                int(payout_change["capacity"], 16) + 1
+            )
+            with self.assertRaisesRegex(RuntimeError, "ValidationFailure"):
+                node.rpc("send_transaction", [underpaid, "passthrough"])
+            payout_hash, payout_header = commit(node, payout)
+            live = node.rpc(
+                "get_live_cell", [{"tx_hash": payout_hash, "index": "0x0"}, True]
+            )
+            self.assertEqual(live["status"], "live")
+            self.assertEqual(live["cell"]["output"], payout["outputs"][0])
+            self.assertEqual(live["cell"]["data"]["content"], "0x")
+            self.assertEqual(
+                node.rpc("get_transaction", [payout_hash])["transaction"]["inputs"],
+                payout["inputs"],
+            )
+            print(
+                "DAOWOW computed funding and final payout committed",
+                funding_hash,
+                payout_hash,
+                payout_header["number"],
+                "principal",
+                settlement["principal"],
+                "prize",
+                settlement["prize"],
+                flush=True,
+            )
+            if recover:
+                recover_settlement_history(
+                    self, node, funding_tx, funding_hash, payout, payout_hash
+                )
+            if partial:
+                refunded = node.rpc(
+                    "get_live_cell",
+                    [{"tx_hash": partial_refund["refund_hash"], "index": "0x0"}, True],
+                )
+                self.assertEqual(refunded["status"], "live")
+                self.assertEqual(
+                    refunded["cell"]["output"],
+                    partial_refund["transaction"]["outputs"][0],
+                )
+                self.assertEqual(refunded["cell"]["data"]["content"], "0x")
+                self.assertEqual(
+                    int(refunded["cell"]["output"]["capacity"], 16), 400 * CKB
+                )
+                self.assertEqual(
+                    int(live["cell"]["output"]["capacity"], 16),
+                    400 * CKB + settlement["prize"],
+                )
+                for txhash, out_index in [
+                    (aggregate_hash, 1),
+                    (withdrawal_hash, 0),
+                    (funding_hash, 0),
+                ]:
+                    self.assertIn(
+                        node.rpc(
+                            "get_live_cell",
+                            [{"tx_hash": txhash, "index": hex(out_index)}, True],
+                        )["status"],
+                        ("unknown", "dead"),
+                    )
+                print(
+                    "DAOWOW partial round complete; excluded refund remains live",
+                    partial_refund["refund_hash"],
+                    payout_hash,
+                    flush=True,
+                )

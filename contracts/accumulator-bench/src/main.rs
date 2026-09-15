@@ -17,9 +17,9 @@
 #![no_main]
 
 use ckb_std::ckb_constants::Source;
-use daowow_contracts_common::daowow_alloc;
 use ckb_std::entry;
 use ckb_std::high_level::{load_script, load_witness};
+use daowow_contracts_common::daowow_alloc;
 use daowow_core::accumulator::{imt, mmr, smt};
 use daowow_core::error::codes::*;
 

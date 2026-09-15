@@ -38,10 +38,7 @@ pub fn missing_reveal_fallback(commitment: &Hash32) -> Hash32 {
 /// Encoding the whole entry struct keeps the leaf definition trivially in sync
 /// with the canonical encoding (single source of truth).
 pub fn entry_leaf(entry: &EntryDataV1) -> Hash32 {
-    ckb_hash256(&[
-        b"DAOWOW_ENTRY_LEAF_V1".as_slice(),
-        &entry.encode(),
-    ])
+    ckb_hash256(&[b"DAOWOW_ENTRY_LEAF_V1".as_slice(), &entry.encode()])
 }
 
 /// Liabilities leaf for settlement (value committed in settlement funding).

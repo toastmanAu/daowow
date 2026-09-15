@@ -9,7 +9,11 @@ pub struct CkbHasher(blake2b_ref::Blake2b);
 
 impl Default for CkbHasher {
     fn default() -> Self {
-        CkbHasher(Blake2bBuilder::new(32).personal(b"ckb-default-hash").build())
+        CkbHasher(
+            Blake2bBuilder::new(32)
+                .personal(b"ckb-default-hash")
+                .build(),
+        )
     }
 }
 

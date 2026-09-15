@@ -56,7 +56,10 @@ fn padded_rec(frontier: &[[u8; 32]; IMT_DEPTH as usize], n: u64, depth: u32) -> 
     let right = zero_at(depth - 1);
     if n >= half {
         // bit (depth-1) set: full left subtree from the frontier
-        node_hash(&frontier[(depth - 1) as usize], &padded_rec(frontier, n - half, depth - 1))
+        node_hash(
+            &frontier[(depth - 1) as usize],
+            &padded_rec(frontier, n - half, depth - 1),
+        )
     } else {
         node_hash(&padded_rec(frontier, n, depth - 1), &right)
     }
@@ -153,15 +156,21 @@ pub mod host {
             let mut depth = 0usize;
             while depth < IMT_DEPTH as usize {
                 let sib = if idx & 1 == 0 {
-                    level.get(idx + 1).copied().unwrap_or_else(|| zero_at(depth as u32))
+                    level
+                        .get(idx + 1)
+                        .copied()
+                        .unwrap_or_else(|| zero_at(depth as u32))
                 } else {
                     level[idx - 1]
                 };
                 proof[depth * 32..(depth + 1) * 32].copy_from_slice(&sib);
-                let mut next = Vec::with_capacity((level.len() + 1) / 2);
+                let mut next = Vec::with_capacity(level.len().div_ceil(2));
                 for i in (0..level.len()).step_by(2) {
                     let l = level[i];
-                    let r = level.get(i + 1).copied().unwrap_or_else(|| zero_at(depth as u32));
+                    let r = level
+                        .get(i + 1)
+                        .copied()
+                        .unwrap_or_else(|| zero_at(depth as u32));
                     next.push(node_hash(&l, &r));
                 }
                 level = next;
@@ -222,8 +231,7 @@ pub fn verify_append(
     let mut frontier = [[0u8; 32]; IMT_DEPTH as usize];
     for j in 0..IMT_DEPTH as u64 {
         if n >> j & 1 == 1 {
-            frontier[j as usize]
-                .copy_from_slice(&branch[(j as usize) * 32..(j as usize + 1) * 32]);
+            frontier[j as usize].copy_from_slice(&branch[(j as usize) * 32..(j as usize + 1) * 32]);
         }
     }
     let old_calc = root_from_frontier(&frontier, n);

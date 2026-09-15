@@ -12,12 +12,6 @@ pub enum MergeValue {
         zero_bits: H256,
         zero_count: u8,
     },
-    #[cfg(feature = "trie")]
-    ShortCut {
-        key: H256,
-        value: H256,
-        height: u8,
-    },
 }
 
 impl MergeValue {
@@ -33,23 +27,7 @@ impl MergeValue {
         match self {
             MergeValue::Value(v) => v.is_zero(),
             MergeValue::MergeWithZero { .. } => false,
-            #[cfg(feature = "trie")]
-            MergeValue::ShortCut { .. } => false,
         }
-    }
-
-    #[cfg(feature = "trie")]
-    pub fn shortcut_or_value(key: H256, value: H256, height: u8) -> Self {
-        if height == 0 || value.is_zero() {
-            MergeValue::Value(value)
-        } else {
-            MergeValue::ShortCut { key, value, height }
-        }
-    }
-
-    #[cfg(feature = "trie")]
-    pub fn is_shortcut(&self) -> bool {
-        matches!(self, MergeValue::ShortCut { .. })
     }
 
     pub fn hash<H: Hasher + Default>(&self) -> H256 {
@@ -67,34 +45,6 @@ impl MergeValue {
                 hasher.write_byte(*zero_count);
                 hasher.finish()
             }
-            #[cfg(feature = "trie")]
-            MergeValue::ShortCut { key, value, height } => {
-                into_merge_value::<H>(*key, *value, *height).hash::<H>()
-            }
-        }
-    }
-}
-
-/// Helper function for Shortcut node
-/// Transform it into a MergeValue or MergeWithZero node
-#[cfg(feature = "trie")]
-pub fn into_merge_value<H: Hasher + Default>(key: H256, value: H256, height: u8) -> MergeValue {
-    // try keep hash same with MergeWithZero
-    if value.is_zero() || height == 0 {
-        MergeValue::from_h256(value)
-    } else {
-        let base_key = key.parent_path(0);
-        let base_node = hash_base_node::<H>(0, &base_key, &value);
-        let mut zero_bits = key;
-        for i in height..=core::u8::MAX {
-            if key.get_bit(i) {
-                zero_bits.clear_bit(i);
-            }
-        }
-        MergeValue::MergeWithZero {
-            base_node,
-            zero_bits,
-            zero_count: height,
         }
     }
 }
@@ -171,24 +121,6 @@ pub fn merge_with_zero<H: Hasher + Default>(
                 base_node: *base_node,
                 zero_bits,
                 zero_count: zero_count.wrapping_add(1),
-            }
-        }
-        #[cfg(feature = "trie")]
-        MergeValue::ShortCut { key, value, .. } => {
-            if height == core::u8::MAX {
-                let base_key = key.parent_path(0);
-                let base_node = hash_base_node::<H>(0, &base_key, value);
-                MergeValue::MergeWithZero {
-                    base_node,
-                    zero_bits: *key,
-                    zero_count: 0,
-                }
-            } else {
-                MergeValue::ShortCut {
-                    key: *key,
-                    value: *value,
-                    height: height + 1,
-                }
             }
         }
     }

@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#142e65">
+  <meta name="description" content="Explore the DAOWOW entry experience. A design preview, with no wallet connection or live transactions.">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>DAOWOW — A little possibility</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="entry.css">
+  <script src="entry-model.js" defer></script>
+  <script src="entry.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#entry">Skip to ticket selection</a>
+  <header class="site-header">
+    <a class="brand" href="entry.html" aria-label="DAOWOW home"><span class="brand-symbol" aria-hidden="true">✳</span>DAO<span class="brand-light">WOW</span></a>
+    <nav aria-label="Main navigation"><a class="active" href="#entry" aria-current="page">Enter a round</a><a href="#how-it-works">How it works</a><a href="index.html">Protocol lab <span aria-hidden="true">↗</span></a></nav>
+    <button class="wallet-button" id="wallet" type="button" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 7V4H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16V7H5a1 1 0 0 1 0-2m16 6h-6v5h6m-3-2.5h.01"/></svg>Wallet information</button>
+  </header>
+  <main>
+    <div class="preview-strip"><span class="preview-tag">Design preview</span><p>No live round. No wallet connection. No funds move.</p><a href="#preview-details">What’s available?</a></div>
+    <section class="entry-layout" aria-label="DAOWOW entry preview">
+      <div class="studio">
+        <div class="studio-copy"><p class="intro">A little possibility, built on Nervos.</p><h1>Give your CKB<br>something to <br>look forward to.</h1><p class="lead">A community draw powered by DAO yield.<br>Pick your entry. Follow the round. Meet the moment.</p></div>
+        <div class="ball-stage" aria-hidden="true">
+          <div class="orbit orbit-one"></div><div class="orbit orbit-two"></div>
+          <div class="ball ball-blue"><span>08</span></div><div class="ball ball-ivory"><span>24</span></div><div class="ball ball-amber"><span>03</span></div><div class="ball ball-small"><span>16</span></div>
+          <div class="stage-plinth"></div><span class="stage-spark spark-one">+</span><span class="stage-spark spark-two">+</span>
+        </div>
+        <div class="studio-foot"><span class="mini-mark" aria-hidden="true">◈</span><p>The excitement of a draw.<br><strong>The transparency of a blockchain.</strong></p><span class="art-caption">Illustration, not draw results</span></div>
+      </div>
+      <section class="ticket" id="entry" aria-labelledby="entry-title">
+        <div class="ticket-top"><span class="round-label">Sample round</span><span class="not-live">Not live</span></div>
+        <h2 id="entry-title">A little possibility <br>starts here.</h2>
+        <p class="ticket-description">Explore your entry. Nothing is reserved<br class="desktop-break"> or submitted in this preview.</p>
+        <div class="ticket-price"><strong>100 <span>CKB</span></strong><span>sample principal<br>per ticket</span></div>
+        <form id="entry-form" novalidate>
+          <fieldset id="selection-controls" disabled>
+            <label for="quantity">How many tickets?</label>
+            <div class="stepper"><button type="button" id="decrease" aria-label="Remove one ticket">−</button><input id="quantity" name="quantity" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="3" value="5" aria-describedby="quantity-help quantity-error" autocomplete="off"><button type="button" id="increase" aria-label="Add one ticket">+</button></div>
+            <p class="input-help" id="quantity-help">1–100 tickets for this preview.</p>
+            <div class="presets" role="group" aria-label="Ticket presets"><button type="button" data-quantity="1" aria-pressed="false">1 ticket</button><button type="button" data-quantity="5" aria-pressed="true">5 tickets</button><button type="button" data-quantity="10" aria-pressed="false">10 tickets</button><button type="button" data-quantity="25" aria-pressed="false">25 tickets</button></div>
+          </fieldset>
+          <p class="error" id="quantity-error" aria-live="polite"></p>
+          <div class="costs" aria-live="polite" aria-atomic="true"><div><span>Ticket principal</span><strong id="principal">500 CKB</strong></div><div><span>Cell capacity &amp; network fee</span><span>Not quoted</span></div><div class="total"><span>Transaction total</span><span>Available when connected</span></div></div>
+          <button class="primary-button" id="review" type="submit" disabled>Review preview <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-5-5 5 5-5 5"/></svg></button>
+          <p class="action-note"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 10h12v11H6zm3 0V6a3 3 0 0 1 6 0v4"/></svg>No signing. No transaction. Just a preview.</p>
+          <noscript><p class="error">Enable JavaScript to explore ticket selection. Live entries are not available.</p></noscript>
+        </form>
+        <div class="ticket-stub"><span class="stub-mark" aria-hidden="true">◈</span><div><strong>Know where your CKB goes.</strong><p>Review the amount, capacity and fees before any future wallet signature.</p></div></div>
+      </section>
+    </section>
+    <section class="how" id="how-it-works" aria-labelledby="how-title"><div class="how-heading"><h2 id="how-title">More than a lucky number.</h2><p>A clear path from entry to outcome.</p></div><ol><li><span class="step-number">1</span><div><h3>Choose your entry</h3><p>Tickets represent your share in a round. Live terms and the complete CKB cost must be available before you sign.</p></div></li><li><span class="step-number">2</span><div><h3>Let the round unfold</h3><p>Accepted entries enter the Nervos DAO for the configured term. Funds are locked until withdrawal conditions are met.</p></div></li><li><span class="step-number">3</span><div><h3>Follow the outcome</h3><p>Eligible DAO yield funds prizes. On-chain rules determine winners and settlement—not the draw animation.</p></div></li></ol></section>
+    <section class="details-section" id="preview-details"><div><span class="preview-tag">Before we go live</span><h2>Beautiful on the surface.<br>Clear about what’s underneath.</h2></div><div class="questions"><details><summary>What can I do in this preview?</summary><p>Change ticket quantities and review sample principal amounts. The sample price is 100 CKB; no live round, prize pool, odds or deadline has been loaded. Nothing is saved or sent.</p></details><details><summary>Can I connect a wallet or enter yet?</summary><p>Not here yet. Live round discovery, wallet integration, transaction building and confirmation tracking still need to be connected and verified. Never send CKB to an address from an unverified preview.</p></details><details><summary>What should I know about my funds?</summary><p>Accepted funds are locked for the round’s DAO term. Excluded entries use the protocol’s deadline-based refund path. Principal return depends on valid settlement; fees, smart-contract risk and CKB price risk still apply. This is not a guaranteed-return product.</p></details></div></section>
+  </main>
+  <footer><a class="brand" href="entry.html">DAO<span class="brand-light">WOW</span></a><p>Built on Nervos. Made for the moment.</p><span>Interface preview / no chain connection</span></footer>
+  <dialog id="review-dialog" aria-labelledby="review-title"><button class="close-dialog" type="button" data-close aria-label="Close entry review">×</button><span class="preview-tag">Preview only</span><h2 id="review-title">Your entry, at a glance.</h2><p>This is a selection summary, not a transaction.</p><dl class="review-values"><div><dt>Tickets</dt><dd id="review-quantity"></dd></div><div><dt>Sample ticket principal</dt><dd id="review-principal"></dd></div><div><dt>Capacity &amp; network fee</dt><dd>Not quoted</dd></div><div><dt>Transaction total</dt><dd>Not available</dd></div></dl><p class="dialog-notice">No wallet is connected. Live round terms, full capacity and fees must be verified before an entry can be submitted.</p><button class="primary-button" type="button" data-close>Back to my selection</button></dialog>
+  <dialog id="wallet-dialog" aria-labelledby="wallet-title"><button class="close-dialog" type="button" data-close aria-label="Close wallet information">×</button><span class="preview-tag">Not connected</span><h2 id="wallet-title">Wallets come next.</h2><p>This screen does not request an account, a signature or access to your funds. Wallet connection will arrive with verified live round data and transaction review.</p><button class="primary-button" type="button" data-close>Back to preview</button></dialog>
+</body>
+</html>

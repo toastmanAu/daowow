@@ -266,8 +266,10 @@ const MMR = {
 };
 
 function popcount(x) {
+  if (!Number.isSafeInteger(x) || x < 0) throw new Error("invalid leaf count");
   let c = 0;
-  while (x) { c += x & 1; x >>= 1; }
+  let remaining = BigInt(x);
+  while (remaining) { c += Number(remaining & 1n); remaining >>= 1n; }
   return c;
 }
 
@@ -281,7 +283,7 @@ class MmrHost {
   }
   /** wire proof: u8 path_len | path_len*32 siblings (bottom-up) | u8 peak_slot | u8 peaks_len | peaks */
   membershipProof(pos) {
-    if (pos >= this.count) throw new Error("pos out of range");
+    if (!Number.isSafeInteger(pos) || pos < 0 || pos >= this.count) throw new Error("pos out of range");
     let remaining = this.count, base = 0, slot = 0, height = 0;
     for (let b = 63; b >= 0; b--) {
       if ((BigInt(remaining) >> BigInt(b)) & 1n) {
@@ -313,8 +315,20 @@ class MmrHost {
 
 /** on-chain membership verify (mirrors mmr::verify_membership) */
 function mmrVerifyMembership(root, count, pos, leaf, proof) {
-  if (proof.length < 1 || pos >= count) return false;
+  if (!Number.isSafeInteger(count) || !Number.isSafeInteger(pos)
+      || count < 1 || pos < 0 || pos >= count || proof.length < 1
+      || root.length !== 32 || leaf.length !== 32) return false;
   const pathLen = proof[0];
+  let base = 0, expectedSlot = 0, expectedHeight = 0;
+  for (let height = 52; height >= 0; height--) {
+    if ((BigInt(count) >> BigInt(height)) & 1n) {
+      const size = 2 ** height;
+      if (pos - base < size) { expectedHeight = height; break; }
+      base += size;
+      expectedSlot += 1;
+    }
+  }
+  if (pathLen !== expectedHeight) return false;
   let off = 1;
   if (proof.length < off + pathLen * 32 + 2) return false;
   let cur = leaf;
@@ -324,7 +338,8 @@ function mmrVerifyMembership(root, count, pos, leaf, proof) {
     pos = Math.floor(pos / 2);
   }
   const slot = proof[off]; const peaksLen = proof[off + 1]; off += 2;
-  if (peaksLen > MMR.MAX_PEAKS || slot >= peaksLen || proof.length < off + peaksLen * 32) return false;
+  if (peaksLen > MMR.MAX_PEAKS || slot >= peaksLen || slot !== expectedSlot
+      || proof.length !== off + peaksLen * 32) return false;
   if (peaksLen !== popcount(count)) return false;
   const peaks = [];
   for (let i = 0; i < peaksLen; i++) peaks.push(proof.slice(off + i * 32, off + (i + 1) * 32));
@@ -390,6 +405,9 @@ const candidate = (seed, prizeIndex, retry) =>
 
 /** candidate (256-bit BE) mod n via Horner; returns {mod, overLimit} */
 function candidateModN(candidateBytes, n) {
+  if (!Number.isSafeInteger(n) || n <= 0 || candidateBytes.length !== 32) {
+    throw new Error("invalid draw candidate or ticket count");
+  }
   const nB = BigInt(n);
   let r = 0n;
   for (const b of candidateBytes) r = ((r << 8n) | BigInt(b)) % nB;
@@ -408,22 +426,26 @@ function rejectionSample(seed, prizeIndex, nTickets) {
     const c = candidate(seed, prizeIndex, retry);
     const { mod, rejected } = candidateModN(c, nTickets);
     if (!rejected) return { position: mod, retry };
+    if (retry === 0xffffffff) throw new Error("draw retry overflow");
     retry += 1;
   }
 }
 
 /** distinct positional draw; one position may win at most once */
 function drawPositions(seed, nTickets, prizeCount) {
-  if (nTickets === 0 || prizeCount > nTickets) throw new Error("invalid draw");
+  if (!Number.isSafeInteger(nTickets) || nTickets <= 0
+      || !Number.isSafeInteger(prizeCount) || prizeCount < 0
+      || prizeCount > nTickets || prizeCount > 4096) throw new Error("invalid draw");
   const used = new Set();
   const out = [];
   for (let i = 0n; i < BigInt(prizeCount); i++) {
     let { position: pos, retry } = rejectionSample(seed, Number(i), nTickets);
     while (used.has(pos)) {
+      if (retry === 0xffffffff) throw new Error("draw retry overflow");
       retry += 1;
       const c = candidate(seed, Number(i), retry);
       const { mod, rejected } = candidateModN(c, nTickets);
-      if (rejected) { retry += 1; continue; }
+      if (rejected) continue;
       pos = mod;
     }
     used.add(pos);

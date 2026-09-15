@@ -8,4 +8,6 @@ ckb-std = { version = "=1.1.0", default-features = false, features = ["allocator
 daowow-core = { path = "../daowow-core", default-features = false }
 
 [lib]
-crate-type = ["cdylib", "rlib"]
+# Shared Rust helpers are linked into each contract, not a standalone
+# no_std dynamic library with its own allocator/panic entry points.
+crate-type = ["rlib"]

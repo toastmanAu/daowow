@@ -1,6 +1,6 @@
 //! DAOWOWEntryLock — custodial gate for Entry cells.
 //!
-//! args: participant_lock_hash (32 bytes)
+//! args: participant_lock_hash (32) || config_commitment (32)
 //! data: EntryDataV1 (fixed 132 bytes)
 //!
 //! Exactly two spend paths:
@@ -9,18 +9,16 @@
 //!      membership proof pins the entry leaf to a FROZEN shard accumulator.
 //!   2. refund: input `since` is an absolute epoch >= aggregation_deadline
 //!      and the full capacity returns to the committed participant lock.
+//!
 //! No other destination is valid; there is no operator path.
 
 #![no_std]
 #![no_main]
 
 use ckb_std::ckb_constants::Source;
-use daowow_contracts_common::daowow_alloc;
 use ckb_std::entry;
-use ckb_std::high_level::{
-    load_cell, load_cell_data, load_cell_type_hash, load_input_since, load_witness, QueryIter,
-};
-use daowow_contracts_common::find_frozen_shard;
+use ckb_std::high_level::{load_cell, load_cell_data, load_input_since, load_witness};
+use daowow_contracts_common::daowow_alloc;
 use daowow_core::accumulator::{nonce_key, smt};
 use daowow_core::encoding::{EntryDataV1, ENTRY_DATA_SIZE};
 use daowow_core::error::codes::*;
@@ -73,10 +71,10 @@ fn main() -> i8 {
         Err(_) => return err(ENTRY_ERROR_LOCK_ARGS),
     };
     let args = script.args().raw_data();
-    if args.len() != 32 {
+    if args.len() != 64 {
         return err(ENTRY_ERROR_LOCK_ARGS);
     }
-    let participant_lock_hash: [u8; 32] = args.as_ref().try_into().unwrap();
+    let participant_lock_hash: [u8; 32] = args[..32].try_into().unwrap();
 
     let n = group_size();
     if n == 0 {
@@ -102,21 +100,15 @@ fn main() -> i8 {
 
     // detect the aggregation path: presence of a DAO deposit output under the
     // round's dao-lock
-    let _round_id = entries[0].round_id;
-    let mut is_aggregation = false;
-    {
-        let mut i = 0usize;
-        while load_cell_type_hash(i, Source::Output).is_ok() {
-            i += 1;
-        }
-        let _ = i;
-    }
     // determine by scanning outputs for our dao-lock script hash: obtain it
     // from the round config
     let cfg = match find_round_config_from_entries(&entries) {
         Some(c) => c,
         None => return err(ENTRY_ERROR_ROUND_MISMATCH),
     };
+    if !daowow_contracts_common::script_matches(&script, &cfg.entry_lock) {
+        return err(ENTRY_ERROR_ROUND_MISMATCH);
+    }
     for e in &entries {
         if e.round_id != cfg.round_id {
             return err(ENTRY_ERROR_ROUND_MISMATCH);
@@ -138,18 +130,19 @@ fn main() -> i8 {
             let largs = lock.args().raw_data();
             if code_hash == cfg.dao_lock.code_hash
                 && ht == cfg.dao_lock.hash_type
-                && largs.len() == 40
+                && largs.len() == 104
                 && largs[..32] == cfg.round_id
+                && largs[40..72] == cfg.commitment()
             {
                 dao_outputs.push(i);
             }
             i += 1;
         }
     }
-    is_aggregation = !dao_outputs.is_empty();
-
-    if is_aggregation {
-        return aggregate(&cfg, &entries, &abs_idx);
+    if !dao_outputs.is_empty()
+        || canonical_ledger(cfg.commitment(), &cfg, entries[0].shard_id, Source::Input).is_some()
+    {
+        return aggregate(&cfg, &entries);
     }
 
     // refund path
@@ -161,168 +154,124 @@ fn find_round_config_from_entries(
 ) -> Option<daowow_core::encoding::RoundConfigV1> {
     // find the config dep binding any of our round ids; entries of one group
     // share one round (validated after)
-    entries.first().and_then(|e| find_round_config_in_deps(&e.round_id))
+    entries
+        .first()
+        .and_then(|e| find_round_config_in_deps(&e.round_id))
 }
 
-fn find_round_config_in_deps(
-    round_id: &[u8; 32],
-) -> Option<daowow_core::encoding::RoundConfigV1> {
-    // entry-lock does not know the round-type script ref up front; use the
-    // same discovery rule as the shard script (config-shaped dep with 8-byte
-    // type args).
-    let mut i = 0usize;
-    loop {
-        let cell = load_cell(i, Source::CellDep).ok()?;
-        if let Some(t) = cell.type_().to_opt() {
-            if t.args().raw_data().len() == 8 {
-                if let Ok(data) = load_cell_data(i, Source::CellDep) {
-                    if data.len() == daowow_core::encoding::ROUND_CONFIG_SIZE {
-                        if let Ok(cfg) = daowow_core::encoding::RoundConfigV1::decode(&data) {
-                            if cfg.round_id == *round_id {
-                                return Some(cfg);
-                            }
-                        }
-                    }
+fn find_round_config_in_deps(round_id: &[u8; 32]) -> Option<daowow_core::encoding::RoundConfigV1> {
+    let script = ckb_std::high_level::load_script().ok()?;
+    let args = script.args().raw_data();
+    let commitment: [u8; 32] = args.get(32..64)?.try_into().ok()?;
+    daowow_contracts_common::config_by_commitment(&commitment, round_id, Source::CellDep)
+}
+
+fn aggregate(cfg: &daowow_core::encoding::RoundConfigV1, entries: &[EntryDataV1]) -> i8 {
+    if entries.iter().any(|e| e.shard_id != entries[0].shard_id) {
+        return err(ENTRY_ERROR_SHARD_MISMATCH);
+    }
+    // Requiring the exact enforcing type on an actual input makes its script
+    // mandatory for this transaction. That shard group validates every actual
+    // entry input, indexed proof, successor, DAO output and receipt. Its other
+    // transitions forbid entry inputs. Do not replace this with a dep/output
+    // check: neither would force the canonical ledger spending validation.
+    if canonical_ledger(cfg.commitment(), cfg, entries[0].shard_id, Source::Input)
+        .is_some_and(|state| !state.is_closed())
+    {
+        0
+    } else {
+        err(ENTRY_ERROR_NOT_AGGREGATION)
+    }
+}
+
+/// Authenticate a canonical ledger by its configured type and exact identity.
+fn canonical_ledger(
+    commitment: [u8; 32],
+    cfg: &daowow_core::encoding::RoundConfigV1,
+    shard_id: u32,
+    source: Source,
+) -> Option<daowow_core::lifecycle::AggregationState> {
+    let mut i = 0;
+    let mut found = None;
+    while let Ok(cell) = load_cell(i, source) {
+        if let Some(type_script) = cell.type_().to_opt() {
+            let args = type_script.args().raw_data();
+            if daowow_contracts_common::script_matches(&type_script, &cfg.entry_shard_type)
+                && args.len() == 36
+                && args[..32] == commitment
+                && args[32..] == shard_id.to_le_bytes()
+            {
+                if found.is_some() {
+                    return None;
                 }
+                let data = load_cell_data(i, source).ok()?;
+                let state = if shard_id == 0 && data.first() == Some(&3) && data.len() > 207 {
+                    *daowow_core::seal::RoundSeal::decode(&data, cfg)
+                        .ok()?
+                        .ledger(0)?
+                } else if shard_id == 0 && data.first() == Some(&4) && data.len() > 207 {
+                    *daowow_core::seal::EntropyRecord::decode(&data, cfg)
+                        .ok()?
+                        .seal()
+                        .ledger(0)?
+                } else {
+                    daowow_core::lifecycle::AggregationState::decode(&data, cfg).ok()?
+                };
+                if state.frozen().shard_id != shard_id {
+                    return None;
+                }
+                found = Some(state);
             }
         }
         i += 1;
     }
+    found
 }
 
-fn aggregate(
+fn excluded_membership(
     cfg: &daowow_core::encoding::RoundConfigV1,
-    entries: &[EntryDataV1],
-    abs_idx: &[usize],
-) -> i8 {
-    // the frozen shard commitment must exist among deps
-    let shard = match find_frozen_shard(&cfg.entry_shard_type, &cfg.round_id) {
-        Some(s) => s,
-        None => return err(ENTRY_ERROR_SHARD_MISMATCH),
+    e: &EntryDataV1,
+    index: usize,
+) -> bool {
+    let Some(state) = canonical_ledger(cfg.commitment(), cfg, e.shard_id, Source::CellDep) else {
+        return false;
     };
-    // membership proof per entry against the frozen accumulator root
-    for (gi, e) in entries.iter().enumerate() {
-        if e.shard_id != shard.shard_id {
-            return err(ENTRY_ERROR_SHARD_MISMATCH);
-        }
-        let raw = match load_witness(abs_idx[gi], Source::Input) {
-            Ok(w) => w,
-            Err(_) => return err(ENTRY_ERROR_NOT_AGGREGATION),
-        };
-        let proof = match daowow_core::witness::decode_aggregation_witness(&raw) {
-            Ok(p) => p,
-            Err(_) => return err(ENTRY_ERROR_NOT_AGGREGATION),
-        };
-        let key = nonce_key(e.entry_nonce);
-        let leaf = entry_leaf(e);
-        let ok = match cfg.accumulator_id {
-            daowow_core::encoding::ACC_SMT => {
-                smt::verify_membership(&shard.accumulator_root, &key, &leaf, proof).is_ok()
-            }
-            daowow_core::encoding::ACC_MMR => {
-                daowow_core::accumulator::mmr::verify_membership(
-                    &shard.accumulator_root,
-                    shard.entry_count,
-                    e.entry_nonce,
-                    &leaf,
-                    proof,
-                )
-                .is_ok()
-            }
-            daowow_core::encoding::ACC_IMT => {
-                daowow_core::accumulator::imt::verify_membership(
-                    &shard.accumulator_root,
-                    e.entry_nonce,
-                    &leaf,
-                    proof,
-                )
-                .is_ok()
-            }
-            _ => false,
-        };
-        if !ok {
-            return err(ENTRY_ERROR_NOT_AGGREGATION);
-        }
+    if !state.is_closed() || e.entry_nonce < state.accepted_entries() {
+        return false;
     }
-
-    // capacity routing: the total capacity of this entry group must flow into
-    // DAO deposit outputs under the round's dao-lock (checked by every group;
-    // tx-wide equality is asserted against all entry groups combined below).
-    let mut group_cap: u64 = 0;
-    for &ai in abs_idx {
-        group_cap = match group_cap.checked_add(
-            ckb_std::high_level::load_cell_capacity(ai, Source::Input).unwrap_or(u64::MAX),
-        ) {
-            Some(c) if c != u64::MAX => c,
-            _ => return err(ENTRY_ERROR_DATA),
-        };
+    let Ok(raw) = load_witness(index, Source::Input) else {
+        return false;
+    };
+    let Ok(proof) = daowow_core::witness::decode_aggregation_witness(&raw) else {
+        return false;
+    };
+    let shard = state.frozen();
+    let leaf = entry_leaf(e);
+    match cfg.accumulator_id {
+        daowow_core::encoding::ACC_SMT => smt::verify_membership(
+            &shard.accumulator_root,
+            &nonce_key(e.entry_nonce),
+            &leaf,
+            proof,
+        )
+        .is_ok(),
+        daowow_core::encoding::ACC_MMR => daowow_core::accumulator::mmr::verify_membership(
+            &shard.accumulator_root,
+            shard.entry_count,
+            e.entry_nonce,
+            &leaf,
+            proof,
+        )
+        .is_ok(),
+        daowow_core::encoding::ACC_IMT => daowow_core::accumulator::imt::verify_membership(
+            &shard.accumulator_root,
+            e.entry_nonce,
+            &leaf,
+            proof,
+        )
+        .is_ok(),
+        _ => false,
     }
-    let mut deposit_cap: u64 = 0;
-    {
-        let mut i = 0usize;
-        loop {
-            let cell = match load_cell(i, Source::Output) {
-                Ok(c) => c,
-                Err(_) => break,
-            };
-            let lock = cell.lock();
-            let code_hash: [u8; 32] = lock.code_hash().into();
-            let largs = lock.args().raw_data();
-            if code_hash == cfg.dao_lock.code_hash
-                && u8::from(lock.hash_type()) == cfg.dao_lock.hash_type
-                && largs.len() == 40
-                && largs[..32] == cfg.round_id
-            {
-                let cap = match ckb_std::high_level::load_cell_capacity(i, Source::Output) {
-                    Ok(c) => c,
-                    Err(_) => return err(ENTRY_ERROR_BATCH_BINDING),
-                };
-                deposit_cap = match deposit_cap.checked_add(cap) {
-                    Some(c) => c,
-                    None => return err(ENTRY_ERROR_BATCH_BINDING),
-                };
-            }
-            i += 1;
-        }
-    }
-    // tx-wide: all entry inputs together must exactly fund the dao deposits
-    let mut total_entry_cap: u64 = 0;
-    {
-        let dao_type_hash = cfg.dao_type.code_hash;
-        let mut i = 0usize;
-        loop {
-            // every input cell that is an entry (entry lock with 32-byte args
-            // whose data decodes as EntryData) contributes; approximate by
-            // summing capacities of inputs carrying the entry lock code hash
-            // from the config.
-            let cell = match load_cell(i, Source::Input) {
-                Ok(c) => c,
-                Err(_) => break,
-            };
-            let lock = cell.lock();
-            let code_hash: [u8; 32] = lock.code_hash().into();
-            if code_hash == cfg.entry_lock.code_hash
-                && u8::from(lock.hash_type()) == cfg.entry_lock.hash_type
-            {
-                let cap = ckb_std::high_level::load_cell_capacity(i, Source::Input).unwrap_or(0);
-                total_entry_cap = total_entry_cap.saturating_add(cap);
-            }
-            let _ = dao_type_hash;
-            i += 1;
-        }
-    }
-    if deposit_cap != total_entry_cap {
-        ckb_std::debug!(
-            "entry-lock: deposit_cap {} != total_entry_cap {}",
-            deposit_cap,
-            total_entry_cap
-        );
-        return err(ENTRY_ERROR_BATCH_BINDING);
-    }
-    if group_cap > deposit_cap {
-        return err(ENTRY_ERROR_BATCH_BINDING);
-    }
-    0
 }
 
 fn refund(
@@ -330,71 +279,80 @@ fn refund(
     entries: &[EntryDataV1],
     abs_idx: &[usize],
 ) -> i8 {
-    // refund is only permitted at/after the aggregation deadline, expressed
-    // by an absolute-epoch `since` on each input (consensus enforces the
-    // threshold; the script verifies the encoding and value).
-    for &ai in abs_idx {
+    let mut required = 0u64;
+    for (&ai, entry) in abs_idx.iter().zip(entries) {
+        if !excluded_membership(cfg, entry, ai) {
+            return err(ENTRY_ERROR_REFUND_CONDITION);
+        }
         let since = match load_input_since(ai, Source::Input) {
             Ok(s) => s,
             Err(_) => return err(ENTRY_ERROR_REFUND_CONDITION),
         };
-        // absolute epoch flag bits: 0b0100_0000 in the top byte would be
-        // relative; absolute epoch uses 0b0010_0000 (0x20).
-        if since >> 56 != 0x20 {
+        if daowow_core::epoch::absolute_epoch_at_least(since, cfg.aggregation_deadline).is_err() {
             return err(ENTRY_ERROR_REFUND_CONDITION);
         }
-        let epoch_number = since & 0x00FF_FFFF_FFFF_FFFF;
-        if epoch_number < cfg.aggregation_deadline {
-            return err(ENTRY_ERROR_REFUND_CONDITION);
-        }
-        // destination: the committed participant lock; capacity >= principal
-        let cell = match load_cell(ai, Source::Input) {
+        let cap = match ckb_std::high_level::load_cell_capacity(ai, Source::Input) {
             Ok(c) => c,
             Err(_) => return err(ENTRY_ERROR_DATA),
         };
-        let e = &entries[abs_idx.iter().position(|&x| x == ai).unwrap_or(0)];
-        let mut found = false;
+        required = match required.checked_add(cap) {
+            Some(c) => c,
+            None => return err(ENTRY_ERROR_DATA),
+        };
+    }
+    // Other config commitments form other lock groups. Count their entries
+    // for the same participant too, so groups cannot reuse one repayment.
+    let mut ai = 0;
+    while let Ok(cell) = load_cell(ai, Source::Input) {
+        if !abs_idx.contains(&ai)
+            && daowow_contracts_common::script_matches(&cell.lock(), &cfg.entry_lock)
         {
-            let mut i = 0usize;
-            loop {
-                let out = match load_cell(i, Source::Output) {
+            let other_lock = cell.lock();
+            let args = other_lock.args().raw_data();
+            if args.len() == 64 && args[..32] == entries[0].participant_lock_hash {
+                let cap = match ckb_std::high_level::load_cell_capacity(ai, Source::Input) {
                     Ok(c) => c,
-                    Err(_) => break,
+                    Err(_) => return err(ENTRY_ERROR_DATA),
                 };
-                let lock = out.lock();
-                let script_hash: [u8; 32] = lock.calc_script_hash().into();
-                if script_hash == e.participant_lock_hash {
-                    let cap = ckb_std::high_level::load_cell_capacity(i, Source::Output).unwrap_or(0);
-                    if cap >= e.principal {
-                        found = true;
-                    }
-                    break;
-                }
-                i += 1;
+                required = match required.checked_add(cap) {
+                    Some(c) => c,
+                    None => return err(ENTRY_ERROR_DATA),
+                };
             }
         }
-        if !found {
-            return err(ENTRY_ERROR_REFUND_DESTINATION);
-        }
-        let _ = cell;
+        ai += 1;
     }
-    // a refund transaction must not also aggregate (no dao deposits allowed)
-    {
-        let mut i = 0usize;
-        loop {
-            let cell = match load_cell(i, Source::Output) {
+    // A lock group has one participant. Sum its full input capacity once,
+    // and sum only ordinary outputs for that participant once.
+    let mut returned = 0u64;
+    let mut i = 0usize;
+    while let Ok(cell) = load_cell(i, Source::Output) {
+        let lock = cell.lock();
+        let code: [u8; 32] = lock.code_hash().into();
+        if code == cfg.dao_lock.code_hash {
+            return err(ENTRY_ERROR_REFUND_CONDITION);
+        }
+        let hash: [u8; 32] = lock.calc_script_hash().into();
+        if hash == entries[0].participant_lock_hash {
+            if cell.type_().to_opt().is_some()
+                || !matches!(load_cell_data(i, Source::Output), Ok(data) if data.is_empty())
+            {
+                return err(ENTRY_ERROR_REFUND_DESTINATION);
+            }
+            let cap = match ckb_std::high_level::load_cell_capacity(i, Source::Output) {
                 Ok(c) => c,
-                Err(_) => break,
+                Err(_) => return err(ENTRY_ERROR_DATA),
             };
-            let lock = cell.lock();
-            let code_hash: [u8; 32] = lock.code_hash().into();
-            if code_hash == cfg.dao_lock.code_hash {
-                return err(ENTRY_ERROR_REFUND_CONDITION);
-            }
-            i += 1;
+            returned = match returned.checked_add(cap) {
+                Some(c) => c,
+                None => return err(ENTRY_ERROR_DATA),
+            };
         }
+        i += 1;
     }
-    let _ = QueryIter::new(load_cell, Source::Output).count();
+    if returned < required {
+        return err(ENTRY_ERROR_REFUND_DESTINATION);
+    }
     0
 }
 

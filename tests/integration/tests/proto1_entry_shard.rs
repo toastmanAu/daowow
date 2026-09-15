@@ -19,7 +19,12 @@ fn packed_bytes(b: impl AsRef<[u8]>) -> ckb_testtool::ckb_types::packed::Bytes {
     pack_pbytes(b.as_ref())
 }
 
-use ckb_testtool::ckb_types::{bytes::Bytes, core::{TransactionView, ScriptHashType, DepType, TransactionBuilder}, packed::*, prelude::*};
+use ckb_testtool::ckb_types::{
+    bytes::Bytes,
+    core::{DepType, ScriptHashType, TransactionBuilder, TransactionView},
+    packed::*,
+    prelude::*,
+};
 use common::*;
 
 /// Build an entry transaction (SMT accumulator).
@@ -34,24 +39,19 @@ fn build_entry_tx(
     participant_hash: &Hash32,
     spurious_entry_cells: usize,
 ) -> (TransactionView, EntryShardDataV1) {
-    // 1. absence proofs against the pre-insert tree
-    let mut absences: Vec<Vec<u8>> = Vec::new();
-    for e in entries {
-        absences.push(host.absence_proof(&[smt_key(e)]).unwrap());
-    }
-    // 2. insert all
-    for e in entries {
-        host.insert(&smt_key(e), &smt_leaf(e)).unwrap();
-    }
-    // 3. inclusion proofs against the post-insert tree
+    // Each certificate authenticates one exact insertion; chain roots in
+    // witness entry order rather than proving every leaf against final root.
     let mut certs: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
-    for (i, e) in entries.iter().enumerate() {
+    for e in entries {
+        let absence = host.absence_proof(&[smt_key(e)]).unwrap();
+        host.insert(&smt_key(e), &smt_leaf(e)).unwrap();
         let inclusion = host.inclusion_proof(&[smt_key(e)]).unwrap();
-        certs.push((absences[i].clone(), inclusion));
-        let _ = e;
+        certs.push((absence, inclusion));
     }
-    let cert_refs: Vec<(&[u8], &[u8])> =
-        certs.iter().map(|(a, b)| (a.as_slice(), b.as_slice())).collect();
+    let cert_refs: Vec<(&[u8], &[u8])> = certs
+        .iter()
+        .map(|(a, b)| (a.as_slice(), b.as_slice()))
+        .collect();
     let witness = smt_append_witness(entries, &cert_refs);
 
     // expected post-state (tolerates deliberately-invalid entries used in
@@ -141,8 +141,17 @@ fn contended_shard_head_serializes_via_utxo() {
     let (_, lock_a) = world.always_success();
     let ph_a = World::participant_hash(&lock_a);
     let e1 = make_entry(&cfg, &shard0, &ph_a, 3, &[0xA1; 32]);
-    let (tx1, shard1) =
-        build_entry_tx(&mut world, &cfg, &round_op, &shard_op, &shard0, &mut host, &[e1], &ph_a, 0);
+    let (tx1, shard1) = build_entry_tx(
+        &mut world,
+        &cfg,
+        &round_op,
+        &shard_op,
+        &shard0,
+        &mut host,
+        &[e1],
+        &ph_a,
+        0,
+    );
     let c1 = expect_ok(&mut world.context, &tx1);
     println!("cycles: entry tx on empty shard = {}", c1);
     chain_cell(&mut world, &shard_op, &tx1, 0);
@@ -153,8 +162,17 @@ fn contended_shard_head_serializes_via_utxo() {
     let e2 = make_entry(&cfg, &shard1, &ph_b, 1, &[0xB1; 32]);
     assert_eq!(e2.entry_nonce, 1);
     assert_eq!(e2.position_base, 3);
-    let (tx2, shard2) =
-        build_entry_tx(&mut world, &cfg, &round_op, &shard_op, &shard1, &mut host, &[e2], &ph_b, 0);
+    let (tx2, shard2) = build_entry_tx(
+        &mut world,
+        &cfg,
+        &round_op,
+        &shard_op,
+        &shard1,
+        &mut host,
+        &[e2],
+        &ph_b,
+        0,
+    );
     let c2 = expect_ok(&mut world.context, &tx2);
     println!("cycles: entry tx on 1-entry shard = {}", c2);
     chain_cell(&mut world, &shard_op, &tx2, 0);
@@ -176,19 +194,31 @@ fn batched_entries_and_parallel_shards() {
     let mut host_a = SmtHost::new();
     let mut host_b = SmtHost::new();
 
-    let ea = make_entry_batch(
-        &cfg,
-        &shard_a,
-        &ph,
-        &[2, 1],
-        &[[0xC1; 32], [0xC2; 32]],
-    );
+    let ea = make_entry_batch(&cfg, &shard_a, &ph, &[2, 1], &[[0xC1; 32], [0xC2; 32]]);
     let eb = [make_entry(&cfg, &shard_b, &ph, 5, &[0xC3; 32])];
 
-    let (tx_a, after_a) =
-        build_entry_tx(&mut world, &cfg, &round_op, &shard_a_op, &shard_a, &mut host_a, &ea, &ph, 0);
-    let (tx_b, after_b) =
-        build_entry_tx(&mut world, &cfg, &round_op, &shard_b_op, &shard_b, &mut host_b, &eb, &ph, 0);
+    let (tx_a, after_a) = build_entry_tx(
+        &mut world,
+        &cfg,
+        &round_op,
+        &shard_a_op,
+        &shard_a,
+        &mut host_a,
+        &ea,
+        &ph,
+        0,
+    );
+    let (tx_b, after_b) = build_entry_tx(
+        &mut world,
+        &cfg,
+        &round_op,
+        &shard_b_op,
+        &shard_b,
+        &mut host_b,
+        &eb,
+        &ph,
+        0,
+    );
     let ca = expect_ok(&mut world.context, &tx_a);
     let cb = expect_ok(&mut world.context, &tx_b);
     println!(
@@ -212,8 +242,17 @@ fn adversarial_entry_txs_rejected() {
 
     // 1. forged accumulator root (no valid certificate)
     let e = make_entry(&cfg, &shard0, &ph, 1, &[0xD1; 32]);
-    let (tx, _) =
-        build_entry_tx(&mut world, &cfg, &round_op, &shard_op, &shard0, &mut host, &[e], &ph, 0);
+    let (tx, _) = build_entry_tx(
+        &mut world,
+        &cfg,
+        &round_op,
+        &shard_op,
+        &shard0,
+        &mut host,
+        &[e],
+        &ph,
+        0,
+    );
     let forged_root = [0x99u8; 32];
     let view = tx.as_advanced_builder();
     let mut outs: Vec<CellOutput> = Vec::new();
@@ -234,16 +273,34 @@ fn adversarial_entry_txs_rejected() {
     let mut e2 = make_entry(&cfg, &shard0, &ph, 2, &[0xD2; 32]);
     e2.principal = 1;
     let mut host2 = SmtHost::new();
-    let (tx2, _) =
-        build_entry_tx(&mut world, &cfg, &round_op, &shard_op, &shard0, &mut host2, &[e2], &ph, 0);
+    let (tx2, _) = build_entry_tx(
+        &mut world,
+        &cfg,
+        &round_op,
+        &shard_op,
+        &shard0,
+        &mut host2,
+        &[e2],
+        &ph,
+        0,
+    );
     let err = expect_fail(&mut world.context, &tx2);
     println!("principal mismatch rejected: {:?}", err);
 
     // 3. sequence jump
     let mut host3 = SmtHost::new();
     let e3 = make_entry(&cfg, &shard0, &ph, 1, &[0xD3; 32]);
-    let (tx3, _) =
-        build_entry_tx(&mut world, &cfg, &round_op, &shard_op, &shard0, &mut host3, &[e3], &ph, 0);
+    let (tx3, _) = build_entry_tx(
+        &mut world,
+        &cfg,
+        &round_op,
+        &shard_op,
+        &shard0,
+        &mut host3,
+        &[e3],
+        &ph,
+        0,
+    );
     let view3 = tx3.as_advanced_builder();
     let mut datas3: Vec<ckb_testtool::ckb_types::packed::Bytes> = Vec::new();
     for (i, d) in tx3.outputs_data().into_iter().enumerate() {
@@ -261,8 +318,17 @@ fn adversarial_entry_txs_rejected() {
     // 4. spurious entry cell not covered by the witness
     let mut host4 = SmtHost::new();
     let e4 = make_entry(&cfg, &shard0, &ph, 1, &[0xD4; 32]);
-    let (tx4, _) =
-        build_entry_tx(&mut world, &cfg, &round_op, &shard_op, &shard0, &mut host4, &[e4], &ph, 1);
+    let (tx4, _) = build_entry_tx(
+        &mut world,
+        &cfg,
+        &round_op,
+        &shard_op,
+        &shard0,
+        &mut host4,
+        &[e4],
+        &ph,
+        1,
+    );
     let err = expect_fail(&mut world.context, &tx4);
     println!("uncovered entry cell rejected: {:?}", err);
 
@@ -270,8 +336,17 @@ fn adversarial_entry_txs_rejected() {
     let mut host5 = SmtHost::new();
     let mut e5 = make_entry(&cfg, &shard0, &ph, 1, &[0xD5; 32]);
     e5.shard_id = 3;
-    let (tx5, _) =
-        build_entry_tx(&mut world, &cfg, &round_op, &shard_op, &shard0, &mut host5, &[e5], &ph, 0);
+    let (tx5, _) = build_entry_tx(
+        &mut world,
+        &cfg,
+        &round_op,
+        &shard_op,
+        &shard0,
+        &mut host5,
+        &[e5],
+        &ph,
+        0,
+    );
     let err = expect_fail(&mut world.context, &tx5);
     println!("wrong shard id rejected: {:?}", err);
 }
@@ -286,8 +361,17 @@ fn freeze_and_frozen_immutability() {
     let ph = World::participant_hash(&lock);
     let mut host = SmtHost::new();
     let e = make_entry(&cfg, &shard0, &ph, 2, &[0xE1; 32]);
-    let (_tx, _shard1) =
-        build_entry_tx(&mut world, &cfg, &round_op, &shard_op, &shard0, &mut host, &[e], &ph, 0);
+    let (_tx, _shard1) = build_entry_tx(
+        &mut world,
+        &cfg,
+        &round_op,
+        &shard_op,
+        &shard0,
+        &mut host,
+        &[e],
+        &ph,
+        0,
+    );
 
     // empty shard freeze: OPEN -> FROZEN preserving counters
     let (cell_in, data_in) = world.cell(&shard_op);
@@ -297,7 +381,10 @@ fn freeze_and_frozen_immutability() {
     let funding = world.funding_cell(1000 * SHANNONS);
     let tx = TransactionBuilder::default()
         .cell_dep(world.round_config_dep(&round_op))
-        .input(CellInput::new(shard_op.clone(), 0))
+        .input(CellInput::new(
+            shard_op.clone(),
+            daowow_core::epoch::absolute_epoch_since(cfg.entry_end).unwrap(),
+        ))
         .input(CellInput::new(funding.0, 0))
         .output(
             CellOutputBuilder::default()

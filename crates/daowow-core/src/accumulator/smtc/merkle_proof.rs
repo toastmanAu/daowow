@@ -73,7 +73,7 @@ impl MerkleProof {
             let fork_height = if leaf_index + 1 < leaves_keys.len() {
                 leaf_key.fork_height(&leaves_keys[leaf_index + 1])
             } else {
-                core::u8::MAX
+                u8::MAX
             };
             proof.push(0x4C);
             let mut zero_count = 0u16;
@@ -104,8 +104,6 @@ impl MerkleProof {
                                 buffer.extend_from_slice(zero_bits.as_slice());
                                 (Some(0x51), Some(buffer))
                             }
-                            #[cfg(feature = "trie")]
-                            _ => unreachable!(),
                         }
                     } else {
                         zero_count += 1;
@@ -503,8 +501,6 @@ impl CompiledMerkleProof {
                                 sub_proof.extend(zero_bits.as_slice());
                                 is_last_merge_zero = false;
                             }
-                            #[cfg(feature = "trie")]
-                            _ => {}
                         };
                     }
                 }
@@ -576,31 +572,38 @@ impl CompiledMerkleProof {
     ) -> Result<(H256, Vec<ReplayOp>)> {
         let mut ops: Vec<ReplayOp> = Vec::new();
         let root = {
-            let mut collected: Vec<ReplayOp> = Vec::new();
             // reuse compute_root_inner via a callback
-            let result = {
-                let mut sink = |ctx: OpCodeContext| -> Result<()> {
-                    let (code, height, payload): (u8, u8, Vec<u8>) = match ctx {
-                        OpCodeContext::P { height, program_index, .. } => (
-                            0x50,
-                            height,
-                            self.0[program_index - 32..program_index].to_vec(),
-                        ),
-                        OpCodeContext::Q { height, program_index, .. } => (
-                            0x51,
-                            height,
-                            self.0[program_index - 65..program_index].to_vec(),
-                        ),
-                        OpCodeContext::O { height, n, .. } => (0x4F, height, alloc::vec![n]),
-                        _ => return Ok(()),
-                    };
-                    collected.push(ReplayOp { code, height, payload });
-                    Ok(())
+            let mut sink = |ctx: OpCodeContext| -> Result<()> {
+                let (code, height, payload): (u8, u8, Vec<u8>) = match ctx {
+                    OpCodeContext::P {
+                        height,
+                        program_index,
+                        ..
+                    } => (
+                        0x50,
+                        height,
+                        self.0[program_index - 32..program_index].to_vec(),
+                    ),
+                    OpCodeContext::Q {
+                        height,
+                        program_index,
+                        ..
+                    } => (
+                        0x51,
+                        height,
+                        self.0[program_index - 65..program_index].to_vec(),
+                    ),
+                    OpCodeContext::O { height, n, .. } => (0x4F, height, alloc::vec![n]),
+                    _ => return Ok(()),
                 };
-                self.compute_root_inner::<H, _>(leaves.clone(), &mut sink)?
+                ops.push(ReplayOp {
+                    code,
+                    height,
+                    payload,
+                });
+                Ok(())
             };
-            ops = collected;
-            result
+            self.compute_root_inner::<H, _>(leaves, &mut sink)?
         };
         Ok((root, ops))
     }

@@ -2,7 +2,7 @@
 //! Nervos DAO lifecycle. The native DAO type script validates DAO mechanics;
 //! this lock validates DAOWOW custody rules (see RFC-0023 and dao.c).
 //!
-//! args: round_id (32) || batch_id (8)
+//! args: round_id (32) || batch_id (8) || config commitment (32) || digest (32)
 //! data: phase 1 input = 8 zero bytes (deposit); phase 2 input = 8-byte LE
 //!       deposit block number (withdrawing cell).
 //!
@@ -22,14 +22,12 @@
 
 use ckb_std::ckb_constants::Source;
 use ckb_std::ckb_types::prelude::*;
-use daowow_contracts_common::daowow_alloc;
 use ckb_std::entry;
 use ckb_std::high_level::{
     load_cell, load_cell_capacity, load_cell_data, load_cell_type_hash, load_header, load_script,
 };
-use daowow_core::encoding::{
-    RoundConfigV1, SettlementFundingDataV1, SETTLEMENT_FUNDING_SIZE,
-};
+use daowow_contracts_common::daowow_alloc;
+use daowow_core::encoding::RoundConfigV1;
 use daowow_core::error::codes::*;
 
 entry!(main);
@@ -39,25 +37,11 @@ fn err(e: i8) -> i8 {
     e
 }
 
-fn config_for(round_id: &[u8; 32]) -> Option<RoundConfigV1> {
-    let mut i = 0usize;
-    loop {
-        let cell = load_cell(i, Source::CellDep).ok()?;
-        if let Some(t) = cell.type_().to_opt() {
-            if t.args().raw_data().len() == 8 {
-                if let Ok(data) = load_cell_data(i, Source::CellDep) {
-                    if data.len() == daowow_core::encoding::ROUND_CONFIG_SIZE {
-                        if let Ok(cfg) = RoundConfigV1::decode(&data) {
-                            if cfg.round_id == *round_id {
-                                return Some(cfg);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        i += 1;
-    }
+fn config_for(round_id: &[u8; 32]) -> Option<daowow_core::encoding::RoundConfigV1> {
+    let script = ckb_std::high_level::load_script().ok()?;
+    let args = script.args().raw_data();
+    let commitment: [u8; 32] = args.get(40..72)?.try_into().ok()?;
+    daowow_contracts_common::config_by_commitment(&commitment, round_id, Source::CellDep)
 }
 
 fn main() -> i8 {
@@ -66,16 +50,19 @@ fn main() -> i8 {
         Err(_) => return err(DAO_ERROR_ARGS),
     };
     let args = script.args().raw_data();
-    if args.len() != 40 {
+    if args.len() != 104 {
         return err(DAO_ERROR_ARGS);
     }
     let round_id: [u8; 32] = args[..32].try_into().unwrap();
-    let _batch_id: [u8; 8] = args[32..].try_into().unwrap();
+    let _batch_id: [u8; 8] = args[32..40].try_into().unwrap();
 
     let cfg = match config_for(&round_id) {
         Some(c) => c,
         None => return err(DAO_ERROR_ARGS),
     };
+    if !daowow_contracts_common::script_matches(&script, &cfg.dao_lock) {
+        return err(DAO_ERROR_ARGS);
+    }
 
     // gather this group's absolute input indices
     let my_hash = match ckb_std::high_level::load_script_hash() {
@@ -108,7 +95,81 @@ fn main() -> i8 {
     }
 }
 
+/// Only explicit, nonduplicate code deps are supported here, so raw dep order
+/// and resolved CellDep syscall order agree. Builders must expand dep groups.
+/// This binds the receipt and the DAO input to the same creation transaction,
+/// not merely identical lock args on a separately created deposit.
+fn authenticated_deposit_receipt(cfg: &RoundConfigV1, input_index: usize) -> bool {
+    use daowow_core::lifecycle::BatchCommitment;
+    let Ok(tx) = ckb_std::high_level::load_transaction() else {
+        return false;
+    };
+    let deps = tx.raw().cell_deps();
+    for (index, dep) in deps.clone().into_iter().enumerate() {
+        if u8::from(dep.dep_type()) != 0
+            || deps
+                .clone()
+                .into_iter()
+                .take(index)
+                .any(|prior| prior.out_point() == dep.out_point())
+        {
+            return false;
+        }
+    }
+    let Ok(script) = load_script() else {
+        return false;
+    };
+    let own = script.args().raw_data();
+    let batch_id = u64::from_le_bytes(own[32..40].try_into().unwrap());
+    let shard_id = (batch_id >> 56) as u32;
+    if shard_id >= cfg.entry_shard_count {
+        return false;
+    }
+    let Ok(input) = ckb_std::high_level::load_input_out_point(input_index, Source::Input) else {
+        return false;
+    };
+    let mut found = false;
+    for (index, dep) in deps.into_iter().enumerate() {
+        let Ok(cell) = load_cell(index, Source::CellDep) else {
+            return false;
+        };
+        let Some(receipt_type) = cell.type_().to_opt() else {
+            continue;
+        };
+        let args = receipt_type.args().raw_data();
+        if !daowow_contracts_common::script_matches(&receipt_type, &cfg.entry_shard_type)
+            || args.len() != 77
+            || args[0] != 2
+            || args[1..33] != cfg.commitment()
+            || args[33..37] != shard_id.to_le_bytes()
+            || args[37..45] != batch_id.to_le_bytes()
+            || args[45..77] != own[72..104]
+        {
+            continue;
+        }
+        let Ok(data) = load_cell_data(index, Source::CellDep) else {
+            return false;
+        };
+        let Ok(batch) = BatchCommitment::decode(&data) else {
+            return false;
+        };
+        if found
+            || batch.digest != own[72..104]
+            || dep.out_point().tx_hash() != input.tx_hash()
+            || load_cell_capacity(input_index, Source::Input).ok() != Some(batch.input_capacity)
+            || !daowow_contracts_common::is_public_settlement_lock(&cell.lock(), &receipt_type)
+        {
+            return false;
+        }
+        found = true;
+    }
+    found
+}
+
 fn phase_one(cfg: &RoundConfigV1, group_abs: &[usize]) -> i8 {
+    if group_abs.len() != 1 || !authenticated_deposit_receipt(cfg, group_abs[0]) {
+        return err(DAO_ERROR_PHASE1_STRUCTURE);
+    }
     for &ai in group_abs {
         // input must be a deposit cell of the native DAO type
         match load_cell_type_hash(ai, Source::Input) {
@@ -160,6 +221,20 @@ fn phase_one(cfg: &RoundConfigV1, group_abs: &[usize]) -> i8 {
             Ok(h) => h,
             Err(_) => return err(DAO_ERROR_PHASE1_STRUCTURE),
         };
+        let deposit_epoch: u64 = header.raw().epoch().unpack();
+        let since = match ckb_std::high_level::load_input_since(ai, Source::Input) {
+            Ok(s) => s,
+            Err(_) => return err(DAO_ERROR_PHASE1_STRUCTURE),
+        };
+        if daowow_core::epoch::absolute_epoch_after_dao_term(
+            since,
+            deposit_epoch,
+            cfg.dao_term_periods,
+        )
+        .is_err()
+        {
+            return err(DAO_ERROR_PHASE1_STRUCTURE);
+        }
         let block_number: u64 = header.raw().number().unpack();
         let out_data = match load_cell_data(ai, Source::Output) {
             Ok(d) => d,
@@ -173,68 +248,19 @@ fn phase_one(cfg: &RoundConfigV1, group_abs: &[usize]) -> i8 {
 }
 
 fn phase_two(cfg: &RoundConfigV1, group_abs: &[usize]) -> i8 {
-    for &ai in group_abs {
-        // input must be a withdrawing cell (nonzero block number, DAO type)
-        match load_cell_type_hash(ai, Source::Input) {
-            Ok(Some(h)) => {
-                if h != cfg.dao_type.code_hash {
-                    return err(DAO_ERROR_PHASE2_DESTINATION);
-                }
-            }
-            _ => return err(DAO_ERROR_PHASE2_DESTINATION),
-        }
-        let data = load_cell_data(ai, Source::Input).unwrap_or_default();
-        if data.len() != 8 || data == [0u8; 8] {
-            return err(DAO_ERROR_PHASE2_DESTINATION);
-        }
+    if group_abs.len() != 1 {
+        return err(DAO_ERROR_GROUP);
     }
-
-    // every DAO-typed output in the tx must be a settlement funding cell of
-    // this round (protocol v0.2 section 14: realised capacity flows only to
-    // authorised settlement state)
-    let mut i = 0usize;
-    loop {
-        match load_cell_type_hash(i, Source::Output) {
-            Ok(Some(h)) => {
-                if h == cfg.dao_type.code_hash {
-                    // DAO output that is not consumed from our group is only
-                    // allowed if it is the same-index withdrawing cell of a
-                    // group input (handled in phase 1); in phase 2 any DAO
-                    // output is invalid.
-                    return err(DAO_ERROR_PHASE2_DESTINATION);
-                }
-            }
-            Ok(None) => {}
-            Err(_) => break,
-        }
-        i += 1;
-    }
-
-    // at least one settlement funding cell bound to this round must exist
-    let mut found_settlement = false;
-    let mut i = 0usize;
-    loop {
-        let cell = match load_cell(i, Source::Output) {
-            Ok(c) => c,
-            Err(_) => break,
-        };
-        if let Some(t) = cell.type_().to_opt() {
-            let code: [u8; 32] = t.code_hash().into();
-            if code == cfg.settlement_type.code_hash && u8::from(t.hash_type()) == cfg.settlement_type.hash_type
-            {
-                let data = load_cell_data(i, Source::Output).unwrap_or_default();
-                if data.len() == SETTLEMENT_FUNDING_SIZE {
-                    if let Ok(f) = SettlementFundingDataV1::decode(&data) {
-                        if f.round_id == cfg.round_id {
-                            found_settlement = true;
-                        }
-                    }
-                }
-            }
-        }
-        i += 1;
-    }
-    if !found_settlement {
+    let script = match load_script() {
+        Ok(s) => s,
+        Err(_) => return err(DAO_ERROR_ARGS),
+    };
+    let args = script.args().raw_data();
+    let batch_id = u64::from_le_bytes(args[32..40].try_into().unwrap());
+    let digest: [u8; 32] = args[72..104].try_into().unwrap();
+    if daowow_contracts_common::entitlements::require_initial_funding_type(cfg, batch_id, &digest)
+        .is_none()
+    {
         return err(DAO_ERROR_PHASE2_DESTINATION);
     }
     0

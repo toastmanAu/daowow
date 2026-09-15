@@ -1,0 +1,34 @@
+# Prototype code-cell deployment only. These artifacts are not approved for
+# funded rounds; see docs/deployment-readiness.md G0.
+# Run ckb-cli from the repository root. No type IDs or dep-group cells:
+# consumers must use data hashes, hash_type=data1, dep_type=code.
+
+[[cells]]
+name = "round-type"
+enable_type_id = false
+location = { file = "target/riscv64imac-unknown-none-elf/contract-release/round-type" }
+
+[[cells]]
+name = "entry-shard-type"
+enable_type_id = false
+location = { file = "target/riscv64imac-unknown-none-elf/contract-release/entry-shard-type" }
+
+[[cells]]
+name = "entry-lock"
+enable_type_id = false
+location = { file = "target/riscv64imac-unknown-none-elf/contract-release/entry-lock" }
+
+[[cells]]
+name = "dao-lock"
+enable_type_id = false
+location = { file = "target/riscv64imac-unknown-none-elf/contract-release/dao-lock" }
+
+[[cells]]
+name = "settlement-type"
+enable_type_id = false
+location = { file = "target/riscv64imac-unknown-none-elf/contract-release/settlement-type" }
+
+[lock]
+code_hash = "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8"
+args = "0x5ea0977c3cab6898817c9860fe70d26acf559f76"
+hash_type = "type"

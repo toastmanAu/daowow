@@ -1,8 +1,8 @@
 #![no_std]
 #![no_main]
 
-use ckb_std::entry;
 use ckb_std::default_alloc;
+use ckb_std::entry;
 
 entry!(main);
 

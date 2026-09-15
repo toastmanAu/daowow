@@ -36,3 +36,20 @@ pub fn check_proof_len(len: usize) -> Result<(), CoreError> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod proof_len_tests {
+    use super::{check_proof_len, MAX_PROOF_BYTES};
+    use crate::CoreError;
+
+    #[test]
+    fn proof_length_bound_is_inclusive_and_rejects_empty() {
+        assert_eq!(check_proof_len(0), Err(CoreError::MembershipProof));
+        assert_eq!(check_proof_len(1), Ok(()));
+        assert_eq!(check_proof_len(MAX_PROOF_BYTES), Ok(()));
+        assert_eq!(
+            check_proof_len(MAX_PROOF_BYTES + 1),
+            Err(CoreError::MembershipProof)
+        );
+    }
+}

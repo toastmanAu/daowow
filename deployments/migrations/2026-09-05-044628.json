@@ -1,0 +1,45 @@
+{
+  "cell_recipes": [
+    {
+      "name": "round-type",
+      "tx_hash": "0x12c1ec3a523bff74caaefa329ce8b115854be61cc3b50521dd7d9efd0d4b8006",
+      "index": 0,
+      "occupied_capacity": 1107700000000,
+      "data_hash": "0xd7f7be340ef42b63f298ccde9b34067eb13b90e32fa008d35daa59d89a51112c",
+      "type_id": null
+    },
+    {
+      "name": "entry-shard-type",
+      "tx_hash": "0x12c1ec3a523bff74caaefa329ce8b115854be61cc3b50521dd7d9efd0d4b8006",
+      "index": 1,
+      "occupied_capacity": 6463700000000,
+      "data_hash": "0xd33e3c9dbd19cc49ed786731dbd51acbc48536effbf8368b5d303c46c787f227",
+      "type_id": null
+    },
+    {
+      "name": "entry-lock",
+      "tx_hash": "0x12c1ec3a523bff74caaefa329ce8b115854be61cc3b50521dd7d9efd0d4b8006",
+      "index": 2,
+      "occupied_capacity": 4994100000000,
+      "data_hash": "0xd49df3eec3e35ef7b557f76c9cd162f3e2ea9a412caea74f21b5c1cce7f7600e",
+      "type_id": null
+    },
+    {
+      "name": "dao-lock",
+      "tx_hash": "0x12c1ec3a523bff74caaefa329ce8b115854be61cc3b50521dd7d9efd0d4b8006",
+      "index": 3,
+      "occupied_capacity": 2121300000000,
+      "data_hash": "0xe7d1c3f6a3cb25a30ccd56b88ea447d2b5dd95033c7a312ed8c74a16253cc882",
+      "type_id": null
+    },
+    {
+      "name": "settlement-type",
+      "tx_hash": "0x12c1ec3a523bff74caaefa329ce8b115854be61cc3b50521dd7d9efd0d4b8006",
+      "index": 4,
+      "occupied_capacity": 3390900000000,
+      "data_hash": "0xe6a2f7c433149807df898bfd868c27114374306d1df7f5fac3eae87eaf78543e",
+      "type_id": null
+    }
+  ],
+  "dep_group_recipes": []
+}

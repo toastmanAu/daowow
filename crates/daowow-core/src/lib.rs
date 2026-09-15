@@ -16,12 +16,21 @@ extern crate alloc;
 
 pub mod accounting;
 pub mod accumulator;
+pub mod computed_draw;
 pub mod draw;
 pub mod encoding;
+pub mod entitlement_witness;
+pub mod entitlements;
+pub mod epoch;
 pub mod error;
 pub mod hash;
 pub mod leaf;
+pub mod lifecycle;
+pub mod redemption;
+pub mod schedule;
+pub mod seal;
 pub mod shard;
+pub mod ticket;
 pub mod witness;
 
 pub use error::CoreError;

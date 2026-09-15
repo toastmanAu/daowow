@@ -1,7 +1,8 @@
 //! DAOWOWEntryShardType — serializes entry creation per shard and commits
 //! every accepted Entry into the shard accumulator.
 //!
-//! args: type_id (8 bytes)
+//! args: config commitment (32 bytes) || shard ID (LE u32)
+//! Public lock mode: args = [0], requiring the enforcing 36-byte shard type.
 //! data: EntryShardDataV1 (fixed 101 bytes)
 //!
 //! Transitions:
@@ -13,10 +14,14 @@
 #![no_std]
 #![no_main]
 
+mod entropy;
+mod ledger;
+mod seal;
+
 use ckb_std::ckb_constants::Source;
-use daowow_contracts_common::daowow_alloc;
 use ckb_std::entry;
 use ckb_std::high_level::{load_cell, load_cell_data, load_witness};
+use daowow_contracts_common::daowow_alloc;
 use daowow_contracts_common::find_round_config;
 use daowow_core::accumulator::{imt, mmr, nonce_key, smt};
 use daowow_core::encoding::{
@@ -36,24 +41,10 @@ fn err(e: i8) -> i8 {
 /// Any dep cell that is a well-formed RoundConfig binding this round_id is
 /// THE config (round-type guarantees configs are immutable and unique).
 fn config_for(round_id: &[u8; 32]) -> Option<daowow_core::encoding::RoundConfigV1> {
-    let mut i = 0usize;
-    loop {
-        let cell = load_cell(i, Source::CellDep).ok()?;
-        if let Some(t) = cell.type_().to_opt() {
-            if t.args().raw_data().len() == 8 {
-                if let Ok(data) = load_cell_data(i, Source::CellDep) {
-                    if data.len() == daowow_core::encoding::ROUND_CONFIG_SIZE {
-                        if let Ok(cfg) = daowow_core::encoding::RoundConfigV1::decode(&data) {
-                            if cfg.round_id == *round_id {
-                                return Some(cfg);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        i += 1;
-    }
+    let script = ckb_std::high_level::load_script().ok()?;
+    let args = script.args().raw_data();
+    let commitment: [u8; 32] = args.get(0..32)?.try_into().ok()?;
+    daowow_contracts_common::config_by_commitment(&commitment, round_id, Source::CellDep)
 }
 
 fn mmr_decode_peaks(wire: &[u8]) -> Option<([[u8; 32]; mmr::MAX_PEAKS], usize)> {
@@ -72,6 +63,33 @@ fn mmr_decode_peaks(wire: &[u8]) -> Option<([[u8; 32]; mmr::MAX_PEAKS], usize)> 
 }
 
 fn main() -> i8 {
+    let script = match ckb_std::high_level::load_script() {
+        Ok(s) => s,
+        Err(_) => return err(SHARD_ERROR_DATA),
+    };
+    if script.args().raw_data().as_ref() == [0] {
+        return public_lock(&script);
+    }
+    if script.args().raw_data().len() == 77 {
+        return ledger::receipt(&script).unwrap_or_else(err);
+    }
+    let versions = [
+        large_state_version(Source::GroupInput),
+        large_state_version(Source::GroupOutput),
+    ];
+    if versions.contains(&Some(4)) {
+        return entropy::finalize(&script).unwrap_or_else(err);
+    }
+    if versions.contains(&Some(3)) {
+        return seal::create(&script).unwrap_or_else(err);
+    }
+    if load_cell_data(0, Source::GroupOutput)
+        .is_ok_and(|d| d.len() == daowow_core::lifecycle::AGGREGATION_STATE_SIZE)
+        || load_cell_data(0, Source::GroupInput)
+            .is_ok_and(|d| d.len() == daowow_core::lifecycle::AGGREGATION_STATE_SIZE)
+    {
+        return ledger::transition(&script).unwrap_or_else(err);
+    }
     let is_creation = load_cell(0, Source::GroupInput).is_err();
 
     if load_cell(1, Source::GroupOutput).is_ok() {
@@ -89,19 +107,90 @@ fn main() -> i8 {
         Err(_) => return err(SHARD_ERROR_DATA),
     };
 
-    let cfg = match config_for(&after.round_id) {
+    let args = script.args().raw_data();
+    if args.len() != 36 || args[32..36] != after.shard_id.to_le_bytes() {
+        return err(SHARD_ERROR_DATA);
+    }
+    let output = match load_cell(0, Source::GroupOutput) {
+        Ok(cell) => cell,
+        Err(_) => return err(SHARD_ERROR_GROUP),
+    };
+    if !is_public_lock(&output.lock(), &script) {
+        return err(SHARD_ERROR_GROUP);
+    }
+    let commitment: [u8; 32] = args[..32].try_into().unwrap();
+    let config = if is_creation {
+        daowow_contracts_common::config_by_commitment(&commitment, &after.round_id, Source::Output)
+    } else {
+        config_for(&after.round_id)
+    };
+    let cfg = match config {
         Some(c) => c,
         None => return err(SHARD_ERROR_CONFIG_DEP),
     };
+    if !daowow_contracts_common::script_matches(&script, &cfg.entry_shard_type) {
+        return err(SHARD_ERROR_CONFIG_DEP);
+    }
     if cfg.entry_shard_count <= after.shard_id {
         return err(SHARD_ERROR_DATA);
     }
 
     if is_creation {
+        let mut index = 0;
+        let mut anchored = false;
+        while let Ok(data) = load_cell_data(index, Source::Output) {
+            if data.as_slice() == cfg.encode()
+                && daowow_contracts_common::creation_round_id(index) == Some(cfg.round_id)
+            {
+                anchored = true;
+                break;
+            }
+            index += 1;
+        }
+        if !anchored {
+            return err(SHARD_ERROR_CREATE);
+        }
+        if daowow_contracts_common::creation_schedule(&cfg, index).is_none() {
+            return err(SHARD_ERROR_CREATE);
+        }
+        // Config bytes and the creation anchor do not authenticate a round-type
+        // script. Each shard creation group must enforce the complete set itself.
+        let mut seen = [false; 256];
+        let mut count = 0u32;
+        let mut output_index = 0;
+        while let Ok(cell) = load_cell(output_index, Source::Output) {
+            if let Some(shard_type) = cell.type_().to_opt() {
+                let args = shard_type.args().raw_data();
+                if daowow_contracts_common::script_matches(&shard_type, &cfg.entry_shard_type)
+                    && args.len() == 36
+                    && args[..32] == commitment
+                {
+                    let shard_id = u32::from_le_bytes(args[32..].try_into().unwrap());
+                    if shard_id >= cfg.entry_shard_count || seen[shard_id as usize] {
+                        return err(SHARD_ERROR_CREATE);
+                    }
+                    seen[shard_id as usize] = true;
+                    count += 1;
+                }
+            }
+            output_index += 1;
+        }
+        if count != cfg.entry_shard_count {
+            return err(SHARD_ERROR_CREATE);
+        }
         return create(&cfg, &after);
     }
 
     if load_cell(1, Source::GroupInput).is_ok() {
+        return err(SHARD_ERROR_GROUP);
+    }
+    let input = match load_cell(0, Source::GroupInput) {
+        Ok(cell) => cell,
+        Err(_) => return err(SHARD_ERROR_GROUP),
+    };
+    let input_capacity: u64 = input.capacity().into();
+    let output_capacity: u64 = output.capacity().into();
+    if !is_public_lock(&input.lock(), &script) || output_capacity < input_capacity {
         return err(SHARD_ERROR_GROUP);
     }
     let in_data = match load_cell_data(0, Source::GroupInput) {
@@ -119,6 +208,13 @@ fn main() -> i8 {
     match (before.state, after.state) {
         (SHARD_STATE_OPEN, SHARD_STATE_OPEN) => append(&cfg, &before, &after),
         (SHARD_STATE_OPEN, SHARD_STATE_FROZEN) => {
+            let since = match ckb_std::high_level::load_input_since(0, Source::GroupInput) {
+                Ok(s) => s,
+                Err(_) => return err(SHARD_ERROR_FROZEN),
+            };
+            if daowow_core::epoch::absolute_epoch_at_least(since, cfg.entry_end).is_err() {
+                return err(SHARD_ERROR_FROZEN);
+            }
             if validate_freeze(&before, &after).is_err() {
                 return err(SHARD_ERROR_FROZEN);
             }
@@ -131,6 +227,48 @@ fn main() -> i8 {
             0
         }
         _ => err(SHARD_ERROR_STATE),
+    }
+}
+
+/// Read only the tag during dispatch: full 256-shard snapshots are large,
+/// and the VM bump allocator cannot reclaim repeated probe allocations.
+fn large_state_version(source: Source) -> Option<u8> {
+    let mut tag = [0u8; 1];
+    let size = match ckb_std::syscalls::load_cell_data(&mut tag, 0, 0, source) {
+        Ok(size) | Err(ckb_std::error::SysError::LengthNotEnough(size)) => size,
+        Err(_) => return None,
+    };
+    (size > 207).then_some(tag[0])
+}
+
+fn is_public_lock(
+    lock: &ckb_std::ckb_types::packed::Script,
+    shard_type: &ckb_std::ckb_types::packed::Script,
+) -> bool {
+    lock.code_hash() == shard_type.code_hash()
+        && lock.hash_type() == shard_type.hash_type()
+        && lock.args().raw_data().as_ref() == [0]
+}
+
+fn public_lock(script: &ckb_std::ckb_types::packed::Script) -> i8 {
+    let mut index = 0;
+    loop {
+        let cell = match load_cell(index, Source::GroupInput) {
+            Ok(cell) => cell,
+            Err(ckb_std::error::SysError::IndexOutOfBound) if index > 0 => return 0,
+            Err(_) => return err(SHARD_ERROR_GROUP),
+        };
+        // Only the canonical shard mode enforces transitions today. Unknown
+        // modes (including future receipts) and public mode as a type fail closed.
+        match cell.type_().to_opt() {
+            Some(ty)
+                if ty.code_hash() == script.code_hash()
+                    && ty.hash_type() == script.hash_type()
+                    && (ty.args().raw_data().len() == 36
+                        || (ty.args().raw_data().len() == 77 && ty.args().raw_data()[0] == 2)) => {}
+            _ => return err(SHARD_ERROR_GROUP),
+        }
+        index += 1;
     }
 }
 
@@ -164,11 +302,11 @@ fn append(
         Ok(w) => w,
         Err(_) => return err(SHARD_ERROR_DATA),
     };
-    let wit = match daowow_core::witness::decode_shard_append_witness(&witness_raw, cfg.accumulator_id)
-    {
-        Ok(w) => w,
-        Err(_) => return err(SHARD_ERROR_DATA),
-    };
+    let wit =
+        match daowow_core::witness::decode_shard_append_witness(&witness_raw, cfg.accumulator_id) {
+            Ok(w) => w,
+            Err(_) => return err(SHARD_ERROR_DATA),
+        };
 
     let expected = match apply_entry_batch(Some(before), cfg, &wit.entries) {
         Ok(s) => s,
@@ -197,7 +335,8 @@ fn append(
             };
             let lock = cell.lock();
             let code: [u8; 32] = lock.code_hash().into();
-            if code == cfg.entry_lock.code_hash && u8::from(lock.hash_type()) == cfg.entry_lock.hash_type
+            if code == cfg.entry_lock.code_hash
+                && u8::from(lock.hash_type()) == cfg.entry_lock.hash_type
             {
                 let data = match load_cell_data(i, Source::Output) {
                     Ok(d) => d,
@@ -208,6 +347,29 @@ fn append(
                     Err(_) => return err(SHARD_ERROR_ENTRY_CELL),
                 };
                 if e.round_id != after.round_id || e.shard_id != after.shard_id {
+                    return err(SHARD_ERROR_ENTRY_CELL);
+                }
+                let args = lock.args().raw_data();
+                if args.len() != 64
+                    || args[..32] != e.participant_lock_hash
+                    || args[32..] != cfg.commitment()
+                    || cell.type_().to_opt().is_some()
+                {
+                    return err(SHARD_ERROR_ENTRY_CELL);
+                }
+                let cap = match ckb_std::high_level::load_cell_capacity(i, Source::Output) {
+                    Ok(c) => c,
+                    Err(_) => return err(SHARD_ERROR_ENTRY_CELL),
+                };
+                let occupied =
+                    match ckb_std::high_level::load_cell_occupied_capacity(i, Source::Output) {
+                        Ok(c) => c,
+                        Err(_) => return err(SHARD_ERROR_ENTRY_CELL),
+                    };
+                if e.principal
+                    .checked_add(occupied)
+                    .is_none_or(|minimum| cap < minimum)
+                {
                     return err(SHARD_ERROR_ENTRY_CELL);
                 }
                 let mut hit = false;
@@ -233,16 +395,22 @@ fn append(
     let new_root = after.accumulator_root;
     match cfg.accumulator_id {
         daowow_core::encoding::ACC_SMT => {
+            let mut current_root = old_root;
             for (i, e) in wit.entries.iter().enumerate() {
                 let absence = wit.blobs[i * 2];
                 let inclusion = wit.blobs[i * 2 + 1];
                 let key = nonce_key(e.entry_nonce);
                 let leaf = entry_leaf(e);
-                if smt::verify_insert_certificate(&old_root, &new_root, &key, &leaf, absence, inclusion)
-                    .is_err()
-                {
+                current_root = match smt::inserted_root(&current_root, &key, &leaf, absence) {
+                    Ok(root) => root,
+                    Err(_) => return err(SHARD_ERROR_ENTRY_CELL),
+                };
+                if smt::verify_membership(&current_root, &key, &leaf, inclusion).is_err() {
                     return err(SHARD_ERROR_ENTRY_CELL);
                 }
+            }
+            if current_root != new_root {
+                return err(SHARD_ERROR_ENTRY_CELL);
             }
         }
         daowow_core::encoding::ACC_MMR => {

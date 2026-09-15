@@ -64,15 +64,22 @@ pub fn candidate(seed: &Hash32, prize_index: u64, retry: u32) -> Hash32 {
 ///
 /// position = candidate mod N, where candidates >= floor(2^256 / N) * N are
 /// rejected (retry counter increments deterministically).
-pub fn rejection_sample(seed: &Hash32, prize_index: u64, n_tickets: u64) -> (u64, u32) {
+pub fn rejection_sample(
+    seed: &Hash32,
+    prize_index: u64,
+    n_tickets: u64,
+) -> Result<(u64, u32), CoreError> {
+    if n_tickets == 0 {
+        return Err(CoreError::InvalidArgument);
+    }
     let mut retry: u32 = 0;
     loop {
         let c = candidate(seed, prize_index, retry);
         let position = unbiased_mod(&c, n_tickets);
         if let Some(p) = position {
-            return (p, retry);
+            return Ok((p, retry));
         }
-        retry += 1;
+        retry = next_retry(retry)?;
     }
 }
 
@@ -81,9 +88,16 @@ pub fn rejection_sample(seed: &Hash32, prize_index: u64, n_tickets: u64) -> (u64
 ///
 /// Exact rule: reject iff candidate >= limit where limit = floor(2^256 / n) * n.
 fn unbiased_mod(candidate: &Hash32, n: u64) -> Option<u64> {
-    debug_assert!(n > 0);
+    if n == 0 {
+        return None;
+    }
+    // The mathematical limit is 2^256 itself when the remainder is zero;
+    // it cannot be represented in Hash32 and every candidate is valid.
+    if two256_mod(n) == 0 {
+        return Some(mod_u256_u64(candidate, n));
+    }
     let limit = limit_bytes(n);
-    if cmp_u256(candidate, &limit) == core::cmp::Ordering::Greater {
+    if cmp_u256(candidate, &limit) != core::cmp::Ordering::Less {
         return None;
     }
     Some(mod_u256_u64(candidate, n))
@@ -158,35 +172,44 @@ pub fn draw_positions(
     prize_count: u64,
     prizes: &mut [(u64, u64)], // (prize_index, winning_position)
 ) -> Result<(), CoreError> {
-    if n_tickets == 0 || prize_count > n_tickets || prize_count as usize > MAX_PRIZES {
+    draw_positions_using(n_tickets, prize_count, prizes, |prize, retry| {
+        candidate(seed, prize, retry)
+    })
+}
+
+fn next_retry(retry: u32) -> Result<u32, CoreError> {
+    retry.checked_add(1).ok_or(CoreError::Overflow)
+}
+
+fn draw_positions_using(
+    n_tickets: u64,
+    prize_count: u64,
+    prizes: &mut [(u64, u64)],
+    mut candidate_at: impl FnMut(u64, u32) -> Hash32,
+) -> Result<(), CoreError> {
+    if n_tickets == 0
+        || prize_count > n_tickets
+        || prize_count > MAX_PRIZES as u64
+        || prizes.len() < prize_count as usize
+    {
         return Err(CoreError::InvalidArgument);
     }
     let mut used = [0u64; MAX_PRIZES];
-    let mut used_len = 0usize;
     for (i, slot) in prizes.iter_mut().enumerate().take(prize_count as usize) {
-        let (mut pos, mut retry) = rejection_sample(seed, i as u64, n_tickets);
-        while contains(&used[..used_len], pos) {
-            let c = candidate(seed, i as u64, retry.wrapping_add(1));
-            match unbiased_mod(&c, n_tickets) {
-                Some(p) => {
-                    retry += 1;
-                    pos = p;
-                }
-                None => {
-                    retry += 2; // rejected candidate: skip a counter, keep looping
+        let mut retry = 0;
+        let pos = loop {
+            if let Some(pos) = unbiased_mod(&candidate_at(i as u64, retry), n_tickets) {
+                if !used[..i].contains(&pos) {
+                    break pos;
                 }
             }
-        }
-        used[used_len] = pos;
-        used_len += 1;
+            retry = next_retry(retry)?;
+        };
+        used[i] = pos;
         slot.0 = i as u64;
         slot.1 = pos;
     }
     Ok(())
-}
-
-fn contains(slice: &[u64], v: u64) -> bool {
-    slice.iter().any(|x| *x == v)
 }
 
 #[cfg(feature = "std")]
@@ -196,7 +219,11 @@ pub use stdext::*;
 mod stdext {
     use super::*;
 
-    pub fn rejection_sample_public(seed: &Hash32, prize_index: u64, n: u64) -> (u64, u32) {
+    pub fn rejection_sample_public(
+        seed: &Hash32,
+        prize_index: u64,
+        n: u64,
+    ) -> Result<(u64, u32), CoreError> {
         rejection_sample(seed, prize_index, n)
     }
 }
@@ -259,14 +286,14 @@ mod tests {
     fn rejection_sampling_bounded_and_deterministic() {
         let seed = draw_seed(&[1; 32], &[2; 32], 1_000_000, &[3; 32], &[4; 32]);
         for i in 0..20 {
-            let (pos, retry) = rejection_sample(&seed, i, 1_000_000);
+            let (pos, retry) = rejection_sample(&seed, i, 1_000_000).unwrap();
             assert!(pos < 1_000_000);
-            let (pos2, _) = rejection_sample(&seed, i, 1_000_000);
+            let (pos2, _) = rejection_sample(&seed, i, 1_000_000).unwrap();
             assert_eq!(pos, pos2);
             assert!(retry < 1000);
         }
         // n=1 degenerates to position 0
-        let (pos, _) = rejection_sample(&seed, 0, 1);
+        let (pos, _) = rejection_sample(&seed, 0, 1).unwrap();
         assert_eq!(pos, 0);
     }
 
@@ -283,22 +310,61 @@ mod tests {
         // more prizes than tickets must fail
         let mut slots2 = [(0u64, 0u64); 11];
         assert!(draw_positions(&seed, 10, 11, &mut slots2).is_err());
+
+        // The requested output must fit in the caller-provided buffer.
+        let mut short = [(0u64, 0u64); 1];
+        assert_eq!(
+            draw_positions(&seed, 10, 2, &mut short),
+            Err(CoreError::InvalidArgument)
+        );
     }
 
     #[test]
     fn forced_rejection_case_vector() {
-        // Find a (candidate) that exceeds the limit for small n to prove the
-        // rejection path works: n=3 => limit = floor(2^256/3)*3.
-        // The largest 256-bit value 0xFF..FF: 2^256-1 mod 3 == ?
-        // 2^256 mod 3 = 1 (since 2 mod 3 = -1, (-1)^256 = 1) => limit = 2^256-1-0?
-        // 2^256-1 = 3q + r; r = (2^256-1) mod 3 = 0 => 0xFF..FF is ON limit,
-        // not over. Use n=5: 2^256 mod 5: 2^4=16=1 mod 5 => 2^256=(2^4)^64=1
-        // => 2^256-1 mod 5 = 0 -> also on-limit. n=7: 2^3=8=1 mod 7 =>
-        // 2^256 = 2^(3*85+1) = (2^3)^85 * 2 = 2 mod 7 => (2^256-1) mod 7 = 1
-        // => 0xFF..FF is over the limit for n=7. This is our forced case.
+        // For n=3 the largest u256 value is exactly the finite limit and
+        // must be rejected. For n=2, 2^256 is divisible by n, so every
+        // representable candidate is below the mathematical limit.
         let c = [0xFFu8; 32];
+        assert_eq!(unbiased_mod(&c, 3), None);
+        assert_eq!(unbiased_mod(&c, 2), Some(1));
         assert!(unbiased_mod(&c, 7).is_none());
-        assert!(unbiased_mod(&c, 3).is_some());
-        assert!(unbiased_mod(&c, 5).is_some());
+        assert!(unbiased_mod(&c, 5).is_none());
+        for n in [1, 2, 4, 256, 1u64 << 63] {
+            assert_eq!(unbiased_mod(&c, n), Some(n - 1));
+        }
+        let mut below = c;
+        below[31] = 254;
+        assert_eq!(unbiased_mod(&below, 3), Some(2));
+    }
+
+    #[test]
+    fn rejection_sampling_rejects_empty_universe() {
+        assert_eq!(
+            rejection_sample(&[0; 32], 0, 0),
+            Err(CoreError::InvalidArgument)
+        );
+    }
+
+    #[test]
+    fn retries_are_sequential_across_duplicates_and_rejection() {
+        let mut calls = Vec::new();
+        let mut prizes = [(99, 99); 2];
+        draw_positions_using(3, 2, &mut prizes, |prize, retry| {
+            calls.push((prize, retry));
+            match (prize, retry) {
+                (0, 0) | (1, 0) => [0; 32],
+                (1, 1) => [255; 32], // exactly the rejection limit for n=3
+                (1, 2) => {
+                    let mut value = [0; 32];
+                    value[31] = 1;
+                    value
+                }
+                _ => panic!("skipped a candidate or continued after a valid draw"),
+            }
+        })
+        .unwrap();
+        assert_eq!(prizes, [(0, 0), (1, 1)]);
+        assert_eq!(calls, [(0, 0), (1, 0), (1, 1), (1, 2)]);
+        assert_eq!(next_retry(u32::MAX), Err(CoreError::Overflow));
     }
 }

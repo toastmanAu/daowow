@@ -12,7 +12,12 @@
 
 mod common;
 
-use ckb_testtool::ckb_types::{bytes::Bytes, core::{TransactionView, TransactionBuilder, ScriptHashType, DepType}, packed::*, prelude::*};
+use ckb_testtool::ckb_types::{
+    bytes::Bytes,
+    core::{DepType, ScriptHashType, TransactionBuilder, TransactionView},
+    packed::*,
+    prelude::*,
+};
 use common::*;
 use daowow_core::accumulator::{imt, mmr, nonce_key, smt};
 use daowow_core::hash::Hash32;
@@ -38,7 +43,11 @@ fn run_bench(world: &mut World, acc_id: u8, witness: Bytes, membership_runs: u8)
     let op = world.context.deploy_cell(read_bin("accumulator-bench"));
     let lock = world
         .context
-        .build_script_with_hash_type(&op, ScriptHashType::Data1, Bytes::from(vec![acc_id, 0, membership_runs]))
+        .build_script_with_hash_type(
+            &op,
+            ScriptHashType::Data1,
+            Bytes::from(vec![acc_id, 0, membership_runs]),
+        )
         .unwrap();
     let spendable = world.context.create_cell(
         CellOutputBuilder::default()
@@ -216,7 +225,13 @@ fn accumulator_bakeoff() {
     for s in &samples {
         println!(
             "{:>4} {:>6} {:>14} {:>12} {:>12} {:>14} {:>10}",
-            s.acc, s.n, s.append_cycles, s.append_witness_len, s.append_proof_len, s.membership_cycles_per_op, s.membership_proof_len
+            s.acc,
+            s.n,
+            s.append_cycles,
+            s.append_witness_len,
+            s.append_proof_len,
+            s.membership_cycles_per_op,
+            s.membership_proof_len
         );
     }
     println!("=====================================================================");
@@ -234,7 +249,10 @@ fn accumulator_bakeoff() {
             "membership_proof_bytes": s.membership_proof_len,
         })).collect::<Vec<_>>(),
     });
-    let out = concat!(env!("CARGO_MANIFEST_DIR"), "/../vectors/accumulator_bench.json");
+    let out = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../vectors/accumulator_bench.json"
+    );
     fs::write(out, serde_json::to_string_pretty(&json).unwrap()).expect("write bench json");
     println!("written {}", out);
 }

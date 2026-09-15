@@ -4,10 +4,10 @@
 
 use crate::error::CoreError;
 
-#[cfg(feature = "std")]
-use std::vec::Vec;
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
+#[cfg(feature = "std")]
+use std::vec::Vec;
 
 /// entry principal for a ticket count at a fixed ticket price
 pub fn entry_principal(ticket_price: u64, ticket_count: u64) -> Result<u64, CoreError> {
@@ -41,7 +41,13 @@ pub fn settlement_conservation(
     tx_fee: u64,
     residual_capacity: u64,
 ) -> Result<(), CoreError> {
-    let outputs = checked_sum(&[principal_payouts, prize_payouts, authorised_costs, tx_fee, residual_capacity])?;
+    let outputs = checked_sum(&[
+        principal_payouts,
+        prize_payouts,
+        authorised_costs,
+        tx_fee,
+        residual_capacity,
+    ])?;
     if outputs != inputs {
         return Err(CoreError::Conservation);
     }
@@ -68,8 +74,22 @@ pub fn allocate_prizes(weights: &[u64], pool: u64) -> Result<(Vec<u64>, u64), Co
     Ok((out, dust))
 }
 
-/// Position range of an entry: [position_base, position_base + ticket_count)
-/// Exhaustiveness: ranges over all entries must tile [0, total_tickets).
+/// Complete allocation for the approved authenticated-entitlement policy.
+/// All prize weights must be positive. Every rounding Shannon goes to prize
+/// index zero; no unowned residual remains. Callers must authenticate the
+/// schedule and derive the pool from realised growth, not participant capacity.
+pub fn allocate_prizes_complete(weights: &[u64], pool: u64) -> Result<Vec<u64>, CoreError> {
+    if weights.is_empty() || weights.contains(&0) {
+        return Err(CoreError::InvalidArgument);
+    }
+    let (mut amounts, dust) = allocate_prizes(weights, pool)?;
+    amounts[0] = amounts[0].checked_add(dust).ok_or(CoreError::Overflow)?;
+    Ok(amounts)
+}
+
+/// Validate tiling within a single position space (normally one shard).
+/// Entry position_base is shard-local. Use validate_frozen_positions before
+/// mapping a multi-shard round to its global draw universe.
 pub fn validate_position_tiling(
     entries: &[(u64, u64)], // (position_base, ticket_count)
 ) -> Result<(), CoreError> {
@@ -86,9 +106,140 @@ pub fn validate_position_tiling(
     Ok(())
 }
 
+/// Validate the complete frozen round and return one global prefix per shard
+/// ID. Entry ranges and nonces are local; global_base = prefixes[shard_id] +
+/// entry.position_base. Reject omitted/duplicate shards, entries or counters.
+pub fn validate_frozen_positions(
+    round_id: &[u8; 32],
+    shard_count: u32,
+    shards: &[crate::encoding::EntryShardDataV1],
+    entries: &[crate::encoding::EntryDataV1],
+) -> Result<Vec<u64>, CoreError> {
+    use crate::encoding::SHARD_STATE_FROZEN;
+    if shard_count == 0 || shard_count > 256 || shards.len() != shard_count as usize {
+        return Err(CoreError::InvalidArgument);
+    }
+    if entries
+        .iter()
+        .any(|e| e.round_id != *round_id || e.shard_id >= shard_count || e.ticket_count == 0)
+    {
+        return Err(CoreError::StateTransition);
+    }
+    let mut offsets = Vec::with_capacity(shards.len());
+    let mut total = 0u64;
+    for id in 0..shard_count {
+        let mut matches = shards.iter().filter(|s| s.shard_id == id);
+        let s = matches.next().ok_or(CoreError::Conservation)?;
+        if matches.next().is_some() || s.round_id != *round_id || s.state != SHARD_STATE_FROZEN {
+            return Err(CoreError::StateTransition);
+        }
+        let mut local: Vec<_> = entries.iter().filter(|e| e.shard_id == id).collect();
+        local.sort_unstable_by_key(|e| e.entry_nonce);
+        if local.len() as u64 != s.entry_count || s.sequence != s.entry_count {
+            return Err(CoreError::Conservation);
+        }
+        let mut tickets = 0u64;
+        let mut principal = 0u64;
+        for (nonce, e) in local.iter().enumerate() {
+            if e.entry_nonce != nonce as u64 || e.position_base != tickets {
+                return Err(CoreError::Conservation);
+            }
+            tickets = tickets
+                .checked_add(e.ticket_count)
+                .ok_or(CoreError::Overflow)?;
+            principal = principal
+                .checked_add(e.principal)
+                .ok_or(CoreError::Overflow)?;
+        }
+        if tickets != s.ticket_count || principal != s.principal_total {
+            return Err(CoreError::Conservation);
+        }
+        offsets.push(total);
+        total = total.checked_add(tickets).ok_or(CoreError::Overflow)?;
+    }
+    Ok(offsets)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn complete_prizes_assign_all_rounding_dust_to_first_prize() {
+        assert_eq!(
+            allocate_prizes_complete(&[1, 1, 1], 100),
+            Ok(vec![34, 33, 33])
+        );
+        assert_eq!(allocate_prizes_complete(&[1, 1, 1], 2), Ok(vec![2, 0, 0]));
+        assert_eq!(allocate_prizes_complete(&[1, 3], 1000), Ok(vec![250, 750]));
+        assert_eq!(allocate_prizes_complete(&[1], u64::MAX), Ok(vec![u64::MAX]));
+        assert_eq!(allocate_prizes_complete(&[1, 2], 0), Ok(vec![0, 0]));
+    }
+
+    #[test]
+    fn complete_prizes_reject_invalid_schedules() {
+        assert!(allocate_prizes_complete(&[], 100).is_err());
+        assert!(allocate_prizes_complete(&[0, 0], 100).is_err());
+        assert!(allocate_prizes_complete(&[0, 1], 100).is_err());
+        assert!(allocate_prizes_complete(&[1, 0], 100).is_err());
+        assert!(allocate_prizes_complete(&[u64::MAX, 1], 100).is_err());
+    }
+
+    #[test]
+    fn shard_major_positions_validate_complete_frozen_universe() {
+        use crate::encoding::{EntryDataV1, EntryShardDataV1, SHARD_STATE_FROZEN};
+        let entry = |id, tickets| EntryDataV1 {
+            round_id: [1; 32],
+            shard_id: id,
+            participant_lock_hash: [2; 32],
+            ticket_count: tickets,
+            principal: tickets,
+            position_base: 0,
+            entry_nonce: 0,
+            entropy_commitment: [0; 32],
+        };
+        let shard = |id, tickets| EntryShardDataV1 {
+            round_id: [1; 32],
+            shard_id: id,
+            state: SHARD_STATE_FROZEN,
+            sequence: 1,
+            entry_count: 1,
+            ticket_count: tickets,
+            principal_total: tickets,
+            accumulator_root: [3; 32],
+        };
+        let entries = [entry(1, 5), entry(0, 3)];
+        let shards = [shard(1, 5), shard(0, 3)];
+        assert_eq!(
+            validate_frozen_positions(&[1; 32], 2, &shards, &entries),
+            Ok(vec![0, 3])
+        );
+        assert!(validate_frozen_positions(&[1; 32], 2, &shards[..1], &entries).is_err());
+        assert!(validate_frozen_positions(&[1; 32], 2, &[shards[0], shards[0]], &entries).is_err());
+        assert!(validate_frozen_positions(&[1; 32], 2, &shards, &entries[..1]).is_err());
+        let mut bad = entries;
+        bad[0].position_base = 3; // global base must not be stored in an entry
+        assert!(validate_frozen_positions(&[1; 32], 2, &shards, &bad).is_err());
+        bad = entries;
+        bad[0].entry_nonce = 1;
+        assert!(validate_frozen_positions(&[1; 32], 2, &shards, &bad).is_err());
+        assert_eq!(
+            validate_frozen_positions(
+                &[1; 32],
+                2,
+                &[shard(0, u64::MAX), shard(1, 1)],
+                &[entry(0, u64::MAX), entry(1, 1)]
+            ),
+            Err(CoreError::Overflow)
+        );
+        let mut empty = shard(1, 0);
+        empty.entry_count = 0;
+        empty.sequence = 0;
+        assert_eq!(
+            validate_frozen_positions(&[1; 32], 2, &[shard(0, 3), empty], &[entry(0, 3)]),
+            Ok(vec![0, 3])
+        );
+    }
 
     #[test]
     fn overflow_detection() {

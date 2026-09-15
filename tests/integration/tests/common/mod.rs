@@ -2,12 +2,17 @@
 //! context and provides builders for round/shard/entry/DAO/settlement
 //! transactions.
 
-use ckb_testtool::ckb_types::{bytes::Bytes, core::{TransactionView, ScriptHashType, DepType, TransactionBuilder}, packed::*, prelude::*};
+use ckb_testtool::ckb_types::{
+    bytes::Bytes,
+    core::{DepType, ScriptHashType, TransactionBuilder, TransactionView},
+    packed::*,
+    prelude::*,
+};
 use ckb_testtool::context::Context;
 use daowow_core::accumulator::nonce_key;
+pub use daowow_core::accumulator::smt::host::SmtHost;
 pub use daowow_core::encoding::*;
 pub use daowow_core::hash::Hash32;
-pub use daowow_core::accumulator::smt::host::SmtHost;
 use std::path::PathBuf;
 
 pub const MAX_CYCLES: u64 = 70_000_000;
@@ -56,6 +61,7 @@ pub struct Deps {
 }
 
 pub struct World {
+    pub config_hash: Hash32,
     pub context: Context,
     pub deps: Deps,
     /// cell carrying the native DAO type script (for cell deps)
@@ -83,6 +89,18 @@ pub fn full_config(cfg: &RoundConfigV1, deps: &Deps) -> RoundConfigV1 {
     c
 }
 
+pub fn default_prize_schedule() -> daowow_core::schedule::PrizeSchedule {
+    daowow_core::schedule::PrizeSchedule::new(&[40, 25, 20, 10, 5]).unwrap()
+}
+
+pub fn creation_schedule_witness(schedule: Vec<u8>) -> Bytes {
+    WitnessArgs::new_builder()
+        .lock(Some(Bytes::from(vec![0u8; 65])).pack())
+        .output_type(Some(Bytes::from(schedule)).pack())
+        .build()
+        .as_bytes()
+}
+
 pub fn default_config(round_id: Hash32, accumulator_id: u8) -> RoundConfigV1 {
     RoundConfigV1 {
         version: 1,
@@ -100,11 +118,26 @@ pub fn default_config(round_id: Hash32, accumulator_id: u8) -> RoundConfigV1 {
         keeper_policy_hash: [7; 32],
         flags: 0,
         accumulator_id,
-        entry_lock: ScriptRef { code_hash: [0; 32], hash_type: 0 },
-        dao_lock: ScriptRef { code_hash: [0; 32], hash_type: 0 },
-        settlement_type: ScriptRef { code_hash: [0; 32], hash_type: 0 },
-        entry_shard_type: ScriptRef { code_hash: [0; 32], hash_type: 0 },
-        dao_type: ScriptRef { code_hash: [0; 32], hash_type: 1 },
+        entry_lock: ScriptRef {
+            code_hash: [0; 32],
+            hash_type: 0,
+        },
+        dao_lock: ScriptRef {
+            code_hash: [0; 32],
+            hash_type: 0,
+        },
+        settlement_type: ScriptRef {
+            code_hash: [0; 32],
+            hash_type: 0,
+        },
+        entry_shard_type: ScriptRef {
+            code_hash: [0; 32],
+            hash_type: 0,
+        },
+        dao_type: ScriptRef {
+            code_hash: [0; 32],
+            hash_type: 1,
+        },
     }
 }
 
@@ -112,9 +145,7 @@ pub fn empty_root(accumulator_id: u8) -> Hash32 {
     match accumulator_id {
         ACC_SMT => [0u8; 32],
         ACC_MMR => daowow_core::accumulator::mmr::bag_peaks(&[]).unwrap(),
-        ACC_IMT => {
-            daowow_core::accumulator::imt::zero_at(daowow_core::accumulator::imt::IMT_DEPTH)
-        }
+        ACC_IMT => daowow_core::accumulator::imt::zero_at(daowow_core::accumulator::imt::IMT_DEPTH),
         _ => panic!("bad accumulator id"),
     }
 }
@@ -136,12 +167,7 @@ impl World {
                 .build_script_with_hash_type(op, ScriptHashType::Data1, Bytes::new())
                 .unwrap();
             ScriptRef {
-                code_hash: script
-                    .code_hash()
-                    .raw_data()
-                    .as_ref()
-                    .try_into()
-                    .unwrap(),
+                code_hash: script.code_hash().raw_data().as_ref().try_into().unwrap(),
                 hash_type: 2,
             }
         }
@@ -156,8 +182,7 @@ impl World {
         // self-consistently deploys system scripts. The effective DAO type
         // script for transactions uses that hash as its code_hash.
         let holder_type = {
-            let op = context
-                .deploy_cell(ckb_testtool::builtin::ALWAYS_SUCCESS.clone());
+            let op = context.deploy_cell(ckb_testtool::builtin::ALWAYS_SUCCESS.clone());
             ScriptBuilder::default()
                 .code_hash(Byte32::new({
                     let t = context.get_cell(&op).unwrap().0.type_().to_opt().unwrap();
@@ -182,8 +207,7 @@ impl World {
             .try_into()
             .unwrap();
         let holder_lock = {
-            let op = context
-                .deploy_cell(ckb_testtool::builtin::ALWAYS_SUCCESS.clone());
+            let op = context.deploy_cell(ckb_testtool::builtin::ALWAYS_SUCCESS.clone());
             context.build_script(&op, Bytes::new()).unwrap()
         };
         let dao_output = CellOutputBuilder::default()
@@ -192,8 +216,6 @@ impl World {
             .type_(Some(holder_type.clone()).pack())
             .build();
         let dao_cell_op = context.create_cell(dao_output, dao_binary());
-
-
 
         let deps = Deps {
             round_type,
@@ -209,7 +231,13 @@ impl World {
         };
 
         context.set_capture_debug(true);
-        World { context, deps, dao_cell_op, dao_type_script }
+        World {
+            context,
+            deps,
+            dao_cell_op,
+            dao_type_script,
+            config_hash: [0; 32],
+        }
     }
 
     pub fn always_success(&mut self) -> (OutPoint, Script) {
@@ -275,7 +303,8 @@ impl World {
     pub fn create_round(&mut self, cfg: &RoundConfigV1) -> OutPoint {
         let (_, lock) = self.always_success();
         let c = full_config(cfg, &self.deps);
-        let args = Bytes::from(vec![0xAA, 0, 0, 0, 0, 0, 0, 0]);
+        self.config_hash = c.commitment();
+        let args = Bytes::from(c.round_id.to_vec());
         let round_type_ref = self.deps.round_type;
         let round_type_script = self.script_for(&round_type_ref, args);
         let output = CellOutputBuilder::default()
@@ -292,9 +321,9 @@ impl World {
         &mut self,
         cfg: &RoundConfigV1,
         shard_id: u32,
-        type_id: u64,
+        _type_id: u64,
     ) -> (OutPoint, EntryShardDataV1) {
-        let (_, lock) = self.always_success();
+        let lock = self.shard_public_lock();
         let shard = EntryShardDataV1 {
             round_id: cfg.round_id,
             shard_id,
@@ -306,8 +335,9 @@ impl World {
             accumulator_root: empty_root(cfg.accumulator_id),
         };
         let shard_type_ref = self.deps.entry_shard_type;
-        let shard_type_script = self
-            .script_for(&shard_type_ref, Bytes::from(type_id.to_le_bytes().to_vec()));
+        let mut args = full_config(cfg, &self.deps).commitment().to_vec();
+        args.extend_from_slice(&shard_id.to_le_bytes());
+        let shard_type_script = self.script_for(&shard_type_ref, Bytes::from(args));
         let output = CellOutputBuilder::default()
             .capacity(pack_u64(300 * SHANNONS))
             .lock(lock)
@@ -319,15 +349,33 @@ impl World {
         (op, shard)
     }
 
+    pub fn shard_public_lock(&mut self) -> Script {
+        let r = self.deps.entry_shard_type;
+        self.script_for(&r, Bytes::from(vec![0]))
+    }
+
     pub fn entry_lock_script(&mut self, participant_lock_hash: &Hash32) -> Script {
         let r = self.deps.entry_lock;
-        self.script_for(&r, Bytes::from(participant_lock_hash.to_vec()))
+        let mut args = participant_lock_hash.to_vec();
+        args.extend_from_slice(&self.config_hash);
+        self.script_for(&r, Bytes::from(args))
     }
 
     pub fn dao_lock_script(&mut self, round_id: &Hash32, batch_id: u64) -> Script {
+        self.dao_lock_script_with_digest(round_id, batch_id, &[0; 32])
+    }
+
+    pub fn dao_lock_script_with_digest(
+        &mut self,
+        round_id: &Hash32,
+        batch_id: u64,
+        digest: &Hash32,
+    ) -> Script {
         let r = self.deps.dao_lock;
         let mut args = round_id.to_vec();
         args.extend_from_slice(&batch_id.to_le_bytes());
+        args.extend_from_slice(&self.config_hash);
+        args.extend_from_slice(digest);
         self.script_for(&r, Bytes::from(args))
     }
 
@@ -338,8 +386,20 @@ impl World {
     }
 
     pub fn settlement_script(&mut self, type_id: u64) -> Script {
+        self.settlement_script_with_digest(type_id, &[0; 32])
+    }
+
+    pub fn settlement_script_with_digest(&mut self, type_id: u64, digest: &Hash32) -> Script {
         let r = self.deps.settlement_type;
-        self.script_for(&r, Bytes::from(type_id.to_le_bytes().to_vec()))
+        let mut args = self.config_hash.to_vec();
+        args.extend_from_slice(&type_id.to_le_bytes());
+        args.extend_from_slice(digest);
+        self.script_for(&r, Bytes::from(args))
+    }
+
+    pub fn settlement_public_lock(&mut self) -> Script {
+        let r = self.deps.settlement_type;
+        self.script_for(&r, Bytes::from(vec![0]))
     }
 
     pub fn cell(&self, op: &OutPoint) -> (CellOutput, Bytes) {
@@ -395,7 +455,7 @@ pub fn make_entry_batch(
 
 pub fn entry_cell_capacity(entry: &EntryDataV1) -> u64 {
     // capacity field (8) + data (132) + lock (33 + 32 args); no type script
-    entry.principal + (8 + ENTRY_DATA_SIZE as u64) + (33 + 32)
+    entry.principal + ((8 + ENTRY_DATA_SIZE as u64) + (33 + 64)) * SHANNONS
 }
 
 pub fn smt_leaf(entry: &EntryDataV1) -> Hash32 {
@@ -422,11 +482,7 @@ pub fn expect_ok(context: &mut Context, tx: &TransactionView) -> u64 {
             for m in context.captured_messages() {
                 eprintln!("[script] {}", m.message);
             }
-            panic!(
-                "tx should pass but failed: {}\ntx: {}",
-                e,
-                hex_tx(&tx)
-            )
+            panic!("tx should pass but failed: {}\ntx: {}", e, hex_tx(&tx))
         }
     }
 }

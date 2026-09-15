@@ -138,9 +138,11 @@ pub fn decode_shard_append_witness<'a>(
             v
         }
         crate::encoding::ACC_IMT => {
-            let mut v = Vec::new();
-            v.push(read_bytes(data, &mut off, crate::accumulator::imt::IMT_BRANCH_BYTES)?);
-            v
+            alloc::vec![read_bytes(
+                data,
+                &mut off,
+                crate::accumulator::imt::IMT_BRANCH_BYTES
+            )?]
         }
         _ => return Err(CoreError::Encoding),
     };
@@ -174,6 +176,80 @@ pub fn decode_aggregation_witness(data: &[u8]) -> Result<&[u8], CoreError> {
     Ok(&data[4..])
 }
 
+/// Membership proof for an absolute transaction input index. Record order is
+/// entry nonce order, which the contract must check against actual input cells.
+#[derive(Debug, PartialEq, Eq)]
+pub struct LedgerInputProof<'a> {
+    pub input_index: u32,
+    pub proof: &'a [u8],
+}
+
+/// Encode version 2, count, then (absolute index, proof length, proof) records.
+pub fn encode_ledger_witness(inputs: &[LedgerInputProof<'_>]) -> Result<Vec<u8>, CoreError> {
+    if inputs.is_empty() || inputs.len() > crate::lifecycle::MAX_BATCH_ENTRIES {
+        return Err(CoreError::Encoding);
+    }
+    let mut out = Vec::new();
+    out.push(2);
+    write_u32(
+        &mut out,
+        u32::try_from(inputs.len()).map_err(|_| CoreError::Overflow)?,
+    );
+    for (i, input) in inputs.iter().enumerate() {
+        if inputs[..i]
+            .iter()
+            .any(|prior| prior.input_index == input.input_index)
+        {
+            return Err(CoreError::Encoding);
+        }
+        let length = u32::try_from(input.proof.len()).map_err(|_| CoreError::Overflow)?;
+        write_u32(&mut out, input.input_index);
+        write_u32(&mut out, length);
+        out.extend_from_slice(input.proof);
+    }
+    Ok(out)
+}
+
+/// Decode bounded, distinct indices. Empty proof bytes are structurally legal;
+/// membership validity depends on the configured accumulator verifier.
+pub fn decode_ledger_witness(data: &[u8]) -> Result<Vec<LedgerInputProof<'_>>, CoreError> {
+    fn take<'a>(data: &'a [u8], offset: &mut usize, len: usize) -> Result<&'a [u8], CoreError> {
+        let end = offset.checked_add(len).ok_or(CoreError::Encoding)?;
+        let bytes = data.get(*offset..end).ok_or(CoreError::Encoding)?;
+        *offset = end;
+        Ok(bytes)
+    }
+    fn word(data: &[u8], offset: &mut usize) -> Result<u32, CoreError> {
+        Ok(u32::from_le_bytes(
+            take(data, offset, 4)?
+                .try_into()
+                .map_err(|_| CoreError::Encoding)?,
+        ))
+    }
+    let mut offset = 0;
+    if take(data, &mut offset, 1)? != [2] {
+        return Err(CoreError::Encoding);
+    }
+    let count = usize::try_from(word(data, &mut offset)?).map_err(|_| CoreError::Encoding)?;
+    if count == 0 || count > crate::lifecycle::MAX_BATCH_ENTRIES {
+        return Err(CoreError::Encoding);
+    }
+    let mut out: Vec<LedgerInputProof<'_>> = Vec::with_capacity(count);
+    for _ in 0..count {
+        let input_index = word(data, &mut offset)?;
+        if out.iter().any(|prior| prior.input_index == input_index) {
+            return Err(CoreError::Encoding);
+        }
+        let len = usize::try_from(word(data, &mut offset)?).map_err(|_| CoreError::Encoding)?;
+        let proof = take(data, &mut offset, len)?;
+        out.push(LedgerInputProof { input_index, proof });
+    }
+    if offset != data.len() {
+        return Err(CoreError::Encoding);
+    }
+    Ok(out)
+}
+
 // ---------------------------------------------------------------------------
 // SettlementWitness — settlement-type payout batch
 //
@@ -193,7 +269,15 @@ pub struct SettlementPayout<'a> {
     pub proof: &'a [u8],
 }
 
-pub fn encode_settlement_witness(payouts: &[(&[u8], &[u8], u8, &crate::encoding::PayoutItem, &[u8])]) -> Vec<u8> {
+pub type SettlementWitnessPayout<'args, 'code_hash, 'item, 'proof> = (
+    &'args [u8],
+    &'code_hash [u8],
+    u8,
+    &'item crate::encoding::PayoutItem,
+    &'proof [u8],
+);
+
+pub fn encode_settlement_witness(payouts: &[SettlementWitnessPayout<'_, '_, '_, '_>]) -> Vec<u8> {
     let mut out = Vec::new();
     write_u32(&mut out, payouts.len() as u32);
     for (args, code_hash, hash_type, item, proof) in payouts {
@@ -209,7 +293,7 @@ pub fn encode_settlement_witness(payouts: &[(&[u8], &[u8], u8, &crate::encoding:
     out
 }
 
-pub fn decode_settlement_witness(data: &[u8]) -> Result<Vec<SettlementPayout>, CoreError> {
+pub fn decode_settlement_witness(data: &[u8]) -> Result<Vec<SettlementPayout<'_>>, CoreError> {
     if data.len() < 4 {
         return Err(CoreError::Encoding);
     }
@@ -227,7 +311,9 @@ pub fn decode_settlement_witness(data: &[u8]) -> Result<Vec<SettlementPayout>, C
         off += 1;
         let lock_args = read_bytes(data, &mut off, args_len)?;
         let lock_code_hash = read_bytes(data, &mut off, 32)?;
-        let lock_hash_type = *read_bytes(data, &mut off, 1)?.first().ok_or(CoreError::Encoding)?;
+        let lock_hash_type = *read_bytes(data, &mut off, 1)?
+            .first()
+            .ok_or(CoreError::Encoding)?;
         let item_raw = read_bytes(data, &mut off, crate::encoding::PAYOUT_ITEM_SIZE)?;
         let item = crate::encoding::PayoutItem::decode(item_raw)?;
         if off + 4 > data.len() {
@@ -256,6 +342,76 @@ mod tests {
     use crate::encoding::ACC_SMT;
 
     #[test]
+    fn ledger_witness_binds_distinct_absolute_indices() {
+        let records = [
+            LedgerInputProof {
+                input_index: 3,
+                proof: b"a",
+            },
+            LedgerInputProof {
+                input_index: 1,
+                proof: b"",
+            },
+        ];
+        let wire = encode_ledger_witness(&records).unwrap();
+        assert_eq!(
+            wire,
+            [2, 2, 0, 0, 0, 3, 0, 0, 0, 1, 0, 0, 0, b'a', 1, 0, 0, 0, 0, 0, 0, 0]
+        );
+        assert_eq!(decode_ledger_witness(&wire).unwrap(), records);
+        assert!(encode_ledger_witness(&[]).is_err());
+        let duplicate = [
+            LedgerInputProof {
+                input_index: 3,
+                proof: b"a",
+            },
+            LedgerInputProof {
+                input_index: 3,
+                proof: b"b",
+            },
+        ];
+        assert!(encode_ledger_witness(&duplicate).is_err());
+        for end in 0..wire.len() {
+            assert!(decode_ledger_witness(&wire[..end]).is_err());
+        }
+        let mut trailing = wire;
+        trailing.push(0);
+        assert!(decode_ledger_witness(&trailing).is_err());
+    }
+
+    #[test]
+    fn ledger_witness_rejects_malformed_wire() {
+        assert!(decode_ledger_witness(&[
+            2, 2, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0
+        ])
+        .is_err());
+        for count in [0u32, 33, u32::MAX] {
+            let mut wire = vec![2];
+            wire.extend_from_slice(&count.to_le_bytes());
+            assert!(decode_ledger_witness(&wire).is_err());
+        }
+        assert!(decode_ledger_witness(&[1, 1, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0]).is_err());
+        assert!(decode_ledger_witness(&[2, 1, 0, 0, 0, 3, 0, 0, 0, 255, 255, 255, 255]).is_err());
+    }
+
+    #[test]
+    fn ledger_witness_accepts_maximum_batch_and_rejects_larger() {
+        let mut records: Vec<_> = (0..32)
+            .map(|input_index| LedgerInputProof {
+                input_index,
+                proof: b"proof",
+            })
+            .collect();
+        let wire = encode_ledger_witness(&records).unwrap();
+        assert_eq!(decode_ledger_witness(&wire).unwrap(), records);
+        records.push(LedgerInputProof {
+            input_index: u32::MAX,
+            proof: b"",
+        });
+        assert!(encode_ledger_witness(&records).is_err());
+    }
+
+    #[test]
     fn shard_append_roundtrip_smt() {
         let entries: Vec<EntryDataV1> = (0u64..3)
             .map(|i| EntryDataV1 {
@@ -269,7 +425,11 @@ mod tests {
                 entropy_commitment: [3; 32],
             })
             .collect();
-        let certs = [(&b"abs"[..], &b"inc"[..]), (&b"a2"[..], &b"i2"[..]), (&b"a3"[..], &b"i3"[..])];
+        let certs = [
+            (&b"abs"[..], &b"inc"[..]),
+            (&b"a2"[..], &b"i2"[..]),
+            (&b"a3"[..], &b"i3"[..]),
+        ];
         let wire = encode_shard_append_witness_smt(&entries, &certs);
         let dec = decode_shard_append_witness(&wire, ACC_SMT).unwrap();
         assert_eq!(dec.entries.len(), 3);
@@ -287,8 +447,13 @@ mod tests {
 
     #[test]
     fn settlement_witness_roundtrip() {
-        let item = crate::encoding::PayoutItem { participant_lock_hash: [9; 32], principal: 5, prize: 1 };
-        let wire = encode_settlement_witness(&[(&b"args"[..], &[7u8; 32][..], 1, &item, &b"p"[..])]);
+        let item = crate::encoding::PayoutItem {
+            participant_lock_hash: [9; 32],
+            principal: 5,
+            prize: 1,
+        };
+        let wire =
+            encode_settlement_witness(&[(&b"args"[..], &[7u8; 32][..], 1, &item, &b"p"[..])]);
         let dec = decode_settlement_witness(&wire).unwrap();
         assert_eq!(dec.len(), 1);
         assert_eq!(dec[0].lock_args, b"args");

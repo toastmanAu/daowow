@@ -8,17 +8,12 @@
 //!      must reproduce `old_root`;
 //!   2. inclusion proof: compiled single-key proof replayed with `leaf`
 //!      must reproduce `new_root`;
-//!   3. sibling equality: at every absolute tree height where the absence
-//!      replay observed a non-zero sibling (0x50/0x51 op), the inclusion
-//!      replay must observe an identical op. Any old content on the key's
-//!      path is therefore pinned by hash equality; heights with no old
-//!      sibling were empty and may hold inserted content.
+//!   3. replay the very same absence proof with the new leaf value and
+//!      require `new_root`. All siblings, including empty subtrees, stay fixed.
 //!
 //! Soundness note: every other leaf's path diverges from the key's path at
 //! exactly one height, where it sits inside a sibling subtree; step 3 pins
-//! all of them. The rule can reject some honestly-built-but-differently
-//! compressed trees (false rejection is safe; only the canonical builder
-//! defined here is accepted).
+//! all of them. An unrelated insertion or deletion cannot change a sibling.
 
 use crate::error::CoreError;
 use crate::hash::Hash32;
@@ -49,7 +44,10 @@ pub fn verify_membership(
     super::check_proof_len(proof.len())?;
     let compiled = CompiledMerkleProof(proof.to_vec());
     let ok = compiled
-        .verify::<crate::accumulator::smtc::hasher::CkbHasher>(&to_h256(root), vec![(to_h256(key), to_h256(leaf))])
+        .verify::<crate::accumulator::smtc::hasher::CkbHasher>(
+            &to_h256(root),
+            vec![(to_h256(key), to_h256(leaf))],
+        )
         .map_err(|_| CoreError::MembershipProof)?;
     if ok {
         Ok(())
@@ -67,13 +65,29 @@ pub fn verify_insert_certificate(
     absence_proof: &[u8],
     inclusion_proof: &[u8],
 ) -> Result<(), CoreError> {
+    if inserted_root(old_root, key, leaf, absence_proof)? != *new_root {
+        return Err(CoreError::AppendProof);
+    }
+    verify_membership(new_root, key, leaf, inclusion_proof).map_err(|_| CoreError::AppendProof)
+}
+
+/// Authenticate an absent key, then return the root after exactly one
+/// insertion. Batched appends must chain this returned root in entry order.
+pub fn inserted_root(
+    old_root: &Hash32,
+    key: &Hash32,
+    leaf: &Hash32,
+    absence_proof: &[u8],
+) -> Result<Hash32, CoreError> {
     super::check_proof_len(absence_proof.len())?;
-    super::check_proof_len(inclusion_proof.len())?;
 
     // 1. absence under old root
     let absence = CompiledMerkleProof(absence_proof.to_vec());
-    let (old_calc, old_ops) = absence
-        .compute_root_collect_ops::<crate::accumulator::smtc::hasher::CkbHasher>(vec![(
+    if *leaf == [0; 32] {
+        return Err(CoreError::AppendProof);
+    }
+    let old_calc = absence
+        .compute_root::<crate::accumulator::smtc::hasher::CkbHasher>(vec![(
             to_h256(key),
             H256::zero(),
         )])
@@ -82,30 +96,15 @@ pub fn verify_insert_certificate(
         return Err(CoreError::AppendProof);
     }
 
-    // 2. inclusion under new root
-    let inclusion = CompiledMerkleProof(inclusion_proof.to_vec());
-    let (new_calc, new_ops) = inclusion
-        .compute_root_collect_ops::<crate::accumulator::smtc::hasher::CkbHasher>(vec![
-            (to_h256(key), to_h256(leaf))
-        ])
+    // The old proof fixes every sibling. Replaying it with the new leaf
+    // authenticates exactly one insertion, not a subset of old siblings.
+    let inserted = absence
+        .compute_root::<crate::accumulator::smtc::hasher::CkbHasher>(vec![(
+            to_h256(key),
+            to_h256(leaf),
+        )])
         .map_err(|_| CoreError::AppendProof)?;
-    if from_h256(new_calc) != *new_root {
-        return Err(CoreError::AppendProof);
-    }
-
-    // 3. sibling equality at every height where old content was present
-    for op in &old_ops {
-        if op.code == 0x4F {
-            continue; // zero run: nothing to preserve
-        }
-        let matching = new_ops
-            .iter()
-            .any(|n| n.code == op.code && n.height == op.height && n.payload == op.payload);
-        if !matching {
-            return Err(CoreError::AppendProof);
-        }
-    }
-    Ok(())
+    Ok(from_h256(inserted))
 }
 
 // ---------------------------------------------------------------------------
@@ -204,6 +203,63 @@ pub mod host {
             ckb_hash256_one(format!("leaf-{n}").as_bytes())
         }
 
+        // Regression documenting why membership-proof replay is NOT a safe
+        // deletion API for this compressed SMT. Keep this demonstration in
+        // tests only; production settlement must not use such an update.
+        #[test]
+        fn equivalent_membership_encodings_diverge_when_replayed_with_zero() {
+            use crate::accumulator::smtc::merge::MergeValue;
+            let mut tree = SmtHost::new();
+            tree.insert(&[1; 32], &[11; 32]).unwrap();
+            tree.insert(&[2; 32], &[22; 32]).unwrap();
+            let proof = tree.inclusion_proof(&[[1; 32]]).unwrap();
+            let mut alternate = Vec::new();
+            let mut index = 0;
+            let mut replaced = false;
+            while index < proof.len() {
+                match proof[index] {
+                    0x51 => {
+                        let sibling = MergeValue::MergeWithZero {
+                            zero_count: proof[index + 1],
+                            base_node: H256::from(
+                                <[u8; 32]>::try_from(&proof[index + 2..index + 34]).unwrap(),
+                            ),
+                            zero_bits: H256::from(
+                                <[u8; 32]>::try_from(&proof[index + 34..index + 66]).unwrap(),
+                            ),
+                        };
+                        alternate.push(0x50);
+                        alternate.extend_from_slice(sibling.hash::<CkbHasher>().as_slice());
+                        index += 66;
+                        replaced = true;
+                    }
+                    op => {
+                        let size = match op {
+                            0x4c | 0x48 => 1,
+                            0x4f => 2,
+                            0x50 => 33,
+                            _ => panic!("unexpected proof opcode"),
+                        };
+                        alternate.extend_from_slice(&proof[index..index + size]);
+                        index += size;
+                    }
+                }
+            }
+            assert!(replaced);
+            assert!(verify_membership(&tree.root(), &[1; 32], &[11; 32], &proof).is_ok());
+            assert!(verify_membership(&tree.root(), &[1; 32], &[11; 32], &alternate).is_ok());
+            let canonical = CompiledMerkleProof(proof)
+                .compute_root::<CkbHasher>(vec![(H256::from([1; 32]), H256::zero())])
+                .unwrap();
+            let noncanonical = CompiledMerkleProof(alternate)
+                .compute_root::<CkbHasher>(vec![(H256::from([1; 32]), H256::zero())])
+                .unwrap();
+            let mut remaining = SmtHost::new();
+            remaining.insert(&[2; 32], &[22; 32]).unwrap();
+            assert_eq!(from_h256(canonical), remaining.root());
+            assert_ne!(canonical, noncanonical);
+        }
+
         #[test]
         fn membership_roundtrip() {
             let mut t = SmtHost::new();
@@ -298,6 +354,31 @@ pub mod host {
                 &leaf_for(20),
                 &absence,
                 &inclusion
+            )
+            .is_err());
+        }
+
+        #[test]
+        fn insert_certificate_rejects_an_undeclared_second_insert() {
+            let old = SmtHost::new();
+            let old_root = old.root();
+            let declared_key = nonce_key(20);
+            let undeclared_key = nonce_key(21);
+            let absence = old.absence_proof(&[declared_key]).unwrap();
+
+            let mut forged = SmtHost::new();
+            forged.insert(&declared_key, &leaf_for(20)).unwrap();
+            forged.insert(&undeclared_key, &leaf_for(21)).unwrap();
+            let forged_root = forged.root();
+            let inclusion = forged.inclusion_proof(&[declared_key]).unwrap();
+
+            assert!(verify_insert_certificate(
+                &old_root,
+                &forged_root,
+                &declared_key,
+                &leaf_for(20),
+                &absence,
+                &inclusion,
             )
             .is_err());
         }

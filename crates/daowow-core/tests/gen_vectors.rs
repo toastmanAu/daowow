@@ -2,10 +2,10 @@
 //! Run: cargo test -p daowow-core --test gen_vectors -- --nocapture
 
 use daowow_core::accumulator::{imt, mmr, nonce_key, smt};
+use daowow_core::draw::{candidate, draw_seed, rejection_sample};
 use daowow_core::encoding::*;
 use daowow_core::hash::ckb_hash256_one;
 use daowow_core::leaf::{entropy_commitment, entry_leaf, liability_leaf, missing_reveal_fallback};
-use daowow_core::draw::{candidate, draw_seed, rejection_sample};
 use serde_json::json;
 use std::fs;
 
@@ -60,7 +60,8 @@ fn gen_vectors() {
     // 6. MMR append
     let mut m = mmr::host::MmrHost::new();
     for i in 0u64..5 {
-        m.append(&ckb_hash256_one(format!("mmr-{i}").as_bytes())).unwrap();
+        m.append(&ckb_hash256_one(format!("mmr-{i}").as_bytes()))
+            .unwrap();
     }
     let mmr_root = m.root().unwrap();
     let mmr_proof = m.membership_proof(2).unwrap();
@@ -75,10 +76,24 @@ fn gen_vectors() {
 
     // 8. draw seed + rejection sampling
     let seed = draw_seed(&round_id, &smt_root, 1_000_000, &commitment, &fallback);
-    let (pos, retry) = rejection_sample(&seed, 0, 1_000_000);
+    let (pos, retry) = rejection_sample(&seed, 0, 1_000_000).unwrap();
     let cand0 = candidate(&seed, 0, 0);
 
-    // 9. encoded sizes
+    // 9. indexed settlement funding wire format
+    let mut liabilities = mmr::host::MmrHost::new();
+    liabilities.append(&liab).unwrap();
+    let funding = SettlementFundingDataV2 {
+        round_id,
+        batch_id: 1,
+        realized_total: 110,
+        principal_liability: 100,
+        prize_pool: 10,
+        payout_cursor: 0,
+        liability_count: 1,
+        liabilities_root: liabilities.root().unwrap(),
+    };
+
+    // 10. encoded sizes
     let sizes = json!({
         "round_config": ROUND_CONFIG_SIZE,
         "shard_data": SHARD_DATA_SIZE,
@@ -106,6 +121,12 @@ fn gen_vectors() {
             "missing_reveal_fallback": hex(&fallback),
         },
         "liability_leaf": { "leaf": hex(&liab) },
+        "settlement_funding_v2": {
+            "canonical_hex": hex(&funding.encode()),
+            "payout_cursor": funding.payout_cursor,
+            "liability_count": funding.liability_count,
+            "liabilities_root": hex(&funding.liabilities_root),
+        },
         "smt": {
             "key_domain": "32-byte big-endian nonce",
             "root_after_4_appends": hex(&smt_root),
@@ -130,7 +151,10 @@ fn gen_vectors() {
         "canonical_sizes": sizes,
     });
 
-    let out = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/vectors/daowow_core_vectors.json");
+    let out = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/vectors/daowow_core_vectors.json"
+    );
     fs::write(out, serde_json::to_string_pretty(&v).unwrap()).unwrap();
     println!("written {}", out);
 }
