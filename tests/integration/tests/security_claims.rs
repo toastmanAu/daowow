@@ -402,34 +402,41 @@ fn claim_minted_beside_a_shard_cell_dep_only_is_rejected() {
 }
 
 #[test]
-fn claim_minted_beside_a_ledger_shaped_cell_is_rejected() {
-    // 36-byte shard args but 207-byte data: not an OPEN shard, so the claim
-    // script's data-length check refuses to treat it as the delegating shard
+fn claim_minted_beside_a_valid_ledger_initialization_is_rejected() {
+    // A frozen shard (101-byte data) initialising its aggregation ledger
+    // (207-byte data) is a legitimate transition of the SAME type identity.
+    // Without the claim script's data-length gate on the OUTPUT side this
+    // transaction would mint a claim with no append counting at all.
     let mut f = fixture();
-    let (shard_cell, _) = f.w.cell(&f.shard);
-    let fake_data = Bytes::from(vec![2u8; daowow_core::lifecycle::AGGREGATION_STATE_SIZE]);
-    let fake =
-        f.w.context
-            .create_cell(shard_cell.clone(), fake_data.clone());
-    let (funding, _) = f.w.funding_cell(1_000 * SHANNONS);
-    let (claim, data) = claim_cell(&mut f, 0, 0);
-    let tx = TransactionBuilder::default()
+    append(&mut f, &[1]);
+    let cfg = full_config(&f.cfg, &f.w.deps);
+    let mut frozen = f.shard_data;
+    frozen.state = daowow_core::encoding::SHARD_STATE_FROZEN;
+    let (cell, _) = f.w.cell(&f.shard);
+    f.w.context.create_cell_with_out_point(
+        f.shard.clone(),
+        cell.clone(),
+        Bytes::from(frozen.encode().to_vec()),
+    );
+    let state = daowow_core::lifecycle::AggregationState::new(&cfg, &frozen).unwrap();
+    let (sponsor, _) = f.w.funding_cell(1_000 * SHANNONS);
+    let ledger_cell = cell.as_builder().capacity(pack_u64(500 * SHANNONS)).build();
+    let init = TransactionBuilder::default()
         .cell_dep(f.w.round_config_dep(&f.round))
-        .input(CellInput::new(fake, 0))
-        .input(CellInput::new(funding, 0))
-        .output(shard_cell)
-        .output_data(fake_data.pack())
+        .input(CellInput::new(f.shard.clone(), 0))
+        .input(CellInput::new(sponsor, 0))
+        .output(ledger_cell.clone())
+        .output_data(Bytes::from(state.encode().to_vec()).pack())
+        .build();
+    // control: the initialisation itself is accepted by the shard script
+    expect_ok(&mut f.w.context, &init);
+    let (claim, data) = claim_cell(&mut f, 0, 1); // position never minted
+    let with_claim = init
+        .as_advanced_builder()
         .output(claim)
         .output_data(data.pack())
         .build();
-    // the ledger mode of the shard script also rejects; either code proves the
-    // claim did not mint, but the claim script's own verdict is what we pin
-    let err = expect_fail(&mut f.w.context, &tx);
-    let code = code_of(&err);
-    assert!(
-        code == CLAIM_MINT || code.starts_with("-2") || code.starts_with("-3"),
-        "unexpected failure: {err}"
-    );
+    expect_code(&mut f, &with_claim, CLAIM_MINT);
 }
 
 #[test]
