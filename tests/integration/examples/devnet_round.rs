@@ -28,6 +28,15 @@ fn script(reference: ScriptRef, args: &[u8]) -> Value {
     json!({"code_hash": hex(&reference.code_hash), "hash_type": "data1", "args": hex(args)})
 }
 
+/// The participant lock is smoke-minimal deployed as data1, like every script here.
+fn script_json(s: &Script) -> Value {
+    json!({
+        "code_hash": hex(s.code_hash().as_slice()),
+        "hash_type": "data1",
+        "args": hex(s.args().raw_data().as_ref()),
+    })
+}
+
 fn main() {
     let mut args: Vec<_> = std::env::args().collect();
     let partial = args.last().is_some_and(|arg| arg == "partial");
@@ -155,6 +164,26 @@ fn main() {
         daowow_core::witness::encode_shard_append_witness_mmr(&entries, &[0], &new_peaks);
     let mut entry_args = participant_hash.to_vec();
     entry_args.extend_from_slice(&cfg.commitment());
+    // one claim NFT per ticket, locked to the entrant, minted in the append
+    let claims: Vec<Value> = entries
+        .iter()
+        .flat_map(|e| (0..e.ticket_count).map(move |i| (e.shard_id, e.position_base + i)))
+        .map(|(shard_id, position)| {
+            let args = daowow_core::claim::ClaimArgs {
+                commitment: cfg.commitment(),
+                shard_id,
+                position,
+            };
+            let lock_size = 32 + 1 + participant.args().raw_data().len() as u64;
+            let capacity = daowow_core::claim::claim_occupied_capacity(lock_size);
+            json!({
+                "type": script(cfg.entry_shard_type, &args.encode()),
+                "lock": script_json(&participant),
+                "data": hex(&daowow_core::claim::initial_state_bytes(&args)),
+                "capacity": format!("0x{:x}", capacity),
+            })
+        })
+        .collect();
     let mut frozen = after;
     frozen.state = SHARD_STATE_FROZEN;
     let mut frozen_empty = empty_shard(1);
@@ -285,7 +314,8 @@ fn main() {
             "since": format!("0x{refund_since:x}"), "witness": hex(&refund_witness)},
         "append": {"shard_data": hex(&after.encode()), "entry_data": hex(&entry.encode()),
             "excluded_data": hex(&excluded.encode()),
-            "entry_lock": script(cfg.entry_lock, &entry_args), "witness": hex(&append_witness)},
+            "entry_lock": script(cfg.entry_lock, &entry_args), "witness": hex(&append_witness),
+            "claims": claims},
         "freeze": {"shard_data": [hex(&frozen.encode()), hex(&frozen_empty.encode())],
             "since": format!("0x{:x}", daowow_core::epoch::absolute_epoch_since(cfg.entry_end).unwrap())},
         "aggregation": {"initial_ledger": hex(&ledger.encode()), "next_ledger": hex(&next.encode()),

@@ -470,9 +470,11 @@ pub fn entry_cell_capacity(entry: &EntryDataV1) -> u64 {
     entry.principal + ((8 + ENTRY_DATA_SIZE as u64) + (33 + 64)) * SHANNONS
 }
 
-/// Minimum capacity of a claim cell under `lock` (shannons).
+/// Minimum capacity of a claim cell under `lock` (shannons). CKB counts a
+/// script as code_hash + hash_type + args, not its molecule serialization.
 pub fn claim_cell_capacity(lock: &Script) -> u64 {
-    daowow_core::claim::claim_occupied_capacity(lock.as_slice().len() as u64)
+    let lock_size = 32 + 1 + lock.args().raw_data().len() as u64;
+    daowow_core::claim::claim_occupied_capacity(lock_size)
 }
 
 /// One claim output per ticket of `entries`, locked by `lock_for(participant_lock_hash)`.

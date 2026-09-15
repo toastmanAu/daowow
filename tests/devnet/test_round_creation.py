@@ -199,6 +199,18 @@ class RoundCreationTests(unittest.TestCase):
                 entry_tx["outputs"].append(copy.deepcopy(entry_tx["outputs"][1]))
                 entry_tx["outputs_data"].append(append["excluded_data"])
                 change["capacity"] = hex(int(change["capacity"], 16) - 400 * CKB)
+            # one claim NFT per ticket, paid for by the change output (kept last)
+            for claim in append["claims"]:
+                entry_tx["outputs"].insert(
+                    len(entry_tx["outputs"]) - 1,
+                    {"capacity": claim["capacity"], "lock": claim["lock"], "type": claim["type"]},
+                )
+                entry_tx["outputs_data"].insert(
+                    len(entry_tx["outputs_data"]) - 1, claim["data"]
+                )
+                change["capacity"] = hex(
+                    int(change["capacity"], 16) - int(claim["capacity"], 16)
+                )
             corrupt = copy.deepcopy(entry_tx)
             corrupt["outputs_data"][0] = corrupt["outputs_data"][0][:-2] + (
                 "00" if corrupt["outputs_data"][0][-2:] != "00" else "01"
