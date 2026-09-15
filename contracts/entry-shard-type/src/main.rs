@@ -14,6 +14,7 @@
 #![no_std]
 #![no_main]
 
+mod claim;
 mod entropy;
 mod ledger;
 mod seal;
@@ -69,6 +70,14 @@ fn main() -> i8 {
     };
     if script.args().raw_data().as_ref() == [0] {
         return public_lock(&script);
+    }
+    {
+        let args = script.args().raw_data();
+        if args.len() == daowow_core::claim::CLAIM_ARGS_SIZE
+            && args[0] == daowow_core::claim::CLAIM_TAG
+        {
+            return claim::run(&script).unwrap_or_else(err);
+        }
     }
     if script.args().raw_data().len() == 77 {
         return ledger::receipt(&script).unwrap_or_else(err);
@@ -134,8 +143,15 @@ fn main() -> i8 {
     if cfg.entry_shard_count <= after.shard_id {
         return err(SHARD_ERROR_DATA);
     }
+    let claims = match collect_claims(&script, &commitment, after.shard_id) {
+        Ok(c) => c,
+        Err(e) => return err(e),
+    };
 
     if is_creation {
+        if !claims.is_empty() {
+            return err(SHARD_ERROR_CLAIM_CELL);
+        }
         let mut index = 0;
         let mut anchored = false;
         while let Ok(data) = load_cell_data(index, Source::Output) {
@@ -206,8 +222,11 @@ fn main() -> i8 {
     };
 
     match (before.state, after.state) {
-        (SHARD_STATE_OPEN, SHARD_STATE_OPEN) => append(&cfg, &before, &after),
+        (SHARD_STATE_OPEN, SHARD_STATE_OPEN) => append(&cfg, &before, &after, &claims),
         (SHARD_STATE_OPEN, SHARD_STATE_FROZEN) => {
+            if !claims.is_empty() {
+                return err(SHARD_ERROR_CLAIM_CELL);
+            }
             let since = match ckb_std::high_level::load_input_since(0, Source::GroupInput) {
                 Ok(s) => s,
                 Err(_) => return err(SHARD_ERROR_FROZEN),
@@ -221,6 +240,9 @@ fn main() -> i8 {
             0
         }
         (SHARD_STATE_FROZEN, SHARD_STATE_FROZEN) => {
+            if !claims.is_empty() {
+                return err(SHARD_ERROR_CLAIM_CELL);
+            }
             if validate_frozen_noop(&before, &after).is_err() {
                 return err(SHARD_ERROR_FROZEN);
             }
@@ -228,6 +250,48 @@ fn main() -> i8 {
         }
         _ => err(SHARD_ERROR_STATE),
     }
+}
+
+/// Every output that is a claim of this binary for `commitment || shard_id`.
+/// Malformed claim data for this shard is an error here so a later branch
+/// cannot silently ignore it.
+fn collect_claims(
+    script: &ckb_std::ckb_types::packed::Script,
+    commitment: &[u8; 32],
+    shard_id: u32,
+) -> Result<alloc::vec::Vec<daowow_core::claim::MintedClaim>, i8> {
+    use daowow_core::claim::{CLAIM_ARGS_SIZE, CLAIM_DATA_SIZE, CLAIM_TAG};
+    let mut out = alloc::vec::Vec::new();
+    let mut i = 0usize;
+    while let Ok(cell) = load_cell(i, Source::Output) {
+        if let Some(t) = cell.type_().to_opt() {
+            let args = t.args().raw_data();
+            if t.code_hash() == script.code_hash()
+                && t.hash_type() == script.hash_type()
+                && args.len() == CLAIM_ARGS_SIZE
+                && args[0] == CLAIM_TAG
+                && args[1..33] == commitment[..]
+                && args[33..37] == shard_id.to_le_bytes()
+            {
+                let position = u64::from_le_bytes(args[37..45].try_into().unwrap());
+                let lock_hash = ckb_std::high_level::load_cell_lock_hash(i, Source::Output)
+                    .map_err(|_| SHARD_ERROR_CLAIM_CELL)?;
+                let data = load_cell_data(i, Source::Output).map_err(|_| SHARD_ERROR_CLAIM_CELL)?;
+                if data.len() != CLAIM_DATA_SIZE {
+                    return Err(SHARD_ERROR_CLAIM_CELL);
+                }
+                let mut fixed = [0u8; CLAIM_DATA_SIZE];
+                fixed.copy_from_slice(&data);
+                out.push(daowow_core::claim::MintedClaim {
+                    position,
+                    lock_hash,
+                    data: fixed,
+                });
+            }
+        }
+        i += 1;
+    }
+    Ok(out)
 }
 
 /// Read only the tag during dispatch: full 256-shard snapshots are large,
@@ -297,6 +361,7 @@ fn append(
     cfg: &daowow_core::encoding::RoundConfigV1,
     before: &EntryShardDataV1,
     after: &EntryShardDataV1,
+    claims: &[daowow_core::claim::MintedClaim],
 ) -> i8 {
     let witness_raw = match load_witness(0, Source::GroupInput) {
         Ok(w) => w,
@@ -389,6 +454,20 @@ fn append(
     }
     if claimed.iter().any(|c| !c) {
         return err(SHARD_ERROR_ENTRY_CELL);
+    }
+
+    // one claim NFT per new ticket, locked to its entrant, carrying fresh state
+    if daowow_core::claim::validate_mint(
+        before.ticket_count,
+        after.ticket_count,
+        &cfg.commitment(),
+        after.shard_id,
+        &wit.entries,
+        claims,
+    )
+    .is_err()
+    {
+        return err(SHARD_ERROR_CLAIM_CELL);
     }
 
     let old_root = before.accumulator_root;
