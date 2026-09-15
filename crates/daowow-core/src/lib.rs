@@ -16,6 +16,7 @@ extern crate alloc;
 
 pub mod accounting;
 pub mod accumulator;
+pub mod claim;
 pub mod computed_draw;
 pub mod draw;
 pub mod encoding;

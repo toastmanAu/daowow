@@ -25,7 +25,8 @@ pub enum CoreError {
 //   -56..-70   dao-lock
 //   -71..-85   settlement-type
 //   -86..-90   accumulator-bench
-//   -91..-128  reserved
+//   -91..-100  claim mode of entry-shard-type
+//   -101..-128 reserved
 pub mod codes {
     // shared
     pub const ERROR_ENCODING: i8 = -1;
@@ -56,6 +57,7 @@ pub mod codes {
     pub const SHARD_ERROR_GROUP: i8 = -35;
     pub const SHARD_ERROR_CREATE: i8 = -36;
     pub const SHARD_ERROR_CONFIG_DEP: i8 = -37;
+    pub const SHARD_ERROR_CLAIM_CELL: i8 = -38;
 
     // entry-lock
     pub const ENTRY_ERROR_DATA: i8 = -42;
@@ -85,6 +87,14 @@ pub mod codes {
     // accumulator-bench
     pub const BENCH_ERROR_WORKLOAD: i8 = -86;
     pub const BENCH_ERROR_FAILED: i8 = -87;
+
+    // claim mode of entry-shard-type (reserved range -91..)
+    pub const CLAIM_ERROR_ARGS: i8 = -91;
+    pub const CLAIM_ERROR_DATA: i8 = -92;
+    pub const CLAIM_ERROR_GROUP: i8 = -93;
+    pub const CLAIM_ERROR_MINT: i8 = -94;
+    pub const CLAIM_ERROR_TRANSITION: i8 = -95;
+    pub const CLAIM_ERROR_RETIRE: i8 = -96;
 }
 
 impl CoreError {
