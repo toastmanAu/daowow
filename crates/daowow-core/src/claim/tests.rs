@@ -100,3 +100,126 @@ fn occupied_capacity_counts_every_cell_field() {
     // 8 capacity + 53 secp lock + (32 + 1 + 45) type + 81 data = 220 bytes
     assert_eq!(claim_occupied_capacity(53), 220 * 100_000_000);
 }
+
+fn entry(lock: u8, base: u64, tickets: u64) -> crate::encoding::EntryDataV1 {
+    crate::encoding::EntryDataV1 {
+        round_id: [1; 32],
+        shard_id: 3,
+        participant_lock_hash: [lock; 32],
+        ticket_count: tickets,
+        principal: tickets * 100,
+        position_base: base,
+        entry_nonce: base,
+        entropy_commitment: [0; 32],
+    }
+}
+
+fn claim(position: u64, lock: u8) -> MintedClaim {
+    let a = ClaimArgs {
+        commitment: [7; 32],
+        shard_id: 3,
+        position,
+    };
+    MintedClaim {
+        position,
+        lock_hash: [lock; 32],
+        data: initial_state_bytes(&a),
+    }
+}
+
+/// Two entries: A owns positions 10..13 (3 tickets), B owns 13..15 (2 tickets).
+fn fixture() -> (Vec<crate::encoding::EntryDataV1>, Vec<MintedClaim>) {
+    let entries = vec![entry(0xA, 10, 3), entry(0xB, 13, 2)];
+    let claims = vec![
+        claim(10, 0xA),
+        claim(11, 0xA),
+        claim(12, 0xA),
+        claim(13, 0xB),
+        claim(14, 0xB),
+    ];
+    (entries, claims)
+}
+
+fn check(claims: &[MintedClaim]) -> Result<(), CoreError> {
+    let (entries, _) = fixture();
+    validate_mint(10, 15, &[7; 32], 3, &entries, claims)
+}
+
+#[test]
+fn mint_accepts_exactly_one_claim_per_new_ticket_in_any_order() {
+    let (_, mut claims) = fixture();
+    assert_eq!(check(&claims), Ok(()));
+    claims.reverse();
+    assert_eq!(check(&claims), Ok(()));
+    assert_eq!(validate_mint(10, 10, &[7; 32], 3, &[], &[]), Ok(()));
+}
+
+#[test]
+fn mint_rejects_wrong_claim_count() {
+    let (_, mut claims) = fixture();
+    let extra = claims.pop().unwrap();
+    assert_eq!(check(&claims), Err(CoreError::InvalidArgument));
+    claims.push(extra);
+    claims.push(claim(14, 0xB));
+    assert_eq!(check(&claims), Err(CoreError::InvalidArgument));
+    let (entries, claims) = fixture();
+    assert_eq!(
+        validate_mint(15, 10, &[7; 32], 3, &entries, &claims),
+        Err(CoreError::InvalidArgument)
+    );
+}
+
+#[test]
+fn mint_rejects_positions_outside_the_new_range_and_duplicates() {
+    let (_, mut claims) = fixture();
+    claims[4] = claim(9, 0xA); // remint of an earlier ticket
+    assert_eq!(check(&claims), Err(CoreError::StateTransition));
+    claims[4] = claim(15, 0xB); // beyond after_tickets
+    assert_eq!(check(&claims), Err(CoreError::StateTransition));
+    claims[4] = claim(13, 0xB); // duplicate of claims[3]
+    assert_eq!(check(&claims), Err(CoreError::StateTransition));
+}
+
+#[test]
+fn mint_rejects_claim_not_locked_to_the_owning_entrant() {
+    let (_, mut claims) = fixture();
+    claims[3] = claim(13, 0xA); // B's ticket minted to A
+    assert_eq!(check(&claims), Err(CoreError::StateTransition));
+    claims[3] = claim(13, 0xC); // stranger
+    assert_eq!(check(&claims), Err(CoreError::StateTransition));
+}
+
+#[test]
+fn mint_rejects_position_with_no_owning_entry() {
+    // entries cover 10..15 but the second entry is missing; count still 5.
+    // Every claim uses A's lock so only the ownership lookup can reject.
+    let entries = vec![entry(0xA, 10, 3)];
+    let claims: Vec<MintedClaim> = (10..15).map(|p| claim(p, 0xA)).collect();
+    assert_eq!(
+        validate_mint(10, 15, &[7; 32], 3, &entries, &claims),
+        Err(CoreError::StateTransition)
+    );
+}
+
+#[test]
+fn mint_rejects_nonzero_or_misidentified_data() {
+    let (_, mut claims) = fixture();
+    claims[0].data[73] = 1; // paid_total
+    assert_eq!(check(&claims), Err(CoreError::Encoding));
+    let (_, mut claims) = fixture();
+    let wrong = ClaimArgs {
+        commitment: [8; 32],
+        shard_id: 3,
+        position: 10,
+    };
+    claims[0].data = initial_state_bytes(&wrong);
+    assert_eq!(check(&claims), Err(CoreError::Encoding));
+    let (_, mut claims) = fixture();
+    let wrong = ClaimArgs {
+        commitment: [7; 32],
+        shard_id: 4,
+        position: 10,
+    };
+    claims[0].data = initial_state_bytes(&wrong);
+    assert_eq!(check(&claims), Err(CoreError::Encoding));
+}

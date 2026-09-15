@@ -2,7 +2,7 @@
 //! rules. Chain provenance, lock authorization and shard delegation are the
 //! contract's job (contracts/entry-shard-type/src/claim.rs).
 
-use crate::encoding::{read_u32, read_u64, write_u32, write_u64};
+use crate::encoding::{read_u32, read_u64, write_u32, write_u64, EntryDataV1};
 use crate::hash::Hash32;
 use crate::redemption::PrizeRedemptionState;
 use crate::ticket::ticket_id;
@@ -77,6 +77,67 @@ pub fn validate_transfer(args: &ClaimArgs, input: &[u8], output: &[u8]) -> Resul
 pub fn claim_occupied_capacity(lock_script_size: u64) -> u64 {
     (8 + lock_script_size + (32 + 1 + CLAIM_ARGS_SIZE as u64) + CLAIM_DATA_SIZE as u64)
         * SHANNONS_PER_CKB
+}
+
+/// One claim output as observed by the shard script.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MintedClaim {
+    pub position: u64,
+    pub lock_hash: Hash32,
+    pub data: [u8; CLAIM_DATA_SIZE],
+}
+
+/// Exactly one claim per new ticket `[before_tickets, after_tickets)`, each
+/// locked to the entrant that owns the position and carrying the initial
+/// state for its identity. `entries` are the append's witness entries, already
+/// validated contiguous by `shard::apply_entry_batch`.
+pub fn validate_mint(
+    before_tickets: u64,
+    after_tickets: u64,
+    commitment: &Hash32,
+    shard_id: u32,
+    entries: &[EntryDataV1],
+    claims: &[MintedClaim],
+) -> Result<(), CoreError> {
+    let new = after_tickets
+        .checked_sub(before_tickets)
+        .ok_or(CoreError::InvalidArgument)?;
+    if claims.len() as u64 != new {
+        return Err(CoreError::InvalidArgument);
+    }
+    // bounded by the transaction's own output count (claims.len() == new)
+    let mut seen = alloc::vec![false; claims.len()];
+    for c in claims {
+        if c.position < before_tickets || c.position >= after_tickets {
+            return Err(CoreError::StateTransition);
+        }
+        let idx = (c.position - before_tickets) as usize;
+        if seen[idx] {
+            return Err(CoreError::StateTransition);
+        }
+        seen[idx] = true;
+        let owner = entries
+            .iter()
+            .find(|e| {
+                c.position >= e.position_base
+                    && e.position_base
+                        .checked_add(e.ticket_count)
+                        .is_some_and(|end| c.position < end)
+            })
+            .ok_or(CoreError::StateTransition)?;
+        if c.lock_hash != owner.participant_lock_hash {
+            return Err(CoreError::StateTransition);
+        }
+        let args = ClaimArgs {
+            commitment: *commitment,
+            shard_id,
+            position: c.position,
+        };
+        if c.data != initial_state_bytes(&args) {
+            return Err(CoreError::Encoding);
+        }
+    }
+    Ok(())
 }
 
 #[cfg(all(test, feature = "std"))]
