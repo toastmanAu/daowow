@@ -59,7 +59,7 @@
   - `pub fn validate_transfer(args: &ClaimArgs, input: &[u8], output: &[u8]) -> Result<(), CoreError>`
   - `pub fn claim_occupied_capacity(lock_script_size: u64) -> u64` (shannons)
 
-- [ ] **Step 1: Add error codes**
+- [x] **Step 1: Add error codes**
 
 In `crates/daowow-core/src/error.rs`, change the `SHARD_ERROR_CONFIG_DEP` line and the reserved comment:
 
@@ -82,7 +82,7 @@ and after the `accumulator-bench` codes add:
 
 Update the header comment `//   -91..-128  reserved` to `//   -91..-100  claim mode of entry-shard-type` and `//   -101..-128 reserved`.
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
 
 `crates/daowow-core/src/claim/tests.rs`:
 
@@ -181,12 +181,12 @@ fn transfer_rejects_any_paid_state_change() {
 
 Replace the fourth assertion in `transfer_requires_identical_decodable_state_with_matching_ticket` (the `state` to `other` case) with `Err(CoreError::Encoding)`.
 
-- [ ] **Step 3: Run tests to verify they fail**
+- [x] **Step 3: Run tests to verify they fail**
 
 Run: `cargo test -p daowow-core --lib claim::tests`
 Expected: compile error, `unresolved import` / `cannot find` for `claim` module.
 
-- [ ] **Step 4: Implement**
+- [x] **Step 4: Implement**
 
 `crates/daowow-core/src/claim.rs`:
 
@@ -282,17 +282,17 @@ mod tests;
 
 Add `pub mod claim;` to `crates/daowow-core/src/lib.rs` between `accumulator` and `computed_draw`.
 
-- [ ] **Step 5: Run tests to verify they pass**
+- [x] **Step 5: Run tests to verify they pass**
 
 Run: `cargo test -p daowow-core --lib claim::tests`
 Expected: 6 passed.
 
-- [ ] **Step 6: Run the crate checks**
+- [x] **Step 6: Run the crate checks**
 
 Run: `cargo test -p daowow-core --lib && cargo check -p daowow-core --no-default-features && cargo clippy -p daowow-core --lib -- -D warnings && rustfmt --check --edition 2021 crates/daowow-core/src/claim.rs crates/daowow-core/src/claim/tests.rs`
 Expected: all green (the placeholder `use EntryDataV1 as _;` keeps clippy quiet until Task 2 removes it).
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add crates/daowow-core/src/claim.rs crates/daowow-core/src/claim/tests.rs crates/daowow-core/src/lib.rs crates/daowow-core/src/error.rs
@@ -314,7 +314,7 @@ git commit -m "feat(core): claim args identity, initial state and transfer rule"
   - `pub fn validate_mint(before_tickets: u64, after_tickets: u64, commitment: &Hash32, shard_id: u32, entries: &[EntryDataV1], claims: &[MintedClaim]) -> Result<(), CoreError>`
   - Error mapping: count mismatch or `after < before` → `InvalidArgument`; position out of range, duplicate, no owning entry, wrong lock → `StateTransition`; wrong data → `Encoding`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `crates/daowow-core/src/claim/tests.rs`:
 
@@ -419,12 +419,12 @@ fn mint_rejects_nonzero_or_misidentified_data() {
 }
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `cargo test -p daowow-core --lib claim::tests`
 Expected: compile error, `cannot find struct MintedClaim` / `cannot find function validate_mint`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 In `crates/daowow-core/src/claim.rs` replace the two placeholder lines (`// MintedClaim and validate_mint...` and `use EntryDataV1 as _;`) with:
 
@@ -491,12 +491,12 @@ pub fn validate_mint(
 }
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `cargo test -p daowow-core --lib claim::tests`
 Expected: 12 passed.
 
-- [ ] **Step 5: Mutation probes**
+- [x] **Step 5: Mutation probes**
 
 For each guard below, temporarily break it, run `cargo test -p daowow-core --lib claim::tests`, confirm the named test fails, restore, and confirm green. Record the outcome in the Results section of this plan.
 
@@ -509,7 +509,7 @@ For each guard below, temporarily break it, run `cargo test -p daowow-core --lib
 | data check | drop the `c.data != initial_state_bytes` return | `mint_rejects_nonzero_or_misidentified_data` |
 | owner lookup | replace `.ok_or(StateTransition)?` with `unwrap_or(&entries[0])` | `mint_rejects_position_with_no_owning_entry` |
 
-- [ ] **Step 6: Crate checks and commit**
+- [x] **Step 6: Crate checks and commit**
 
 Run: `cargo test -p daowow-core --lib && cargo check -p daowow-core --no-default-features && cargo clippy -p daowow-core --lib -- -D warnings && rustfmt --check --edition 2021 crates/daowow-core/src/claim.rs crates/daowow-core/src/claim/tests.rs`
 
@@ -530,7 +530,7 @@ git commit -m "feat(core): claim mint validator"
 - Consumes: `daowow_core::claim::{ClaimArgs, MintedClaim, initial_state_bytes, validate_mint, validate_transfer, CLAIM_ARGS_SIZE, CLAIM_TAG, CLAIM_DATA_SIZE}`, `daowow_core::error::codes::*`, `daowow_core::encoding::SHARD_DATA_SIZE`.
 - Produces: contract behaviour only. `claim::run(&Script) -> Result<i8, i8>` mirrors `seal::create`.
 
-- [ ] **Step 1: Write the claim mode**
+- [x] **Step 1: Write the claim mode**
 
 `contracts/entry-shard-type/src/claim.rs`:
 
@@ -626,7 +626,7 @@ pub fn run(script: &Script) -> Result<i8, i8> {
 }
 ```
 
-- [ ] **Step 2: Wire the dispatch**
+- [x] **Step 2: Wire the dispatch**
 
 In `contracts/entry-shard-type/src/main.rs`:
 
@@ -645,7 +645,7 @@ Immediately after the public-lock check in `main` (after `return public_lock(&sc
     }
 ```
 
-- [ ] **Step 3: Collect claim outputs in the shard path**
+- [x] **Step 3: Collect claim outputs in the shard path**
 
 Add this function near `large_state_version`:
 
@@ -749,17 +749,17 @@ Change `fn append(cfg, before, after)` to `fn append(cfg, before, after, claims:
     }
 ```
 
-- [ ] **Step 4: Build the contract**
+- [x] **Step 4: Build the contract**
 
 Run: `cargo build --target riscv64imac-unknown-none-elf --release -p entry-shard-type`
 Expected: success, no warnings from the new code.
 
-- [ ] **Step 5: Confirm the rule bites**
+- [x] **Step 5: Confirm the rule bites**
 
 Run: `cd tests/integration && cargo test --test proto1_entry_shard 2>&1 | tail -20`
 Expected: append tests now FAIL with captured debug showing shard error `-38` (no claim outputs yet). This is the expected red; Task 4 turns it green. If they still pass, the enforcement is not wired.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add contracts/entry-shard-type/src/claim.rs contracts/entry-shard-type/src/main.rs
@@ -783,7 +783,7 @@ git commit -m "feat(contract): claim mode and mandatory mint in shard append"
   - `pub fn claim_cell_capacity(lock: &Script) -> u64`
   - `pub fn claim_outputs_for(world: &mut World, entries: &[EntryDataV1], lock_for: &dyn Fn(&Hash32) -> Script) -> Vec<(CellOutput, Bytes)>`
 
-- [ ] **Step 1: Add the helpers**
+- [x] **Step 1: Add the helpers**
 
 In `tests/integration/tests/common/mod.rs`, inside `impl World` after `entry_lock_script`:
 
@@ -844,7 +844,7 @@ pub fn claim_outputs_for(
 
 `World.config_hash` is the config commitment: `create_round` sets it from `cfg.commitment()` (`common/mod.rs:306`), so `claim_type_script` must be called after `create_round`, which every fixture already does.
 
-- [ ] **Step 2: Update `proto1_entry_shard::build_entry_tx`**
+- [x] **Step 2: Update `proto1_entry_shard::build_entry_tx`**
 
 The participant lock in this builder is the `always_success` script captured as `participant_lock` (currently `let (_, participant_lock) = world.always_success();` at ~line 78). After the loop that pushes entry outputs and before the spurious-entry loop, add:
 
@@ -859,7 +859,7 @@ The `participant_hash` argument of `build_entry_tx` must be `World::participant_
 
 Also raise the funding input if needed: each claim cell needs ~220 CKB, so an entry of `t` tickets adds `t * 220 CKB`. `world.funding_cell(100_000 * SHANNONS)` covers up to ~450 claims; leave as is unless a test exceeds it.
 
-- [ ] **Step 3: Update `proto2_membership::build_round`**
+- [x] **Step 3: Update `proto2_membership::build_round`**
 
 The participant lock is `lock` (from `let (_, lock) = world.always_success();` at line 41) and its hash is `ph`. Split the chained `TransactionBuilder` at line 82 into a `let mut builder = ...` ending after `.output_data(Bytes::from(e.encode().to_vec()))`, then insert before the `.witness(witness)` chain:
 
@@ -875,7 +875,7 @@ The participant lock is `lock` (from `let (_, lock) = world.always_success();` a
             .build();
 ```
 
-- [ ] **Step 4: Update `security_ledger` fixture**
+- [x] **Step 4: Update `security_ledger` fixture**
 
 In the loop building each entry transaction (`security_ledger.rs:47-90`), the participant lock is `participant_lock` (always_success with one-byte args). Replace the `let tx = TransactionBuilder::default()...build();` with a builder variable and add claim outputs before `.witness(...)`:
 
@@ -905,12 +905,12 @@ The funding cell there is `1000 * SHANNONS`; one ticket per entry adds 220 CKB, 
 
 Repeat the same edit in every other `security_*.rs` fixture that builds an append (grep as listed above); they were copied from this one.
 
-- [ ] **Step 5: Run the whole integration suite**
+- [x] **Step 5: Run the whole integration suite**
 
 Run: `cargo build --target riscv64imac-unknown-none-elf --release && cd tests/integration && cargo test 2>&1 | grep -E "^test result|FAILED|panicked" `
 Expected: every suite green. Any remaining `-38` in captured debug means a builder still lacks claim outputs.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add tests/integration/tests
@@ -927,7 +927,7 @@ git commit -m "test: mint claim outputs in every append builder"
 **Interfaces:**
 - Consumes: `common::*`, Task 4 helpers.
 
-- [ ] **Step 1: Write the fixture and accepted tests**
+- [x] **Step 1: Write the fixture and accepted tests**
 
 ```rust
 mod common;
@@ -1098,12 +1098,12 @@ fn max_batch_append_with_claims_fits_cycle_budget() {
 
 Note: `expect_ok` in `append` already runs the tx, so the last test's second `expect_ok` re-verifies the same tx to capture cycles; that is fine with testtool.
 
-- [ ] **Step 2: Run**
+- [x] **Step 2: Run**
 
 Run: `cd tests/integration && cargo test --test claim_lifecycle -- --nocapture 2>&1 | grep -E "cycles|test result|FAILED"`
 Expected: 6 passed; record the printed cycle counts and claim cell capacity in Results.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add tests/integration/tests/claim_lifecycle.rs
@@ -1128,7 +1128,7 @@ fn build_append(f: &mut Fixture, ticket_counts: &[u64]) -> (TransactionBuilder, 
 
 returning the builder before claim outputs and the witness are attached, the entries, the post-state, the claim cells and the witness bytes, so a test can add altered claim outputs then `.witness(w).build()`.
 
-- [ ] **Step 1: Write the rejected tests**
+- [x] **Step 1: Write the rejected tests**
 
 Each test builds the happy-path append from `build_append`, applies one mutation, and calls `expect_fail`. Names describe the attack:
 
@@ -1366,12 +1366,12 @@ fn burning_a_claim_is_rejected() {
 
 Where `transfer_tx` sets the output data with `.output_data(data)`, the Bytes is a `ckb_types::bytes::Bytes`; use `.pack()` as the harness's other builders do if the compiler asks for `packed::Bytes`.
 
-- [ ] **Step 2: Run**
+- [x] **Step 2: Run**
 
 Run: `cd tests/integration && cargo test --test security_claims 2>&1 | grep -E "^test |test result"`
 Expected: 16 passed. For each, read the captured debug (set `RUST_LOG` is not needed; `expect_fail` returns the error) and confirm the failing script is the intended one: shard `-38` for count/range/duplicate/lock/data/freeze cases, claim `-94` for the foreign-shard, no-shard and dep-only cases, `-95` for altered data, `-93` for two successors, `-96` for burn. Add `assert!(format!("{err:?}").contains("...")))` only if the harness exposes the code in the error string; otherwise record the observed codes in Results.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add tests/integration/tests/security_claims.rs
@@ -1389,7 +1389,7 @@ git commit -m "test: adversarial claim mint and transfer cases"
 **Interfaces:**
 - Produces: `exported["append"]["claims"]`: a list of `{"type": <script json>, "lock": <script json>, "data": <hex>, "capacity": <hex shannons>}`, one per ticket of every entry in the append (including the excluded entry when `partial`).
 
-- [ ] **Step 1: Emit claims from the example**
+- [x] **Step 1: Emit claims from the example**
 
 After `let mut entry_args = ...` in the example, add:
 
@@ -1426,7 +1426,7 @@ fn script_json(s: &Script) -> Value {
 }
 ```
 
-- [ ] **Step 2: Spend them in Python**
+- [x] **Step 2: Spend them in Python**
 
 In `test_round_creation.py`, after `entry_tx` is built and after the `if partial:` block, add:
 
@@ -1442,11 +1442,11 @@ In `test_round_creation.py`, after `entry_tx` is built and after the `if partial
 
 so the change output stays last and pays for the claims. The `corrupt` copy is taken after this block, so it inherits the claims.
 
-- [ ] **Step 3: Build and, if a devnet node is available, run**
+- [x] **Step 3: Build and, if a devnet node is available, run**
 
 Run: `cargo build -p daowow-integration-tests --examples` and `python3 -m pytest tests/devnet/test_round_creation.py -x -q` only if `tests/devnet/README.md` prerequisites (local node) are met. If the node is not running, record "devnet harness updated, not executed" in Results rather than claiming a pass.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add tests/integration/examples/devnet_round.rs tests/devnet/test_round_creation.py
@@ -1460,7 +1460,7 @@ git commit -m "test(devnet): mint claim cells in the devnet append"
 **Files:**
 - Modify: this plan (Results section), `docs/testnet-beta-plan.md` (one line under "Transferable claim protocol" noting mint/transfer are implemented and redemption/retirement are not)
 
-- [ ] **Step 1: Full verification**
+- [x] **Step 1: Full verification**
 
 Run from the repo root:
 
@@ -1472,17 +1472,59 @@ cargo build --target riscv64imac-unknown-none-elf --release
 cd tests/integration && cargo test 2>&1 | grep -E "^test result|FAILED"
 ```
 
-- [ ] **Step 2: Read-only Rust review**
+- [x] **Step 2: Read-only Rust review**
 
 Dispatch the `rust-reviewer` agent on `crates/daowow-core/src/claim.rs`, `contracts/entry-shard-type/src/claim.rs`, the `main.rs` diff and both new test suites, with the spec attached. Ask specifically: can any transaction create a claim for a position outside an append of its shard; can a claim's data change or the cell disappear; can a non-entrant receive a minted claim; does any test assert less than its name claims. Resolve CRITICAL/HIGH, apply MEDIUM where cheap, record the rest.
 
-- [ ] **Step 3: Record results**
+- [x] **Step 3: Record results**
 
 Append a `## Results` section here with: test counts per suite, cycle numbers from Task 5, claim cell capacity, mutation-probe outcomes from Task 2, observed error codes from Task 6, the review verdict, and an explicit statement that redemption, retirement, memento, artwork and the web quote are not implemented.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add docs/superpowers/plans/2026-09-16-claim-mint-transfer.md docs/testnet-beta-plan.md
 git commit -m "docs: claim mint/transfer results and beta plan status"
 ```
+
+---
+
+## Results (2026-09-16, executed inline on branch `feat/claim-mint-transfer`)
+
+**Suites**
+
+| Suite | Result |
+| --- | --- |
+| `cargo test -p daowow-core --lib` | 121 passed (13 new in `claim::tests`) |
+| `cargo check -p daowow-core --no-default-features`, `cargo clippy -p daowow-core --lib -- -D warnings`, rustfmt | clean |
+| `tests/integration` `claim_lifecycle` | 6 passed |
+| `tests/integration` `security_claims` | 17 passed |
+| every other integration suite | green; `smoke` has 2 pre-existing failures (missing external binary path, `round_type_binary_as_lock`) that fail identically on `main` |
+| `tests/devnet` isolated Docker node (`DAOWOW_RUN_ISOLATED_NODE=1`) | 15 passed in 1258s: the append with claim cells committed on a real node and the full round history (freeze, aggregation, DAO maturity, settlement, refunds, reorg recovery) completed with claims present |
+
+**Measurements** (ckb-testtool, always-success lock)
+
+| Shape | Cycles |
+| --- | --- |
+| one claim transfer (claim script only) | 64,494 |
+| append 8 entries / 32 claims | 15,170,656 |
+| append 32 entries / 32 claims | 52,607,539 |
+| append 32 entries / 64 claims | 55,645,290 |
+| append 32 entries / 128 claims | 61,720,556 (budget 70,000,000) |
+
+About 95K cycles per claim (claim script plus the shard's output scan) on a ~50M base that the 32-entry append already cost before claims. Claim cell occupied capacity: 200 CKB with an argless lock, 214 CKB with the devnet 14-byte-args lock, 220 CKB with a secp256k1 lock (the spec figure).
+
+**Mutation probes** (each guard removed, named test goes red, restored)
+
+- core `validate_mint`: count, range, duplicate, lock, data and owner-lookup guards each pinned by one test. The owner-lookup test initially passed under mutation because its orphan claims used a different lock, so the lock guard shadowed it; the fixture now uses the owning lock so only the lookup can reject.
+- contract `shard_present` data-length gate (`== SHARD_DATA_SIZE`): weakened to any length, `claim_minted_beside_a_valid_ledger_initialization_is_rejected` fails (the transaction is accepted and mints a claim). This test replaced the plan's ledger-shaped-garbage variant after review showed the garbage made the shard's own ledger mode fail first, leaving the gate unpinned.
+
+**Observed error codes** in `security_claims`: shard `-38` for missing/extra/duplicate/remint/out-of-range/stranger-lock claims and for a claim in a freeze tx; claim `-94` for no shard transition, cell-dep-only shard, other-shard claim and valid ledger init; `-95` for a decodable paid-state change on transfer; `-93` for two successors; `-96` for burn. Two tests (nonzero paid state, ticket/args mismatch) accept `-38` or `-92` because the shard rule and the claim script independently enforce the same data rule; the altered-data transfer accepts `-92` or `-95` because a flipped `paid_count` is undecodable.
+
+**Review** (read-only rust-reviewer): no CRITICAL. HIGH test-coverage gap on the data-length gate, resolved as above. MEDIUM: `collect_claims` and the append's entry-matching loop each load every output once, and `collect_claims` runs on freeze/no-op transitions too; with the shard cell permissionlessly spendable an attacker can pad outputs to make their own transaction exceed the cycle limit. Because a failed transaction does not consume the shard cell, this cannot block the shard for others, and the measured per-output cost is small next to the SMT work; recorded as a follow-up (single-pass scan, or restrict the claim scan to the append path) rather than fixed here. Items 1, 2, 3 and 6 (forgery, mutation/burn, non-entrant mint, panics) found no defect.
+
+**Caveat on the devnet run**: a contract rebuild for the data-length mutation probe overlapped the devnet run for about one minute. Any devnet test that deployed binaries in that window ran a claim script with a weakened rejection gate that no devnet test exercises, so no outcome could differ; the restored binary (`entry-shard-type` mtime 01:50:11) is what the branch ships.
+
+**Not implemented** (unchanged from the spec's out-of-scope list): redemption, ticket-indexed prize funding, retirement, memento, artwork rendering, wallet display and the web entry quote. A claim's data cannot change and the cell cannot be consumed without a successor.
+
+**Follow-ups**: single-pass output scan in `entry-shard-type` (review MEDIUM); the web entry quote should use `claim_occupied_capacity(33 + lock_args_len)`; sub-project 2 (ticket-indexed prizes and redemption) is next.
