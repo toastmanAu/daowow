@@ -65,15 +65,21 @@ fn fixture(count: usize) -> Fixture {
             .capacity(pack_u64(entry_cell_capacity(&e)))
             .lock(lock)
             .build();
-        let (funding, _) = w.funding_cell(1000 * SHANNONS);
-        let tx = TransactionBuilder::default()
+        let (funding, _) = w.funding_cell(2000 * SHANNONS);
+        let mut builder = TransactionBuilder::default()
             .cell_dep(w.round_config_dep(&round))
             .input(CellInput::new(shard.clone(), 0))
             .input(CellInput::new(funding, 0))
             .output(cell.clone())
             .output_data(Bytes::from(frozen.encode().to_vec()))
             .output(entry_cell.clone())
-            .output_data(Bytes::from(e.encode().to_vec()))
+            .output_data(Bytes::from(e.encode().to_vec()));
+        for (claim_cell, claim_data) in
+            claim_outputs_for(&mut w, &[e], &|_| participant_lock.clone())
+        {
+            builder = builder.output(claim_cell).output_data(claim_data);
+        }
+        let tx = builder
             .witness(smt_append_witness(
                 &[e],
                 &[(absence.as_slice(), inclusion.as_slice())],

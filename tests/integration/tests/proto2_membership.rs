@@ -77,7 +77,7 @@ fn build_round(round_id: Hash32, n_entries: u64, tickets_per_entry: u64) -> Roun
             .capacity(pack_u64(entry_cell_capacity(&e)))
             .lock(entry_lock_script)
             .build();
-        let tx = TransactionBuilder::default()
+        let mut builder = TransactionBuilder::default()
             .cell_dep(world.round_config_dep(&round_op))
             .input(CellInput::new(shard_op.clone(), 0))
             .input(CellInput::new(funding, 0))
@@ -90,7 +90,12 @@ fn build_round(round_id: Hash32, n_entries: u64, tickets_per_entry: u64) -> Roun
             )
             .output_data(Bytes::from(after.encode().to_vec()))
             .output(entry_out)
-            .output_data(Bytes::from(e.encode().to_vec()))
+            .output_data(Bytes::from(e.encode().to_vec()));
+        let claim_lock = lock.clone();
+        for (cell, data) in claim_outputs_for(&mut world, &[e.clone()], &|_| claim_lock.clone()) {
+            builder = builder.output(cell).output_data(data);
+        }
+        let tx = builder
             .witness(witness)
             .witness(pack_pbytes(
                 WitnessArgs::new_builder().build().as_bytes().as_ref(),

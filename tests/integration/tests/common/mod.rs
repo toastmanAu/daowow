@@ -361,6 +361,18 @@ impl World {
         self.script_for(&r, Bytes::from(args))
     }
 
+    /// Claim NFT type script for one ticket of this round (after `create_round`).
+    pub fn claim_type_script(&mut self, shard_id: u32, position: u64) -> Script {
+        let r = self.deps.entry_shard_type;
+        let args = daowow_core::claim::ClaimArgs {
+            commitment: self.config_hash,
+            shard_id,
+            position,
+        }
+        .encode();
+        self.script_for(&r, Bytes::from(args.to_vec()))
+    }
+
     pub fn dao_lock_script(&mut self, round_id: &Hash32, batch_id: u64) -> Script {
         self.dao_lock_script_with_digest(round_id, batch_id, &[0; 32])
     }
@@ -456,6 +468,43 @@ pub fn make_entry_batch(
 pub fn entry_cell_capacity(entry: &EntryDataV1) -> u64 {
     // capacity field (8) + data (132) + lock (33 + 32 args); no type script
     entry.principal + ((8 + ENTRY_DATA_SIZE as u64) + (33 + 64)) * SHANNONS
+}
+
+/// Minimum capacity of a claim cell under `lock` (shannons).
+pub fn claim_cell_capacity(lock: &Script) -> u64 {
+    daowow_core::claim::claim_occupied_capacity(lock.as_slice().len() as u64)
+}
+
+/// One claim output per ticket of `entries`, locked by `lock_for(participant_lock_hash)`.
+/// The lock returned must hash to that participant hash (the test's own lock).
+pub fn claim_outputs_for(
+    world: &mut World,
+    entries: &[EntryDataV1],
+    lock_for: &dyn Fn(&Hash32) -> Script,
+) -> Vec<(CellOutput, Bytes)> {
+    let mut out = Vec::new();
+    for e in entries {
+        let lock = lock_for(&e.participant_lock_hash);
+        for i in 0..e.ticket_count {
+            let position = e.position_base + i;
+            let type_script = world.claim_type_script(e.shard_id, position);
+            let args = daowow_core::claim::ClaimArgs {
+                commitment: world.config_hash,
+                shard_id: e.shard_id,
+                position,
+            };
+            let cell = CellOutputBuilder::default()
+                .capacity(pack_u64(claim_cell_capacity(&lock)))
+                .lock(lock.clone())
+                .type_(Some(type_script).pack())
+                .build();
+            out.push((
+                cell,
+                Bytes::from(daowow_core::claim::initial_state_bytes(&args).to_vec()),
+            ));
+        }
+    }
+    out
 }
 
 pub fn smt_leaf(entry: &EntryDataV1) -> Hash32 {

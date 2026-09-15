@@ -97,6 +97,10 @@ fn build_entry_tx(
             .output(entry_out)
             .output_data(Bytes::from(e.encode().to_vec()));
     }
+    let claim_lock = participant_lock.clone();
+    for (cell, data) in claim_outputs_for(world, entries, &|_| claim_lock.clone()) {
+        builder = builder.output(cell).output_data(data);
+    }
     for _ in 0..spurious_entry_cells {
         let fake = make_entry(cfg, &after, participant_hash, 1, &[0xEE; 32]);
         let out = CellOutputBuilder::default()
