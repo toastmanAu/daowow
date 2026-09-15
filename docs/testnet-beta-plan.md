@@ -53,6 +53,13 @@ accelerated isolated tests to meet that target.
 This section records requirements; the wire format and contract design still
 need review. It is not a claim that these features exist today.
 
+Status 2026-09-16: mint and transfer are implemented as a claim mode of
+`entry-shard-type` (spec `superpowers/specs/2026-09-16-claim-mint-transfer-design.md`,
+results in the matching plan). Each append now mints one claim cell per ticket
+under the entrant's lock; holders can transfer. Redemption, ticket-indexed
+prize funding, retirement and the memento are not implemented; a claim's data
+cannot change and the cell cannot be consumed without a successor.
+
 - One claim NFT per positional ticket, issued to the entrant's wallet in the
   same transaction as its authenticated entry. Mint exactly once, with no
   standalone forged mint or remint after redemption.
