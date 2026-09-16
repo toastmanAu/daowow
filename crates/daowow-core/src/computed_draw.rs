@@ -330,6 +330,87 @@ pub(crate) mod tests {
                 })
                 .sum()
         }
+
+        /// The identity of a claim the draw actually selected, and the prize
+        /// index it won. Derived from `draw.positions()`/`draw.locate()`
+        /// rather than a hardcoded shard/position pair.
+        pub(crate) fn winning_claim_args(
+            &self,
+            draw: &ComputedDraw<'_>,
+        ) -> (crate::claim::ClaimArgs, u32) {
+            let (prize_index, global_position) = draw.positions()[0];
+            let (shard_id, position) = draw.locate(global_position).unwrap();
+            (
+                crate::claim::ClaimArgs {
+                    commitment: self.cfg.commitment(),
+                    shard_id,
+                    position,
+                },
+                prize_index as u32,
+            )
+        }
+
+        /// A claim identity the draw actually did not select.
+        ///
+        /// With 4 accepted tickets against this fixture's 4-weight schedule,
+        /// `weights_for` keeps all four weights, so every real accepted
+        /// position wins something here — there is no accepted-but-unselected
+        /// ticket to point at. `locate` only ever returns a shard id in
+        /// `0..entry_shard_count`, so a shard id one past the last real shard
+        /// can never equal any drawn identity; the `debug_assert` below checks
+        /// that directly against this draw's own `locate` outputs rather than
+        /// just asserting it by construction.
+        pub(crate) fn non_winning_claim_args(
+            &self,
+            draw: &ComputedDraw<'_>,
+        ) -> crate::claim::ClaimArgs {
+            let shard_id = self.cfg.entry_shard_count;
+            let position = 0;
+            debug_assert!(draw
+                .positions()
+                .iter()
+                .all(|(_, gp)| draw.locate(*gp).unwrap() != (shard_id, position)));
+            crate::claim::ClaimArgs {
+                commitment: self.cfg.commitment(),
+                shard_id,
+                position,
+            }
+        }
+
+        /// Any structurally valid claim identity, for a voided round where
+        /// every claim is a non-winner regardless of shard/position.
+        pub(crate) fn any_claim_args(&self) -> crate::claim::ClaimArgs {
+            crate::claim::ClaimArgs {
+                commitment: self.cfg.commitment(),
+                shard_id: 0,
+                position: 0,
+            }
+        }
+
+        /// A `PrizeRedemptionState` for `args`'s ticket with `count` distinct
+        /// synthetic sources recorded, mirroring the `pay` pattern in
+        /// `redemption::tests` (host `SmtHost` supplies each absence proof).
+        pub(crate) fn state_with_paid_count(
+            &self,
+            args: &crate::claim::ClaimArgs,
+            count: u64,
+        ) -> crate::redemption::PrizeRedemptionState {
+            use crate::accumulator::smt::host::SmtHost;
+            use crate::redemption::{
+                prize_obligation_key, prize_payment_leaf, PrizeRedemptionState,
+            };
+            let mut state = PrizeRedemptionState::new(args.ticket_id());
+            let mut tree = SmtHost::new();
+            for i in 0..count {
+                let source = [i as u8; 32];
+                let key = prize_obligation_key(&state.ticket(), &source);
+                let proof = tree.absence_proof(&[key]).unwrap();
+                state = state.record_verified_prize(&source, 1, &proof).unwrap();
+                tree.insert(&key, &prize_payment_leaf(&state.ticket(), &source, 1))
+                    .unwrap();
+            }
+            state
+        }
     }
 
     /// A fixture whose committed schedule bar exceeds `MAX_POOL_BAR`, so the

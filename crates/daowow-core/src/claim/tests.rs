@@ -1,4 +1,8 @@
 use super::*;
+use crate::computed_draw::{
+    tests::{fixture, fixture_unviable},
+    ComputedDraw,
+};
 use crate::redemption::PrizeRedemptionState;
 use crate::ticket::ticket_id;
 use crate::CoreError;
@@ -128,7 +132,7 @@ fn claim(position: u64, lock: u8) -> MintedClaim {
 }
 
 /// Two entries: A owns positions 10..13 (3 tickets), B owns 13..15 (2 tickets).
-fn fixture() -> (Vec<crate::encoding::EntryDataV1>, Vec<MintedClaim>) {
+fn mint_fixture() -> (Vec<crate::encoding::EntryDataV1>, Vec<MintedClaim>) {
     let entries = vec![entry(0xA, 10, 3), entry(0xB, 13, 2)];
     let claims = vec![
         claim(10, 0xA),
@@ -141,13 +145,13 @@ fn fixture() -> (Vec<crate::encoding::EntryDataV1>, Vec<MintedClaim>) {
 }
 
 fn check(claims: &[MintedClaim]) -> Result<(), CoreError> {
-    let (entries, _) = fixture();
+    let (entries, _) = mint_fixture();
     validate_mint(10, 15, &[7; 32], 3, &entries, claims)
 }
 
 #[test]
 fn mint_accepts_exactly_one_claim_per_new_ticket_in_any_order() {
-    let (_, mut claims) = fixture();
+    let (_, mut claims) = mint_fixture();
     assert_eq!(check(&claims), Ok(()));
     claims.reverse();
     assert_eq!(check(&claims), Ok(()));
@@ -156,13 +160,13 @@ fn mint_accepts_exactly_one_claim_per_new_ticket_in_any_order() {
 
 #[test]
 fn mint_rejects_wrong_claim_count() {
-    let (_, mut claims) = fixture();
+    let (_, mut claims) = mint_fixture();
     let extra = claims.pop().unwrap();
     assert_eq!(check(&claims), Err(CoreError::InvalidArgument));
     claims.push(extra);
     claims.push(claim(14, 0xB));
     assert_eq!(check(&claims), Err(CoreError::InvalidArgument));
-    let (entries, claims) = fixture();
+    let (entries, claims) = mint_fixture();
     assert_eq!(
         validate_mint(15, 10, &[7; 32], 3, &entries, &claims),
         Err(CoreError::InvalidArgument)
@@ -171,7 +175,7 @@ fn mint_rejects_wrong_claim_count() {
 
 #[test]
 fn mint_rejects_positions_outside_the_new_range_and_duplicates() {
-    let (_, mut claims) = fixture();
+    let (_, mut claims) = mint_fixture();
     claims[4] = claim(9, 0xA); // remint of an earlier ticket
     assert_eq!(check(&claims), Err(CoreError::StateTransition));
     claims[4] = claim(15, 0xB); // beyond after_tickets
@@ -182,7 +186,7 @@ fn mint_rejects_positions_outside_the_new_range_and_duplicates() {
 
 #[test]
 fn mint_rejects_claim_not_locked_to_the_owning_entrant() {
-    let (_, mut claims) = fixture();
+    let (_, mut claims) = mint_fixture();
     claims[3] = claim(13, 0xA); // B's ticket minted to A
     assert_eq!(check(&claims), Err(CoreError::StateTransition));
     claims[3] = claim(13, 0xC); // stranger
@@ -203,10 +207,10 @@ fn mint_rejects_position_with_no_owning_entry() {
 
 #[test]
 fn mint_rejects_nonzero_or_misidentified_data() {
-    let (_, mut claims) = fixture();
+    let (_, mut claims) = mint_fixture();
     claims[0].data[73] = 1; // paid_total
     assert_eq!(check(&claims), Err(CoreError::Encoding));
-    let (_, mut claims) = fixture();
+    let (_, mut claims) = mint_fixture();
     let wrong = ClaimArgs {
         commitment: [8; 32],
         shard_id: 3,
@@ -214,7 +218,7 @@ fn mint_rejects_nonzero_or_misidentified_data() {
     };
     claims[0].data = initial_state_bytes(&wrong);
     assert_eq!(check(&claims), Err(CoreError::Encoding));
-    let (_, mut claims) = fixture();
+    let (_, mut claims) = mint_fixture();
     let wrong = ClaimArgs {
         commitment: [7; 32],
         shard_id: 4,
@@ -222,4 +226,71 @@ fn mint_rejects_nonzero_or_misidentified_data() {
     };
     claims[0].data = initial_state_bytes(&wrong);
     assert_eq!(check(&claims), Err(CoreError::Encoding));
+}
+
+#[test]
+fn a_non_winner_retires_with_nothing_paid() {
+    let f = fixture(1, true);
+    let draw = ComputedDraw::new(&f.cfg, &f.record, &f.schedule).unwrap();
+    let args = f.non_winning_claim_args(&draw);
+    let state = PrizeRedemptionState::new(args.ticket_id());
+    assert_eq!(
+        retire_decision(&args, &state, &draw, 7),
+        Ok(RetireDecision::NonWinner)
+    );
+}
+
+#[test]
+fn a_winner_retires_only_when_every_batch_is_discharged() {
+    let f = fixture(1, true);
+    let draw = ComputedDraw::new(&f.cfg, &f.record, &f.schedule).unwrap();
+    let (args, prize_index) = f.winning_claim_args(&draw);
+    let state = f.state_with_paid_count(&args, 3);
+    assert_eq!(
+        retire_decision(&args, &state, &draw, 3),
+        Ok(RetireDecision::Winner { prize_index })
+    );
+    // one source short is refused
+    assert_eq!(
+        retire_decision(&args, &state, &draw, 4),
+        Err(CoreError::StateTransition)
+    );
+}
+
+#[test]
+fn a_non_winner_carrying_payments_is_refused() {
+    // Only a drawn ticket can ever have redeemed; anything else is forged.
+    let f = fixture(1, true);
+    let draw = ComputedDraw::new(&f.cfg, &f.record, &f.schedule).unwrap();
+    let args = f.non_winning_claim_args(&draw);
+    let state = f.state_with_paid_count(&args, 1);
+    assert_eq!(
+        retire_decision(&args, &state, &draw, 3),
+        Err(CoreError::StateTransition)
+    );
+}
+
+#[test]
+fn state_belonging_to_another_ticket_is_refused() {
+    let f = fixture(1, true);
+    let draw = ComputedDraw::new(&f.cfg, &f.record, &f.schedule).unwrap();
+    let args = f.non_winning_claim_args(&draw);
+    let state = PrizeRedemptionState::new([0xAB; 32]);
+    assert_eq!(
+        retire_decision(&args, &state, &draw, 3),
+        Err(CoreError::Encoding)
+    );
+}
+
+#[test]
+fn every_claim_of_a_voided_round_is_a_non_winner() {
+    let f = fixture_unviable(1, true);
+    let draw = ComputedDraw::new(&f.cfg, &f.record, &f.schedule).unwrap();
+    assert!(!draw.is_success());
+    let args = f.any_claim_args();
+    let state = PrizeRedemptionState::new(args.ticket_id());
+    assert_eq!(
+        retire_decision(&args, &state, &draw, 9),
+        Ok(RetireDecision::NonWinner)
+    );
 }

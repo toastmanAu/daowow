@@ -140,5 +140,54 @@ pub fn validate_mint(
     Ok(())
 }
 
+/// Outcome of the retirement test for one claim.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RetireDecision {
+    /// Never drawn; owes and is owed nothing.
+    NonWinner,
+    /// Drawn at this rank, with every prize obligation discharged.
+    Winner { prize_index: u32 },
+}
+
+/// May this claim be consumed without a successor?
+///
+/// `universe` must be `RoundSeal::total_accepted_batches` of the same sealed
+/// round the draw derives from; the caller authenticates both from canonical
+/// cells. A count comparison is sufficient because every recorded source was
+/// verified against a real funding cell of this commitment and inserted under
+/// an absence proof, so sources are genuine and distinct, and because
+/// `entitlements.rs` refuses a batch allocating any drawn position zero, so no
+/// batch can owe a winner nothing.
+pub fn retire_decision(
+    args: &ClaimArgs,
+    state: &PrizeRedemptionState,
+    draw: &crate::computed_draw::ComputedDraw<'_>,
+    universe: u64,
+) -> Result<RetireDecision, CoreError> {
+    if state.ticket() != args.ticket_id() {
+        return Err(CoreError::Encoding);
+    }
+    for (prize_index, global_position) in draw.positions() {
+        let (shard_id, position) = draw.locate(*global_position)?;
+        if shard_id != args.shard_id || position != args.position {
+            continue;
+        }
+        if *prize_index >= crate::schedule::MAX_SCHEDULE_PRIZES as u64 {
+            return Err(CoreError::InvalidArgument);
+        }
+        if state.paid_count() != universe {
+            return Err(CoreError::StateTransition);
+        }
+        return Ok(RetireDecision::Winner {
+            prize_index: *prize_index as u32,
+        });
+    }
+    // Not drawn: only a drawn ticket can ever have redeemed.
+    if state.paid_count() != 0 {
+        return Err(CoreError::StateTransition);
+    }
+    Ok(RetireDecision::NonWinner)
+}
+
 #[cfg(all(test, feature = "std"))]
 mod tests;
