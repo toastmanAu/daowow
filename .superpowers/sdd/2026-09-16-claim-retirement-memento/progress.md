@@ -646,3 +646,26 @@ Plan amended: Task 10's mutation-probe table referenced the excluded test. Row
 replaced with the memento group-size guard against the new test, plus an
 explicit UNPINNABLE row for the claim-side duplicate check so the probe task
 does not hunt for a test that cannot exist.
+Task 9: fix round 1/5 (1 addressed, 0 open — `two_mementos_of_one_identity_are_refused`
+added, pinning the memento group-size guard at exactly -102; commits
+ec1ba06..b011ed7). 16/16. Re-review confirmed by reading the test body, not the
+prose: no claim cell as input, output OR dep; one always_success input; both
+outputs' type scripts byte-identical; and the isolation preconditions are
+ASSERTED IN THE TEST — assert_eq!(tx.inputs().len(), 1) and
+assert_eq!(first_type.as_slice(), second_type.as_slice()) — rather than merely
+relied upon. That is what stops a future fixture change from silently
+un-isolating the test while it still passes.
+
+Task 9: complete (commits d3ec2da..b011ed7, review clean after 1 fix round)
+
+Task 10 (mutation probes): dispatched (sonnet), BASE b011ed7. Two warnings added
+beyond the brief, either of which could invert the task's meaning:
+(A) contract-side probes need `cargo build --target riscv64imac-unknown-none-elf
+--release -p entry-shard-type` before the integration test sees the change —
+skip it and the test runs against the OLD binary, stays green, and the guard is
+wrongly recorded as unpinned;
+(B) while a contract mutation is in place the binary's data hash changes, so
+script-hash order reshuffles and UNRELATED rejection tests may flip their codes
+— expected noise, disappears on restore, must not be chased.
+Also told it that finding an UNPINNED guard is the most valuable result it can
+produce, and to record it precisely rather than fix it or adjust the probe.
