@@ -201,3 +201,16 @@ fn saturated_decoded_counters_cannot_accept_another_payment() {
     );
     assert_eq!(saturated.encode(), wire);
 }
+
+#[test]
+fn prize_source_is_a_logical_batch_identity() {
+    let mut message = b"DAOWOW_PRIZE_SOURCE_V1".to_vec();
+    message.extend_from_slice(&[1; 32]);
+    message.extend_from_slice(&(1u64 << 56 | 3).to_le_bytes());
+    message.extend_from_slice(&[2; 32]);
+    let source = prize_source(&[1; 32], 1u64 << 56 | 3, &[2; 32]);
+    assert_eq!(source, crate::hash::ckb_hash256_one(&message));
+    assert_ne!(source, prize_source(&[1; 32], 3, &[2; 32]));
+    assert_ne!(source, prize_source(&[1; 32], 1u64 << 56 | 3, &[3; 32]));
+    assert_ne!(source, prize_source(&[9; 32], 1u64 << 56 | 3, &[2; 32]));
+}

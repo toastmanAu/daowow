@@ -52,9 +52,32 @@ pub fn liability_leaf(participant_lock_hash: &Hash32, principal: u64, prize: u64
     ckb_hash256(&[b"DAOWOW_LIABILITY_LEAF_V1".as_slice(), &buf])
 }
 
+/// Prize obligation leaf for one winning ticket of one batch.
+///
+/// leaf = H("DAOWOW_PRIZE_LEAF_V1" || ticket_id || amount)
+pub fn prize_leaf(ticket: &Hash32, amount: u64) -> Hash32 {
+    ckb_hash256(&[
+        b"DAOWOW_PRIZE_LEAF_V1".as_slice(),
+        ticket,
+        &amount.to_le_bytes(),
+    ])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hash::ckb_hash256_one;
+
+    #[test]
+    fn prize_leaf_binds_domain_ticket_and_amount() {
+        let mut message = b"DAOWOW_PRIZE_LEAF_V1".to_vec();
+        message.extend_from_slice(&[5; 32]);
+        message.extend_from_slice(&7u64.to_le_bytes());
+        assert_eq!(prize_leaf(&[5; 32], 7), ckb_hash256_one(&message));
+        assert_ne!(prize_leaf(&[5; 32], 7), prize_leaf(&[5; 32], 8));
+        assert_ne!(prize_leaf(&[5; 32], 7), prize_leaf(&[6; 32], 7));
+        assert_ne!(prize_leaf(&[5; 32], 7), liability_leaf(&[5; 32], 0, 7));
+    }
 
     #[test]
     fn commitment_deterministic() {

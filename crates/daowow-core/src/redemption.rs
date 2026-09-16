@@ -10,6 +10,18 @@ use crate::{
     CoreError,
 };
 
+/// Canonical prize source for a batch: config commitment, batch id and batch
+/// digest, exactly as carried in the settlement type's 72-byte args. Never an
+/// outpoint, so funding-cell successors keep the same source.
+pub fn prize_source(commitment: &Hash32, batch_id: u64, digest: &Hash32) -> Hash32 {
+    ckb_hash256(&[
+        b"DAOWOW_PRIZE_SOURCE_V1",
+        commitment,
+        &batch_id.to_le_bytes(),
+        digest,
+    ])
+}
+
 /// Immutable prize obligation identity. The source must be a canonical logical
 /// batch identity, not a funding cell's replaceable successor outpoint.
 /// The fixed kind byte is prize only; owner and amount do not enter the key.

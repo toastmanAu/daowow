@@ -83,6 +83,7 @@ pub mod codes {
     pub const SETTLE_ERROR_CURSOR: i8 = -74;
     pub const SETTLE_ERROR_DUPLICATE: i8 = -75;
     pub const SETTLE_ERROR_ROUND_MISMATCH: i8 = -76;
+    pub const SETTLE_ERROR_REDEEM: i8 = -77;
 
     // accumulator-bench
     pub const BENCH_ERROR_WORKLOAD: i8 = -86;
@@ -95,6 +96,7 @@ pub mod codes {
     pub const CLAIM_ERROR_MINT: i8 = -94;
     pub const CLAIM_ERROR_TRANSITION: i8 = -95;
     pub const CLAIM_ERROR_RETIRE: i8 = -96;
+    pub const CLAIM_ERROR_REDEEM: i8 = -97;
 }
 
 impl CoreError {
