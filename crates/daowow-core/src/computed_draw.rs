@@ -4,6 +4,23 @@ use crate::{
 };
 use alloc::{vec, vec::Vec};
 
+/// A round draws only if its committed schedule can pay every drawn position a
+/// positive amount out of a pool this small. `min_viable_pool` is the exact
+/// zero-free threshold for a schedule, so capping it caps how wide the weight
+/// spread may be relative to what any batch will realistically yield.
+///
+/// 0.01 CKB. The smallest batch a round can produce is one ticket
+/// (`AggregationState::accept` rejects an empty batch), and a realistic ticket
+/// funds at least its own 220 CKB claim cell, whose DAO compensation over a full
+/// term runs to tens of millions of shannons — roughly twenty times this bound.
+///
+/// Deliberately an absolute constant rather than a fraction of
+/// `cfg.ticket_price`: `ticket_price` sits at offset 36 of
+/// `RoundConfigV1::encode()`, so it is inside `commitment()` and therefore inside
+/// the draw seed. Deriving the allowance from it would make the viability of a
+/// round depend on a value that also decides which tickets win.
+pub const MAX_POOL_BAR: u64 = 1_000_000;
+
 /// A pure derivation over a structurally validated snapshot. Neither this
 /// constructor nor its membership proofs establish chain/header provenance.
 pub struct ComputedDraw<'a> {
@@ -54,7 +71,14 @@ impl<'a> ComputedDraw<'a> {
             &record.encode(),
         ]);
         let mut positions = Vec::new();
-        if total != 0 && total >= cfg.minimum_tickets {
+        // An unviable schedule is a failed round, not an error: the existing
+        // failed-round path returns principal and yield to depositors and lets
+        // every claim retire as a non-winner. Derived from round-level data
+        // only, so every batch and retirement reach the same verdict.
+        if total != 0
+            && total >= cfg.minimum_tickets
+            && schedule.min_viable_pool(total)? <= MAX_POOL_BAR
+        {
             positions = vec![(0, 0); schedule.weights_for(total)?.len()];
             crate::draw::draw_positions(&seed, total, positions.len() as u64, &mut positions)?;
         }
@@ -243,6 +267,91 @@ pub(crate) mod tests {
         }
     }
 
+    impl Fixture {
+        /// Rebuild the `EntropyRecord` for a config whose `prize_schedule_hash`
+        /// differs from `self.cfg`'s. `ComputedDraw::new` checks that the
+        /// schedule commitment matches `cfg.prize_schedule_hash` and that the
+        /// seal is bound to `cfg.commitment()`, so a substituted schedule needs
+        /// a record re-sealed against the new config, not the original one.
+        pub(crate) fn record_for(&self, cfg: &RoundConfigV1) -> EntropyRecord {
+            let mut ledgers = Vec::new();
+            for id in 0..4 {
+                let es = &self.entries[id as usize];
+                let ps = &self.proofs[id as usize];
+                // Reproduce this fixture's own acceptance pattern (at most the
+                // first entry per shard) rather than assuming `accept`, so
+                // `record_for` is correct for both `fixture(_, true)` and
+                // `fixture(_, false)` origins.
+                let accepted = self
+                    .record
+                    .seal()
+                    .ledger(id)
+                    .is_some_and(|l| l.accepted_tickets() > 0);
+                let shard = EntryShardDataV1 {
+                    round_id: cfg.round_id,
+                    shard_id: id,
+                    state: SHARD_STATE_FROZEN,
+                    sequence: es.len() as u64,
+                    entry_count: es.len() as u64,
+                    ticket_count: es.len() as u64 * 2,
+                    principal_total: es.len() as u64 * 200,
+                    accumulator_root: {
+                        let mut tree = MmrHost::new();
+                        for e in es {
+                            tree.append(&entry_leaf(e)).unwrap();
+                        }
+                        tree.root().unwrap()
+                    },
+                };
+                let mut ledger = AggregationState::new(cfg, &shard).unwrap();
+                if accepted {
+                    ledger = ledger.accept(cfg, &es[..1], &[250], &[&ps[0]]).unwrap().0;
+                }
+                ledgers.push(ledger.close(cfg, ABSOLUTE_EPOCH_FLAG | 20).unwrap());
+            }
+            EntropyRecord::new(
+                RoundSeal::new(cfg, &ledgers).unwrap(),
+                100,
+                [1; 32],
+                [[2; 32], [3; 32], [4; 32]],
+            )
+            .unwrap()
+        }
+
+        /// Sum of the fixture's accepted ticket counts, mirroring
+        /// `ComputedDraw::new`'s own per-shard `accepted_tickets()` total.
+        pub(crate) fn total_tickets(&self) -> u64 {
+            (0..self.cfg.entry_shard_count)
+                .map(|id| {
+                    self.record
+                        .seal()
+                        .ledger(id)
+                        .map_or(0, |l| l.accepted_tickets())
+                })
+                .sum()
+        }
+    }
+
+    /// A fixture whose committed schedule bar exceeds `MAX_POOL_BAR`, so the
+    /// round must void instead of drawing.
+    #[allow(dead_code)]
+    pub(crate) fn fixture_unviable(minimum: u64, accept: bool) -> Fixture {
+        let f = fixture(minimum, accept);
+        let mut wide_weights = [1u64; 32];
+        wide_weights[0] = u64::MAX / 64;
+        let wide = PrizeSchedule::new(&wide_weights).unwrap();
+        let mut cfg = f.cfg;
+        cfg.prize_schedule_hash = wide.commitment();
+        let record = f.record_for(&cfg);
+        Fixture {
+            cfg,
+            record,
+            schedule: wide,
+            entries: f.entries,
+            proofs: f.proofs,
+        }
+    }
+
     #[test]
     fn draws_only_accepted_prefixes_across_empty_shards() {
         let f = fixture(4, true);
@@ -376,5 +485,39 @@ pub(crate) mod tests {
             ComputedDraw::new(&cfg, &record, &f.schedule),
             Err(CoreError::Overflow)
         ));
+    }
+
+    #[test]
+    fn an_unyieldable_schedule_voids_the_round() {
+        let f = fixture(1, true);
+        // Sane schedule: bar 10, far below MAX_POOL_BAR. This is the shipped
+        // fixture's own schedule, so the gate must leave it drawing.
+        let sane = PrizeSchedule::new(&[4, 3, 2, 1]).unwrap();
+        assert!(sane.min_viable_pool(f.total_tickets()).unwrap() <= MAX_POOL_BAR);
+
+        // Pathological spread: bar exceeds the allowance, so the round must fail.
+        let mut wide_weights = [1u64; 32];
+        wide_weights[0] = u64::MAX / 64;
+        let wide = PrizeSchedule::new(&wide_weights).unwrap();
+        let mut wide_cfg = f.cfg;
+        wide_cfg.prize_schedule_hash = wide.commitment();
+        let record = f.record_for(&wide_cfg);
+
+        let draw = ComputedDraw::new(&wide_cfg, &record, &wide).unwrap();
+        assert!(!draw.is_success(), "unyieldable schedule must not draw");
+        assert!(draw.positions().is_empty());
+        // The void is not an error: totals still derive.
+        assert_eq!(draw.total_tickets(), f.total_tickets());
+    }
+
+    #[test]
+    fn viability_is_round_level_and_not_per_batch() {
+        // Same (cfg, record, schedule) must give the same verdict every call,
+        // because settlement and retirement both re-derive it independently.
+        let f = fixture(1, true);
+        let a = ComputedDraw::new(&f.cfg, &f.record, &f.schedule).unwrap();
+        let b = ComputedDraw::new(&f.cfg, &f.record, &f.schedule).unwrap();
+        assert_eq!(a.is_success(), b.is_success());
+        assert_eq!(a.positions(), b.positions());
     }
 }
