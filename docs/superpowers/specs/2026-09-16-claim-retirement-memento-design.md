@@ -126,6 +126,31 @@ The guard must test the computed allocation, not the pool size: a pool of at
 least one shannon per position is **not** sufficient, because weights
 `[1, 1, 1000]` with a pool of `3` allocate `[1, 0, 2]`.
 
+The guard is unconditional on `amount == 0`, which also refuses a batch whose
+realized yield is exactly its deposited capacity — `prize_pool == 0`, so every
+drawn position allocates zero. That case was previously tolerated by deriving a
+funding cell with `prize_count == 0` and an empty prize list. It cannot be
+tolerated now, and the reason is the same one that motivates the guard: the
+obligation universe is `Σ accepted_batches` from the seal, which counts a
+zero-yield batch like any other, while a winner has no positive prize to record
+against it. `paid_count` could never reach the universe, and every winner of that
+round would be permanently unretirable.
+
+This is the one place the design cannot offer a graceful void. A round's
+viability is decidable at the draw; a single batch's realized yield is not
+knowable until it matures, long after prizes from other batches may already have
+been paid. So a zero-yield batch is refused at derivation and its capacity is
+stranded until the schedule or batch is changed — a worse outcome than an
+unretirable claim, since principal is larger than claim capacity.
+
+It is accepted because Nervos DAO makes it unreachable for an enforced term: the
+accumulated rate rises every epoch, so a deposit of at least one ticket held for
+`dao_term_periods` yields strictly more than zero, by many orders of magnitude
+more than the one shannon per drawn position this guard needs. A zero-yield batch
+would mean the deposit did not mature, which the DAO withdrawal path already
+prevents. The residual risk is therefore a protocol-level anomaly, not an
+economic corner.
+
 Residual risk, now quantified: a batch strands only if actual DAO compensation
 over a full term fell below one part per million of principal, which would also
 make the round economically pointless. The alternative of redistributing dust so

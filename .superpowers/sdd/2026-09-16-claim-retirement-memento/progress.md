@@ -260,3 +260,31 @@ on a test that passes for an unrelated reason.
 Cost if wrong: if those two tests are subtly wrong, the guard gets built against
 them. Mitigated — the task review sees them in the diff, since they are
 uncommitted and land in Task 3's commit.
+
+Task 3: implementer DONE_WITH_CONCERNS — commit 50ede8e. 132 passing, no_std +
+clippy clean, gen_vectors and apps/web/vectors.js regenerated with ZERO diff
+(the guard touches no vector fixture), all 4 web tests pass.
+
+It rewrote a pre-existing test, `zero_yield_omits_zero_total_winner_only_records`
+-> `a_success_round_with_zero_realized_yield_is_refused`, because the guard is
+unconditional on amount == 0 and so also refuses a batch whose realized yield
+equals its deposited capacity (prize_pool == 0, every position zero). It flagged
+this rather than absorbing it.
+
+Ruling: ACCEPT the rewrite. Checked the old test's body first — it asserted
+derive() returns Ok with prize_count == 0 and an empty prize list for a zero-yield
+successful round. That is unsound under this sub-project: the retirement universe
+is the seal's Σ accepted_batches, which counts a zero-yield batch like any other,
+while a winner has no positive prize to record against it, so paid_count could
+never reach the universe and EVERY winner of that round would be unretirable.
+Refusing is correct.
+Cost if wrong: unlike an unyieldable schedule, this has NO graceful void — a
+batch's yield is unknown at draw time, so the batch is refused at derivation and
+its principal is stranded. Accepted because Nervos DAO's accumulated rate rises
+every epoch, making zero yield unreachable for an enforced term; a zero-yield
+batch would mean the deposit never matured. Now recorded in the spec, which
+previously claimed unqualified that no capacity is stranded.
+
+Task 3: minor (deferred): derive() now returns CoreError::Conservation for both a
+malformed batch and a genuine zero-yield round; a caller wanting to distinguish
+them has no way to. Diagnosability, not correctness.
