@@ -742,3 +742,16 @@ ours, not that they are out of scope. Flagged for the final whole-branch review.
 Cost if wrong: two cosmetic style lints in test code.
 GATE GAP worth noting for the results doc: test-code clippy is ungated in this
 project, which is why these were never caught.
+Task 10: fix round 1/5 (2 addressed, 0 open — over-paid-winner test added and
+probed; schedule-commitment check KEPT with an explanatory comment; commits
+82d8161..94c04fc). Re-review confirmed by reading: the new test really does use
+paid_count=4 against universe=3 (strictly over-paid, not equal or under),
+decode_committed is still called at claim.rs:248, and the results document marks
+both row 7 and row 13 unpinnable-by-design without overclaiming.
+
+Task 10: complete (commits b011ed7..94c04fc, review clean after 1 fix round)
+
+Task 11 (devnet + results + handoff) is the last. Checking prerequisites before
+dispatch — it needs Docker and takes ~21 minutes, and the hard constraint is
+that NO contract rebuild may happen while it runs, since each test deploys the
+binaries fresh.
