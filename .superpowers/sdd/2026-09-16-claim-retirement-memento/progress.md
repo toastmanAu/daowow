@@ -366,3 +366,23 @@ comment still claims the property holds. Real but slow-acting, and the final
 review sees it.
 
 Task 4: complete (commits 71ff552..9112849, review clean, 0 fix rounds)
+Task 5: implementer DONE — commit a70db65, memento.rs + memento/tests.rs + one
+line of lib.rs (+226). 134 -> 141 (7 new), no_std + clippy clean. It ran both
+independent checks I required: capacity arithmetic 8+53+78+54 = 193 CKB derived
+from the module's own constants, and WINNER_TEMPLATE_SHA256 verified with
+sha256sum against the real repo-root ticketWinner.png. Only deviation: rustfmt
+alphabetised the `mod` declarations in lib.rs, so `pub mod memento;` sits between
+lifecycle and redemption rather than beside claim — cosmetic, gate-required.
+Review dispatched (sonnet), told to check each of the six decode rejections is
+both enforced AND pinned, and to reason about which could be deleted with the
+suite still green.
+
+Task 6 (pure retire decision): dispatched (sonnet), BASE a70db65. This is the
+heart of the sub-project — both error directions are financial faults (retire
+too early and an owed prize is unclaimable forever; refuse wrongly and the claim
+plus its capacity are stranded), and the dispatch says so. Carried the Task 4
+deferred minor forward as context: the "every batch owes every winner a positive
+amount" premise is enforced in entitlements.rs, not here and not in seal.rs, so
+any comment must attribute it there. Also told it to DERIVE the winning and
+non-winning identities from the real draw rather than hardcoding a position —
+a non-winner test that accidentally picks a winning position asserts nothing.
