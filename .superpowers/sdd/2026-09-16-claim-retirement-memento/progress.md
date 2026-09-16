@@ -330,3 +330,19 @@ not retired, a claim is. Meaning survives from the rest of the sentence; not
 worth a fix round.
 
 Task 3: complete (commits de78023..71ff552, review clean after 1 fix round)
+Task 4: implementer DONE — commit 9112849, seal.rs only (+113). 132 -> 134,
+no_std + clippy + fmt clean. It built the multi-batch fixture (3,0,5,1) rather
+than the easy one, so the asserted total of 9 cannot be produced by counting
+non-empty shards. Review dispatched (sonnet).
+
+Correction: my Task 4 dispatch told the implementer seal.rs already had a
+`mod tests` block to model its fixture on. It did not — I asserted that without
+checking (the seal tests I had seen were in tests/integration/security_seal.rs).
+The implementer built one from lifecycle.rs/computed_draw.rs patterns and said
+so. Told the reviewer not to penalise the divergence, since the brief's premise
+was mine and false.
+
+Task 5 (memento codec): dispatched (sonnet), BASE 9112849, new files
+memento.rs + memento/tests.rs plus one line in lib.rs. Told to verify the 193
+CKB capacity arithmetic independently and STOP rather than adjust the test if it
+disagrees, and not to "correct" the committed sha256 template constant.
