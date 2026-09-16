@@ -75,11 +75,18 @@ fn fixture(amounts: &[u64], cursor_open: bool) -> Fx {
     }
     let prize_pool: u64 = amounts.iter().sum();
     let (_, depositor) = w.always_success();
-    let depositor = depositor.as_builder().args(pack_pbytes(b"depositor")).build();
+    let depositor = depositor
+        .as_builder()
+        .args(pack_pbytes(b"depositor"))
+        .build();
     let depositor_hash = World::participant_hash(&depositor);
     let mut liabilities = MmrHost::new();
     liabilities
-        .append(&daowow_core::leaf::liability_leaf(&depositor_hash, PRINCIPAL, 0))
+        .append(&daowow_core::leaf::liability_leaf(
+            &depositor_hash,
+            PRINCIPAL,
+            0,
+        ))
         .unwrap();
     let funding_data = SettlementFundingDataV3 {
         round_id: cfg.round_id,
@@ -381,11 +388,11 @@ fn principal_payout_then_redemptions_then_final_drain() {
     let built = build_redeem(&mut fx, &[1, 2], None, true);
     let cycles = expect_ok(&mut fx.w.context, &built.tx);
     println!("final-drain redemption cycles: {cycles}");
-    assert!(built
-        .tx
-        .outputs()
-        .into_iter()
-        .all(|o| o.type_().to_opt().map(|t| t.args().raw_data().len()) != Some(72)));
+    assert!(built.tx.outputs().into_iter().all(|o| o
+        .type_()
+        .to_opt()
+        .map(|t| t.args().raw_data().len())
+        != Some(72)));
 }
 
 #[test]

@@ -1455,3 +1455,226 @@ fn phase2_rejects_arbitrary_operator_output() {
     let e = expect_fail(&mut r.world.context, &tx);
     println!("phase-2 arbitrary operator output rejected: {:?}", e);
 }
+
+#[test]
+fn phase2_prize_redeems_by_claim_then_final_drain() {
+    use daowow_core::redemption::{prize_obligation_key, prize_source};
+    let (mut r, creation) = phase2_fixture();
+    expect_ok(&mut r.world.context, &creation);
+    let cfg = full_config(&r.cfg, &r.world.deps);
+    let (_, receipt_bytes) = r
+        .world
+        .cell(&creation.cell_deps().get(1).unwrap().out_point());
+    let receipt = daowow_core::lifecycle::BatchCommitment::decode(&receipt_bytes).unwrap();
+    let (_, entropy_bytes) = r
+        .world
+        .cell(&creation.cell_deps().get(2).unwrap().out_point());
+    let record = daowow_core::seal::EntropyRecord::decode(&entropy_bytes, &cfg).unwrap();
+    let raw = creation.witnesses().get(0).unwrap().raw_data();
+    let witness = WitnessArgs::from_slice(&raw).unwrap();
+    let payload = witness.output_type().to_opt().unwrap().raw_data();
+    let evidence = daowow_core::entitlement_witness::EntitlementWitness::decode(&payload).unwrap();
+    let funding =
+        SettlementFundingDataV3::decode(&creation.outputs_data().get(0).unwrap().raw_data())
+            .unwrap();
+    let entitlement = daowow_core::entitlements::InitialEntitlements::derive(
+        &cfg,
+        &record,
+        evidence.schedule(),
+        &daowow_core::entitlements::EntitlementInput {
+            batch_id: funding.batch_id,
+            receipt: &receipt,
+            entries: evidence.entries(),
+            capacities: evidence.capacities(),
+            realized_total: funding.realized_total,
+        },
+    )
+    .unwrap();
+    // every drawn ticket of shard 0 holds one prize; principal has no prize
+    assert!(!entitlement.prizes().is_empty());
+    assert_eq!(entitlement.liabilities().len(), 1);
+    assert_eq!(entitlement.liabilities()[0].prize, 0);
+    assert_eq!(
+        entitlement.prizes().iter().map(|p| p.amount).sum::<u64>(),
+        funding.prize_pool
+    );
+    let commitment = cfg.commitment();
+    let ticket_count = record.seal().ledger(0).unwrap().accepted_tickets();
+    let positions: Vec<u64> = entitlement
+        .prizes()
+        .iter()
+        .map(|p| {
+            (0..ticket_count)
+                .find(|pos| daowow_core::ticket::ticket_id(&commitment, 0, *pos) == p.ticket)
+                .expect("prize ticket is an accepted shard-0 ticket")
+        })
+        .collect();
+
+    let creation = r.world.context.complete_tx(creation.clone());
+    let funding_op = OutPoint::new(creation.hash(), 0);
+    r.world.context.create_cell_with_out_point(
+        funding_op.clone(),
+        creation.outputs().get(0).unwrap(),
+        creation.outputs_data().get(0).unwrap().raw_data(),
+    );
+    let funding_cell = creation.outputs().get(0).unwrap();
+
+    // 1. every winning claim redeems its prize, non-final: the cell keeps the
+    //    principal (a small prize pool cannot carry the cell's occupied floor)
+    let (_, holder) = r.world.always_success();
+    let holder = holder.as_builder().args(pack_pbytes(b"winner")).build();
+    let source = prize_source(&cfg.commitment(), funding.batch_id, &receipt.digest);
+    let mut prizes = daowow_core::accumulator::mmr::host::MmrHost::new();
+    for p in entitlement.prizes() {
+        prizes
+            .append(&daowow_core::leaf::prize_leaf(&p.ticket, p.amount))
+            .unwrap();
+    }
+    assert_eq!(prizes.root().unwrap(), funding.prize_root);
+    let (sponsor, sponsor_lock) = r.world.funding_cell(1_000 * SHANNONS);
+    let mut redeem = TransactionBuilder::default()
+        .cell_dep(r.world.round_config_dep(&r.round_op))
+        .input(CellInput::new(funding_op.clone(), 0))
+        .input(CellInput::new(sponsor, 0));
+    let mut after_redeem = funding;
+    after_redeem.prize_paid = funding.prize_pool;
+    let mut gifts = 0u64;
+    let mut outputs: Vec<(CellOutput, Bytes)> = vec![(
+        funding_cell
+            .clone()
+            .as_builder()
+            .capacity(pack_u64(funding.realized_total - funding.prize_pool))
+            .build(),
+        Bytes::from(after_redeem.encode().to_vec()),
+    )];
+    let mut owned: Vec<(u32, u32, u64, u64, Vec<u8>, Vec<u8>)> = Vec::new();
+    for (index, (p, position)) in entitlement.prizes().iter().zip(&positions).enumerate() {
+        let (claim_op, claim_args) = seed_claim(&mut r.world, &holder, 0, *position);
+        let (claim_cell, claim_data) = r.world.cell(&claim_op);
+        redeem = redeem.input(CellInput::new(claim_op, 0));
+        let paid = SmtHost::new();
+        let key = prize_obligation_key(&claim_args.ticket_id(), &source);
+        let absence = paid.absence_proof(&[key]).unwrap();
+        let state = daowow_core::redemption::PrizeRedemptionState::decode(&claim_data).unwrap();
+        let next = state
+            .record_verified_prize(&source, p.amount, &absence)
+            .unwrap();
+        outputs.push((claim_cell, Bytes::from(next.encode().to_vec())));
+        let payment_index = outputs.len() as u32;
+        // a prize below a cell's occupied capacity is topped up by the sponsor
+        let payment_capacity = p.amount.max(49 * SHANNONS);
+        gifts += payment_capacity - p.amount;
+        outputs.push((
+            CellOutputBuilder::default()
+                .capacity(pack_u64(payment_capacity))
+                .lock(holder.clone())
+                .build(),
+            Bytes::new(),
+        ));
+        owned.push((
+            2 + index as u32,
+            payment_index,
+            index as u64,
+            p.amount,
+            prizes.membership_proof(index as u64).unwrap(),
+            absence,
+        ));
+    }
+    let items: Vec<daowow_core::witness::RedemptionItem> = owned
+        .iter()
+        .map(
+            |(c, pay, x, a, m, ab)| daowow_core::witness::RedemptionItem {
+                claim_input_index: *c,
+                payment_output_index: *pay,
+                prize_index: *x,
+                amount: *a,
+                mmr_proof: m,
+                absence_proof: ab,
+            },
+        )
+        .collect();
+    redeem = redeem.witness(redemption_witness(&items));
+    for (cell, data) in outputs {
+        redeem = redeem.output(cell).output_data(data.pack());
+    }
+    let redeem = redeem
+        .output(
+            CellOutputBuilder::default()
+                .capacity(pack_u64(900 * SHANNONS - gifts))
+                .lock(sponsor_lock)
+                .build(),
+        )
+        .output_data(Bytes::new().pack())
+        .build();
+    let cycles = expect_ok(&mut r.world.context, &redeem);
+    println!(
+        "end-to-end redemption of {} prizes cycles={cycles} pool={} sponsor_topup={gifts}",
+        positions.len(),
+        funding.prize_pool
+    );
+    chain_cell(&mut r.world, &funding_op, &redeem, 0);
+    // 2. principal to the depositor as the final drain: prizes are complete
+    let item = entitlement.liabilities()[0];
+    let (_, base_lock) = r.world.always_success();
+    let entry = evidence.entries()[0];
+    let depositor = base_lock
+        .clone()
+        .as_builder()
+        .args(Bytes::from(entry.entry_nonce.to_le_bytes().to_vec()).pack())
+        .build();
+    let depositor = if World::participant_hash(&depositor) == item.participant_lock_hash {
+        depositor
+    } else {
+        base_lock.clone()
+    };
+    assert_eq!(
+        World::participant_hash(&depositor),
+        item.participant_lock_hash
+    );
+    let mut liabilities = daowow_core::accumulator::mmr::host::MmrHost::new();
+    liabilities
+        .append(&daowow_core::leaf::liability_leaf(
+            &item.participant_lock_hash,
+            item.principal,
+            item.prize,
+        ))
+        .unwrap();
+    let proof = liabilities.membership_proof(0).unwrap();
+    let args = depositor.args().raw_data();
+    let code = depositor.code_hash().raw_data();
+    let payout_witness = daowow_core::witness::encode_settlement_witness(&[(
+        args.as_ref(),
+        code.as_ref(),
+        u8::from(depositor.hash_type()),
+        &item,
+        proof.as_slice(),
+    )]);
+    let (sponsor, sponsor_lock) = r.world.funding_cell(1_000 * SHANNONS);
+    let payout = TransactionBuilder::default()
+        .cell_dep(r.world.round_config_dep(&r.round_op))
+        .input(CellInput::new(funding_op.clone(), 0))
+        .input(CellInput::new(sponsor, 0))
+        .witness(Bytes::from(payout_witness).pack())
+        .output(
+            CellOutputBuilder::default()
+                .capacity(pack_u64(item.principal))
+                .lock(depositor)
+                .build(),
+        )
+        .output_data(Bytes::new().pack())
+        .output(
+            CellOutputBuilder::default()
+                .capacity(pack_u64(900 * SHANNONS))
+                .lock(sponsor_lock)
+                .build(),
+        )
+        .output_data(Bytes::new().pack())
+        .build();
+    let cycles = expect_ok(&mut r.world.context, &payout);
+    println!("end-to-end final principal drain cycles={cycles}");
+    assert!(payout.outputs().into_iter().all(|o| o
+        .type_()
+        .to_opt()
+        .map(|t| t.args().raw_data().len())
+        != Some(72)));
+}
