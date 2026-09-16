@@ -76,8 +76,14 @@ impl InitialEntitlements {
                 if *prize_index != i as u64 {
                     return Err(CoreError::StateTransition);
                 }
+                // A zero here can never be discharged: record_verified_prize
+                // rejects amount == 0, and the only other evidence the batch
+                // owed this ticket nothing is a funding cell the final drain
+                // consumes. The viability gate in ComputedDraw makes this
+                // unreachable for a round drawn under it; configs predating
+                // that gate still exist, so refuse rather than skip.
                 if amount == 0 {
-                    continue;
+                    return Err(CoreError::Conservation);
                 }
                 let (shard_id, local) = draw.locate(*position)?;
                 prizes.push(PrizeEntitlement {

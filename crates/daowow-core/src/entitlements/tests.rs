@@ -8,6 +8,7 @@ use crate::{
     leaf::{liability_leaf, prize_leaf},
     lifecycle::{batch_id, AggregationState},
     ticket::ticket_id,
+    CoreError,
 };
 use alloc::vec;
 
@@ -127,7 +128,15 @@ fn prize_domain_conserves_and_is_sorted_and_unique() {
 }
 
 #[test]
-fn zero_yield_omits_zero_total_winner_only_records() {
+fn a_success_round_with_zero_realized_yield_is_refused() {
+    // realized_total == principal_total, so prize_pool is exactly 0 and
+    // every drawn position allocates zero. This used to be tolerated by
+    // silently omitting all winner records (the same class of defect
+    // fixed in a_batch_allocating_zero_to_a_drawn_position_is_refused,
+    // just uniform across every position instead of a subset): the guard
+    // added there is unconditional on `amount == 0`, so a genuine
+    // zero-yield successful draw is refused rather than settled with an
+    // empty prize list.
     let f = fixture(1, true);
     let receipt = receipt(&f, 0);
     let input = EntitlementInput {
@@ -137,18 +146,10 @@ fn zero_yield_omits_zero_total_winner_only_records() {
         capacities: &[250],
         realized_total: 250,
     };
-    let e = InitialEntitlements::derive(&f.cfg, &f.record, &f.schedule, &input).unwrap();
     assert_eq!(
-        e.liabilities(),
-        &[PayoutItem {
-            participant_lock_hash: [10; 32],
-            principal: 250,
-            prize: 0
-        }]
+        InitialEntitlements::derive(&f.cfg, &f.record, &f.schedule, &input),
+        Err(CoreError::Conservation)
     );
-    assert_eq!(e.funding().liability_count, 1);
-    assert!(e.prizes().is_empty());
-    assert_eq!(e.funding().prize_count, 0);
 }
 
 #[test]
@@ -411,4 +412,38 @@ fn receipt_replay_is_bounded_and_maximum_realized_value_conserves() {
         ..input
     };
     assert!(InitialEntitlements::derive(&f.cfg, &f.record, &f.schedule, &invalid).is_err());
+}
+
+#[test]
+fn a_batch_allocating_zero_to_a_drawn_position_is_refused() {
+    // Fixture schedule weights [4,3,2,1] (sum 10) draw 4 positions. A pool of
+    // 2 allocates floor(2*w_i/10) = 0 to every position before dust; the dust
+    // of 2 lands entirely on position 0, leaving positions 1..3 at zero. A
+    // pool smaller than the number of drawn positions cannot pay them all.
+    // This is unreachable through the viability gate and is pinned anyway:
+    // it is the invariant the retirement count argument rests on.
+    let f = fixture(1, true);
+    let receipt = receipt(&f, 0);
+    let input = EntitlementInput {
+        batch_id: batch_id(0, 0).unwrap(),
+        receipt: &receipt,
+        entries: &f.entries[0][..1],
+        capacities: &[250],
+        realized_total: receipt.input_capacity + 2,
+    };
+    assert_eq!(
+        InitialEntitlements::derive(&f.cfg, &f.record, &f.schedule, &input),
+        Err(CoreError::Conservation)
+    );
+}
+
+#[test]
+fn pool_size_alone_is_not_the_condition() {
+    // weights [1,1,1000] with pool 3 allocates [1,0,2]: the pool exceeds the
+    // position count and a position is still zero, so the guard must test
+    // the computed allocation, not the pool.
+    assert_eq!(
+        crate::accounting::allocate_prizes_complete(&[1, 1, 1000], 3),
+        Ok(vec![1, 0, 2])
+    );
 }
