@@ -804,6 +804,52 @@ pub fn seed_paid_claim(
     (op, args)
 }
 
+/// A claim for `round.winning_shard/position`, pre-loaded with `count`
+/// recorded sources (out of the round's real obligation universe), using the
+/// round's real `prize_source` identities in order. `count < round.universe`
+/// leaves the claim owing the rest, so `retire_decision` refuses it as an
+/// incomplete winner (`CLAIM_ERROR_INCOMPLETE`); `count == round.universe`
+/// matches `seed_paid_claim`'s fully discharged winner.
+pub fn seed_claim_with_paid_count(
+    world: &mut World,
+    lock: &Script,
+    round: &SealedRound,
+    count: u64,
+) -> (OutPoint, daowow_core::claim::ClaimArgs) {
+    let args = daowow_core::claim::ClaimArgs {
+        commitment: world.config_hash,
+        shard_id: round.winning_shard,
+        position: round.winning_position,
+    };
+    let ticket = args.ticket_id();
+    let mut host = SmtHost::new();
+    let mut state = daowow_core::redemption::PrizeRedemptionState::new(ticket);
+    for (i, (batch_id, digest)) in round.batches.iter().take(count as usize).enumerate() {
+        let source = daowow_core::redemption::prize_source(&world.config_hash, *batch_id, digest);
+        let key = daowow_core::redemption::prize_obligation_key(&ticket, &source);
+        let absence = host.absence_proof(&[key]).unwrap();
+        let amount = (i as u64 + 1) * SHANNONS;
+        state = state
+            .record_verified_prize(&source, amount, &absence)
+            .unwrap();
+        host.insert(
+            &key,
+            &daowow_core::redemption::prize_payment_leaf(&ticket, &source, amount),
+        )
+        .unwrap();
+    }
+    let type_script = world.claim_type_script(round.winning_shard, round.winning_position);
+    let cell = CellOutputBuilder::default()
+        .capacity(pack_u64(claim_cell_capacity(lock)))
+        .lock(lock.clone())
+        .type_(Some(type_script).pack())
+        .build();
+    let op = world
+        .context
+        .create_cell(cell, Bytes::from(state.encode().to_vec()));
+    (op, args)
+}
+
 /// Retire `claim_op` (a fully paid winner) with no successor, minting its
 /// memento at `round.winning_shard/position` under `lock`. Mirrors the
 /// accepted non-winner retirement shape, adding the memento output the
