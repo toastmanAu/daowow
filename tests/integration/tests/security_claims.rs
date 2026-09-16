@@ -236,6 +236,7 @@ const CLAIM_TRANSITION: &str = "-95";
 const CLAIM_GROUP: &str = "-93";
 const CLAIM_RETIRE: &str = "-96";
 const CLAIM_REDEEM: &str = "-97";
+const CLAIM_UNIVERSE: &str = "-98";
 
 #[test]
 fn append_without_a_claim_per_ticket_is_rejected() {
@@ -518,5 +519,8 @@ fn burning_a_claim_is_rejected() {
         )
         .output_data(Bytes::new().pack())
         .build();
-    expect_code(&mut f, &tx, CLAIM_RETIRE);
+    // No entropy record or round config is offered as evidence, so retirement
+    // now fails at the sealed-round authentication step rather than the old
+    // unconditional refusal.
+    expect_code(&mut f, &tx, CLAIM_UNIVERSE);
 }

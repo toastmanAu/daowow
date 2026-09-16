@@ -358,6 +358,7 @@ const SETTLE_REDEEM: &str = "-77";
 const CLAIM_TRANSITION: &str = "-95";
 const CLAIM_RETIRE: &str = "-96";
 const CLAIM_REDEEM: &str = "-97";
+const CLAIM_UNIVERSE: &str = "-98";
 
 fn code_of(err: &ckb_testtool::ckb_error::Error) -> String {
     let text = format!("{err}");
@@ -554,7 +555,16 @@ fn missing_claim_successor_is_rejected() {
         outputs.remove(1);
         items[0].1 -= 1;
     });
-    expect_code(&mut fx, &built.tx, &[SETTLE_REDEEM, CLAIM_RETIRE]);
+    // With no successor, the claim's own script now attempts a real
+    // retirement and fails at the sealed-round evidence lookup (no entropy
+    // record or schedule witness is offered) rather than the old
+    // unconditional refusal; script-hash execution order decides which of
+    // the two failing groups (settlement or claim) reports first.
+    expect_code(
+        &mut fx,
+        &built.tx,
+        &[SETTLE_REDEEM, CLAIM_RETIRE, CLAIM_UNIVERSE],
+    );
 }
 
 #[test]

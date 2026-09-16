@@ -25,8 +25,9 @@ pub enum CoreError {
 //   -56..-70   dao-lock
 //   -71..-85   settlement-type
 //   -86..-90   accumulator-bench
-//   -91..-100  claim mode of entry-shard-type
-//   -101..-128 reserved
+//   -91..-99   claim mode of entry-shard-type
+//   -100..-103 memento mode of entry-shard-type
+//   -104..-128 reserved
 pub mod codes {
     // shared
     pub const ERROR_ENCODING: i8 = -1;
@@ -97,6 +98,13 @@ pub mod codes {
     pub const CLAIM_ERROR_TRANSITION: i8 = -95;
     pub const CLAIM_ERROR_RETIRE: i8 = -96;
     pub const CLAIM_ERROR_REDEEM: i8 = -97;
+    pub const CLAIM_ERROR_UNIVERSE: i8 = -98;
+    pub const CLAIM_ERROR_INCOMPLETE: i8 = -99;
+    // memento mode of entry-shard-type (reserved range -100..)
+    pub const MEMENTO_ERROR_ARGS: i8 = -100;
+    pub const MEMENTO_ERROR_DATA: i8 = -101;
+    pub const MEMENTO_ERROR_GROUP: i8 = -102;
+    pub const MEMENTO_ERROR_MINT: i8 = -103;
 }
 
 impl CoreError {

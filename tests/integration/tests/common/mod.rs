@@ -586,6 +586,150 @@ pub fn chain_cell(world: &mut World, op: &OutPoint, tx: &TransactionView, out_in
         .create_cell_with_out_point(op.clone(), output, data);
 }
 
+/// A fully sealed round (every shard frozen, aggregated in a single batch
+/// and closed) plus a canonical entropy record cell dep, for retirement
+/// tests. `total_tickets` must divide evenly across `shards`.
+pub struct SealedRound {
+    pub config_dep: CellDep,
+    pub entropy_dep: CellDep,
+    pub schedule: daowow_core::schedule::PrizeSchedule,
+    pub non_winning_shard: u32,
+    pub non_winning_position: u64,
+    pub winning_shard: u32,
+    pub winning_position: u64,
+    pub prize_index: u32,
+    pub universe: u64,
+}
+
+/// Raw witness carrying the committed prize schedule, as `retire()` expects
+/// it at `witnesses[0]` of the retiring claim's group input (not wrapped in
+/// a `WitnessArgs`).
+pub fn schedule_witness(
+    schedule: &daowow_core::schedule::PrizeSchedule,
+) -> ckb_testtool::ckb_types::packed::Bytes {
+    pack_pbytes(&schedule.encode())
+}
+
+/// Build a sealed round with `shards` entry shards sharing `total_tickets`
+/// evenly, seal it, and register the canonical entropy record as a cell dep.
+/// Identifies one non-winning and one winning `(shard_id, position)` from the
+/// real computed draw so retirement tests exercise both branches.
+pub fn sealed_round_with_entropy(
+    world: &mut World,
+    shards: u32,
+    total_tickets: u64,
+) -> SealedRound {
+    assert_eq!(
+        total_tickets % shards as u64,
+        0,
+        "sealed_round_with_entropy: total_tickets must divide evenly across shards"
+    );
+    let tickets_per_shard = total_tickets / shards as u64;
+    let schedule = default_prize_schedule();
+    let round_id = daowow_core::hash::ckb_hash256(&[
+        b"claim-retirement-fixture",
+        &shards.to_le_bytes(),
+        &total_tickets.to_le_bytes(),
+    ]);
+    let mut base_cfg = default_config(round_id, ACC_MMR);
+    base_cfg.entry_shard_count = shards;
+    base_cfg.minimum_tickets = 1;
+    base_cfg.prize_schedule_hash = schedule.commitment();
+    let round_op = world.create_round(&base_cfg);
+    let cfg = full_config(&base_cfg, &world.deps);
+
+    let mut ledgers = Vec::new();
+    for shard_id in 0..shards {
+        let entries: Vec<EntryDataV1> = (0..tickets_per_shard)
+            .map(|nonce| EntryDataV1 {
+                round_id: cfg.round_id,
+                shard_id,
+                participant_lock_hash: [0x11; 32],
+                ticket_count: 1,
+                principal: cfg.ticket_price,
+                position_base: nonce,
+                entry_nonce: nonce,
+                entropy_commitment: [nonce as u8; 32],
+            })
+            .collect();
+        let leaves: Vec<Hash32> = entries.iter().map(daowow_core::leaf::entry_leaf).collect();
+        let mut host = daowow_core::accumulator::mmr::host::MmrHost::new();
+        for leaf in &leaves {
+            host.append(leaf).unwrap();
+        }
+        let root = host.root().unwrap();
+        let proofs: Vec<Vec<u8>> = (0..tickets_per_shard)
+            .map(|i| host.membership_proof(i).unwrap())
+            .collect();
+        let proof_refs: Vec<&[u8]> = proofs.iter().map(Vec::as_slice).collect();
+        let frozen = EntryShardDataV1 {
+            round_id: cfg.round_id,
+            shard_id,
+            state: SHARD_STATE_FROZEN,
+            sequence: tickets_per_shard,
+            entry_count: tickets_per_shard,
+            ticket_count: tickets_per_shard,
+            principal_total: tickets_per_shard * cfg.ticket_price,
+            accumulator_root: root,
+        };
+        let capacities = vec![1000 * SHANNONS; tickets_per_shard as usize];
+        let state = daowow_core::lifecycle::AggregationState::new(&cfg, &frozen).unwrap();
+        let (accepted, _receipt) = state
+            .accept(&cfg, &entries, &capacities, &proof_refs)
+            .unwrap();
+        let closed = accepted
+            .close(&cfg, daowow_core::epoch::absolute_epoch_since(200).unwrap())
+            .unwrap();
+        ledgers.push(closed);
+    }
+
+    let seal = daowow_core::seal::RoundSeal::new(&cfg, &ledgers).unwrap();
+    let record =
+        daowow_core::seal::EntropyRecord::new(seal, 300, [1; 32], [[2; 32], [3; 32], [4; 32]])
+            .unwrap();
+    let universe = record.seal().total_accepted_batches().unwrap();
+
+    let draw = daowow_core::computed_draw::ComputedDraw::new(&cfg, &record, &schedule).unwrap();
+    let total = draw.total_tickets();
+    let drawn = draw.positions();
+    let (prize_index, winning_global) = drawn[0];
+    let (winning_shard, winning_position) = draw.locate(winning_global).unwrap();
+    let non_winning_global = (0..total)
+        .find(|p| !drawn.iter().any(|(_, g)| g == p))
+        .expect("sealed_round_with_entropy: no non-winning ticket in this fixture");
+    let (non_winning_shard, non_winning_position) = draw.locate(non_winning_global).unwrap();
+
+    let public_lock = world.shard_public_lock();
+    let shard_ref = world.deps.entry_shard_type;
+    let mut entropy_args = cfg.commitment().to_vec();
+    entropy_args.extend_from_slice(&0u32.to_le_bytes());
+    let entropy_type = world.script_for(&shard_ref, Bytes::from(entropy_args));
+    let entropy_op = world.context.create_cell(
+        CellOutputBuilder::default()
+            .capacity(pack_u64(60_000 * SHANNONS))
+            .lock(public_lock)
+            .type_(Some(entropy_type).pack())
+            .build(),
+        Bytes::from(record.encode()),
+    );
+    let entropy_dep = CellDepBuilder::default()
+        .out_point(entropy_op)
+        .dep_type(pack_byte(DepType::Code as u8))
+        .build();
+
+    SealedRound {
+        config_dep: world.round_config_dep(&round_op),
+        entropy_dep,
+        schedule,
+        non_winning_shard,
+        non_winning_position,
+        winning_shard,
+        winning_position,
+        prize_index: prize_index as u32,
+        universe,
+    }
+}
+
 pub fn expect_fail(context: &mut Context, tx: &TransactionView) -> ckb_testtool::ckb_error::Error {
     let tx = context.complete_tx(tx.clone());
     match context.verify_tx(&tx, MAX_CYCLES) {

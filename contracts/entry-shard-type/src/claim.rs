@@ -5,7 +5,10 @@
 //! A data change is a redemption: one settlement funding cell of this round
 //! transitions in the same transaction and names this claim in its redemption
 //! witness; the output state is exactly the input with that source recorded.
-//! Burn (retirement) is rejected until sub-project 3 authenticates it.
+//! Burn (retirement) is authenticated against the sealed round: nothing may
+//! still be owed.
+
+use alloc::vec::Vec;
 
 use ckb_std::ckb_constants::Source;
 use ckb_std::ckb_types::packed::Script;
@@ -86,7 +89,13 @@ pub fn run(script: &Script) -> Result<i8, i8> {
                 Err(_) => err(CLAIM_ERROR_DATA),
             }
         }
-        (true, None) => err(CLAIM_ERROR_RETIRE),
+        (true, None) => {
+            let input = match load_cell_data(0, Source::GroupInput) {
+                Ok(d) => d,
+                Err(_) => return err(CLAIM_ERROR_DATA),
+            };
+            retire(script, &args, &input)
+        }
         (false, None) => err(CLAIM_ERROR_GROUP),
     }
 }
@@ -179,6 +188,127 @@ fn redeem(script: &Script, args: &ClaimArgs, input: &[u8], output: &[u8]) -> Res
         .map_err(|_| CLAIM_ERROR_REDEEM)?;
     if output != expected.encode() {
         return err(CLAIM_ERROR_REDEEM);
+    }
+    Ok(0)
+}
+
+/// Locate the canonical entropy record of this round among the cell deps: a
+/// cell of this binary with args `commitment || 0u32` whose data is a version-4
+/// record. Returns its bytes and the round id the seal's first frozen snapshot
+/// carries at bytes 7..39 (the seal puts it at 6..38; the record's tag shifts
+/// it by one).
+fn entropy_record_dep(script: &Script, args: &ClaimArgs) -> Result<(Vec<u8>, [u8; 32]), i8> {
+    let mut expect = [0u8; 36];
+    expect[..32].copy_from_slice(&args.commitment);
+    let mut i = 0usize;
+    while let Ok(cell) = load_cell(i, Source::CellDep) {
+        if let Some(t) = cell.type_().to_opt() {
+            if t.code_hash() == script.code_hash()
+                && t.hash_type() == script.hash_type()
+                && t.args().raw_data().as_ref() == expect
+            {
+                if let Ok(data) = load_cell_data(i, Source::CellDep) {
+                    if data.first() == Some(&4) && data.len() > 39 {
+                        let round: [u8; 32] =
+                            data[7..39].try_into().map_err(|_| CLAIM_ERROR_UNIVERSE)?;
+                        return Ok((data, round));
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+    Err(CLAIM_ERROR_UNIVERSE)
+}
+
+/// Consume the claim with no successor. Authenticates the sealed round from
+/// cell deps, derives the draw, and requires the paid-source count to equal the
+/// obligation universe for a winner or zero for a non-winner. A winner must
+/// issue exactly one memento of this identity; a non-winner none.
+fn retire(script: &Script, args: &ClaimArgs, input: &[u8]) -> Result<i8, i8> {
+    let state = PrizeRedemptionState::decode(input).map_err(|_| CLAIM_ERROR_DATA)?;
+    let (record_bytes, round_id) = entropy_record_dep(script, args)?;
+    let cfg =
+        daowow_contracts_common::config_by_commitment(&args.commitment, &round_id, Source::CellDep)
+            .ok_or(CLAIM_ERROR_UNIVERSE)?;
+    let record = daowow_core::seal::EntropyRecord::decode(&record_bytes, &cfg)
+        .map_err(|_| CLAIM_ERROR_UNIVERSE)?;
+    let witness = ckb_std::high_level::load_witness(0, Source::GroupInput)
+        .map_err(|_| CLAIM_ERROR_UNIVERSE)?;
+    let schedule =
+        daowow_core::schedule::PrizeSchedule::decode_committed(&witness, &cfg.prize_schedule_hash)
+            .map_err(|_| CLAIM_ERROR_UNIVERSE)?;
+    let draw = daowow_core::computed_draw::ComputedDraw::new(&cfg, &record, &schedule)
+        .map_err(|_| CLAIM_ERROR_UNIVERSE)?;
+    let universe = record
+        .seal()
+        .total_accepted_batches()
+        .map_err(|_| CLAIM_ERROR_UNIVERSE)?;
+    let decision = match daowow_core::claim::retire_decision(args, &state, &draw, universe) {
+        Ok(d) => d,
+        Err(daowow_core::CoreError::StateTransition) => return err(CLAIM_ERROR_INCOMPLETE),
+        Err(_) => return err(CLAIM_ERROR_DATA),
+    };
+    let expected_index = match decision {
+        daowow_core::claim::RetireDecision::NonWinner => None,
+        daowow_core::claim::RetireDecision::Winner { prize_index } => Some(prize_index),
+    };
+    check_memento_outputs(script, args, &state, expected_index)
+}
+
+/// Exactly one memento output of this identity for a winner, none otherwise.
+/// The memento script only asserts that it stands beside a retiring claim; all
+/// of its content is authenticated here, where the draw is already in hand.
+fn check_memento_outputs(
+    script: &Script,
+    args: &ClaimArgs,
+    state: &PrizeRedemptionState,
+    expected_index: Option<u32>,
+) -> Result<i8, i8> {
+    let expect_args = daowow_core::memento::MementoArgs {
+        commitment: args.commitment,
+        shard_id: args.shard_id,
+        position: args.position,
+    }
+    .encode();
+    let in_lock = load_cell(0, Source::GroupInput)
+        .map_err(|_| CLAIM_ERROR_DATA)?
+        .lock();
+    let mut found = 0usize;
+    let mut i = 0usize;
+    while let Ok(cell) = load_cell(i, Source::Output) {
+        if let Some(t) = cell.type_().to_opt() {
+            if t.code_hash() == script.code_hash()
+                && t.hash_type() == script.hash_type()
+                && t.args().raw_data().as_ref() == expect_args
+            {
+                found += 1;
+                if found > 1 {
+                    return err(CLAIM_ERROR_RETIRE);
+                }
+                let Some(prize_index) = expected_index else {
+                    return err(CLAIM_ERROR_RETIRE);
+                };
+                if cell.lock().as_slice() != in_lock.as_slice() {
+                    return err(CLAIM_ERROR_RETIRE);
+                }
+                let expected = daowow_core::memento::MementoData {
+                    renderer_version: daowow_core::memento::MEMENTO_RENDERER_V1,
+                    prize_index,
+                    paid_count: state.paid_count(),
+                    paid_total: state.paid_total(),
+                }
+                .encode();
+                let data = load_cell_data(i, Source::Output).map_err(|_| CLAIM_ERROR_RETIRE)?;
+                if data.as_ref() != expected {
+                    return err(CLAIM_ERROR_RETIRE);
+                }
+            }
+        }
+        i += 1;
+    }
+    if expected_index.is_some() && found != 1 {
+        return err(CLAIM_ERROR_RETIRE);
     }
     Ok(0)
 }
