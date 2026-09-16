@@ -429,3 +429,26 @@ than reasoning, per the standing lesson in ckb-transactions.feedback.md.
 NOTE: my Task 6 dispatch asserted the fixture would have a real undrawn ticket.
 It does not — 4 tickets, 4 prizes. Fourth unverified premise of mine this run.
 The instruction to flag rather than force a vacuous test is what caught it.
+Task 6: fix round 1/5 (1 addressed, 0 open — same-shard/different-position
+non-winner test added, out-of-range one kept; commits 2e1014d..fc5c6b5, tests
+only, retire_decision unchanged). 147 passing. The mutation round trip gave
+exactly the evidence asked for: deleting `|| position != args.position` turned
+the NEW test red while the OLD non-winner test stayed GREEN — which is what
+demonstrates the old test never bit that mutation. Scoped re-review dispatched
+(haiku), told to check whether the report SHOWS that second half with output or
+merely asserts it.
+
+Task 7 (claim retire mode, CONTRACT): dispatched (sonnet), BASE fc5c6b5. First
+on-chain code of this sub-project. Carried forward: retire_decision and
+total_accepted_batches already exist and must be called not reimplemented; the
+entropy record is the shard-zero cell with args commitment||0u32 and data tag 4;
+the round-id offset inside a record is 7..39 (told to VERIFY rather than trust
+me, since entropy.rs reads 6..38 from a bare seal); both ckb-testtool traps from
+this project's feedback log; and the fact that the harness has expect_ok but NO
+expect_err yet, so if it adds one it should take an exact expected i8 code
+because Task 10 needs it.
+
+HARNESS NOTE for Task 10: `expect_err` does not exist in
+tests/integration/tests/common/mod.rs — only expect_ok at line 560. The rejection
+suite needs it and every rejection test must assert an EXACT code, never a broad
+match.
