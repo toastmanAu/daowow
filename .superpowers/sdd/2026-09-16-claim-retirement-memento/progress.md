@@ -304,3 +304,18 @@ how a guard gets deleted, and it also contradicts the spec I corrected an hour
 ago. Fix round 1 dispatched (comment only, no logic). Corrected the wording at
 source in the plan too, so it cannot propagate to a later task's brief.
 Cost if wrong: none, comment-only.
+Task 3: fix round 1/5 (1 addressed, 0 open — comment rewritten to distinguish
+the structural case the draw gate removes from the zero-yield case it does not;
+commits 50ede8e..71ff552, comment-only). Scoped re-review dispatched (haiku),
+told to judge ACCURACY not merely change, and to flag an overcorrection that
+implies the draw gate does nothing.
+
+NOTE for the record: the task-*-report.md files are NOT in git. `.superpowers/sdd/.gitignore`
+contains `*`, so only progress.md survives because I force-add it. Verified with
+`git check-ignore -v`. The reports are on disk only — a `git clean -fdx` would
+destroy them. The ledger is the durable record; reports are convenience.
+
+Task 4 (obligation universe on the seal): dispatched (sonnet), BASE 71ff552,
+confined to seal.rs. Told not to weaken the test if building a multi-batch
+ledger is hard — a fixture where every shard has 0 or 1 batch would not catch a
+summation that ignores per-shard counts.
