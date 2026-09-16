@@ -584,3 +584,35 @@ so exactly one script group can reject, then assert the exact code.
 Cost if wrong: a widened assertion accepts a code that a future bug could also
 produce. Bounded here because both accepted codes are legitimate rejections of
 the same malformed transaction.
+Task 8: review spec MET, quality approved, no Critical/Important. Confirmed the
+memento mode stays in scope (no ComputedDraw, no cell_dep or witness reads at
+all), that dispatch distinguishes tag 5 from tag 6 and both decoders re-check
+their own tag independently, and that the winner test reads REAL state — the
+memento's paid_count/paid_total come from PrizeRedemptionState::decode of the
+claim's own cell data, not from asserted constants.
+
+It also settled the widened assertion properly rather than waving it through:
+for that specific malformed shape (two literally identical claim-args outputs)
+CLAIM_GROUP fires STRUCTURALLY regardless of whether the shard-level dedup check
+exists, because identical args collapse into one script group with two members.
+So the OR-assertion does not newly mask a regression of the shard check; the race
+was latent before this diff, just never observed. It still prefers restructuring
+so only one group can fail — noted for the final review.
+
+⚠️ item resolved by me, as required before completing the task: the reviewer
+could not verify from its diff that "each ticket has exactly one claim for its
+life", which is what makes duplicate memento issuance structurally impossible.
+Checked `validate_mint` in crates/daowow-core/src/claim.rs: claims.len() must
+equal after_tickets - before_tickets, every position must fall inside
+[before_tickets, after_tickets), and a `seen` array rejects any repeat within
+the transaction. Re-minting a consumed identity is impossible because the
+shard's ticket counter only advances, so a position range is never re-entered.
+The invariant holds; no gap.
+
+Task 8: minor (deferred): no memento-specific adversarial tests yet (missing
+memento for a paid winner, wrong renderer_version, wrong prize_index). Correct
+against this brief — they are Task 9's rejection suite.
+Task 8: minor (deferred): prefer restructuring duplicate_position_is_rejected so
+only one script group can fail, rather than accepting either code.
+
+Task 8: complete (commits 4461d8b..d3ec2da, review clean, 0 fix rounds)
