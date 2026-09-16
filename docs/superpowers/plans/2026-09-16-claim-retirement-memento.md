@@ -58,7 +58,7 @@ content check to the claim.
 | File | Responsibility |
 | --- | --- |
 | `crates/daowow-core/src/schedule.rs` | add `min_viable_pool` beside `allocate` |
-| `crates/daowow-core/src/computed_draw.rs` | add `VIABILITY_RATIO` and the success condition |
+| `crates/daowow-core/src/computed_draw.rs` | scale the test fixture's ticket price, then add `VIABILITY_RATIO` and the success condition |
 | `crates/daowow-core/src/seal.rs` | add `RoundSeal::total_accepted_batches` |
 | `crates/daowow-core/src/entitlements.rs` | reject a zero allocation |
 | `crates/daowow-core/src/memento.rs` (new) | `MementoArgs`, `MementoData`, capacity, template constant |
@@ -169,7 +169,101 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ---
 
-### Task 2: Void an unyieldable draw
+### Task 2: Scale the core draw fixture to a realistic ticket price
+
+**Files:**
+- Modify: `crates/daowow-core/src/computed_draw.rs:136` (`ticket_price: 100`) and the
+  entry principals in the same `fixture_with_accumulator` function
+- Modify: `crates/daowow-core/src/entitlements/tests.rs`, `crates/daowow-core/src/entitlement_witness.rs`
+  (assertions on absolute amounts)
+- Test: the existing core suite; no new tests
+
+**Interfaces:**
+- Consumes: nothing
+- Produces: a `computed_draw::tests` fixture whose rounds stay successful once
+  Task 3's viability gate lands
+
+**Why this task exists:** the fixture sets `ticket_price: 100` shannons. A
+100-shannon ticket cannot fund a cell, let alone a prize, so once Task 3 gates on
+`min_viable_pool(total) <= ticket_price / 1_000_000` every fixture round becomes a
+failed round. This was measured, not predicted: applying the gate to the current
+fixture fails exactly three tests —
+`computed_draw::tests::draws_only_accepted_prefixes_across_empty_shards`,
+`entitlement_witness::tests::decoded_evidence_derives_entitlements_and_rejects_altered_capacity`,
+and `entitlements::tests::success_round_credits_prizes_to_tickets_and_principal_to_depositors`.
+The gate is right; the fixture is economically incoherent. Fix the fixture first.
+
+- [ ] **Step 1: Record the baseline**
+
+Run: `cargo test -p daowow-core --lib 2>&1 | tail -3`
+Expected: `124 passed; 0 failed`. Write the number down; it must not change.
+
+- [ ] **Step 2: Scale the fixture by 10^8**
+
+In `fixture_with_accumulator` in `crates/daowow-core/src/computed_draw.rs`,
+multiply every CKB-denominated amount by `100_000_000` so a ticket costs 100 CKB,
+matching the integration harness. Every ratio stays identical:
+
+```rust
+            // 100 CKB. The [4,3,2,1] schedule's pool bar is 10 against an
+            // allowance of ticket_price / VIABILITY_RATIO = 10_000, so the
+            // viability gate added in Task 3 leaves these rounds successful.
+            ticket_price: 100 * 100_000_000,
+```
+
+and, in the entry construction inside the same function:
+
+```rust
+                    ticket_count: 2,
+                    principal: 200 * 100_000_000,
+```
+
+`AggregationState::new_bound` requires
+`frozen.ticket_count * cfg.ticket_price == frozen.principal_total`, and `accept`
+requires `entry.ticket_count * cfg.ticket_price == entry.principal`, so every
+other amount derived from these in the same function scales by the same factor.
+Read the whole function and scale each remaining literal or justify leaving it:
+position bases, entry nonces, shard ids, ticket counts and block heights are
+ordinals, not amounts, and must NOT scale.
+
+- [ ] **Step 3: Scale the dependent assertions**
+
+Run: `cargo test -p daowow-core --lib 2>&1 | tail -30`
+
+The three tests named above assert absolute amounts. Each expected value must
+become **exactly** its old value times `100_000_000`. For example
+`PayoutItem { principal: 250, prize: 100 }` becomes
+`PayoutItem { principal: 25_000_000_000, prize: 10_000_000_000 }`.
+
+**Stop and report if any produced value is not exactly old x 10^8.** That would
+mean integer rounding in `allocate_prizes` changes behaviour under scaling, which
+is a real finding about the allocation and not a fixture detail. Do not paper
+over it by pasting whatever the test happened to print.
+
+- [ ] **Step 4: Verify the whole suite**
+
+Run: `cargo test -p daowow-core --lib`
+Expected: `124 passed; 0 failed` — the same count as Step 1. A different count
+means a test was lost or silently added; investigate before continuing.
+
+- [ ] **Step 5: Check no_std and clippy**
+
+Run: `cargo check -p daowow-core --no-default-features && cargo clippy -p daowow-core --lib -- -D warnings`
+Expected: both clean.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add crates/daowow-core/src/computed_draw.rs crates/daowow-core/src/entitlements/tests.rs \
+        crates/daowow-core/src/entitlement_witness.rs
+git commit -m "test: give the core draw fixture a realistic ticket price
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
+### Task 3: Void an unyieldable draw
 
 **Files:**
 - Modify: `crates/daowow-core/src/computed_draw.rs:57` (the `if total != 0 && ...` condition)
@@ -188,7 +282,7 @@ The fixture in `computed_draw.rs` `mod tests` builds `cfg`, `record` and a
 ```rust
     #[test]
     fn an_unyieldable_schedule_voids_the_round() {
-        let f = Fixture::build(4, 8);
+        let f = fixture(1, true);
         // Sane schedule: bar 10 against allowance ticket_price / 1_000_000.
         let sane = PrizeSchedule::new(&[4, 3, 2, 1]).unwrap();
         assert!(sane.min_viable_pool(f.total_tickets()).unwrap() <= f.cfg.ticket_price / VIABILITY_RATIO);
@@ -212,7 +306,7 @@ The fixture in `computed_draw.rs` `mod tests` builds `cfg`, `record` and a
     fn viability_is_round_level_and_not_per_batch() {
         // Same (cfg, record, schedule) must give the same verdict every call,
         // because settlement and retirement both re-derive it independently.
-        let f = Fixture::build(4, 8);
+        let f = fixture(1, true);
         let a = ComputedDraw::new(&f.cfg, &f.record, &f.schedule).unwrap();
         let b = ComputedDraw::new(&f.cfg, &f.record, &f.schedule).unwrap();
         assert_eq!(a.is_success(), b.is_success());
@@ -220,8 +314,11 @@ The fixture in `computed_draw.rs` `mod tests` builds `cfg`, `record` and a
     }
 ```
 
-If `Fixture` has no `record_for(&cfg)` or `total_tickets()` helper, add them to
-the fixture in the same module — `record_for` rebuilds the `EntropyRecord` for a
+The fixture is the free function `fixture(minimum: u64, accept: bool)` in
+`computed_draw::tests`, returning `Fixture { cfg, record, schedule, entries, proofs }`.
+Add `record_for(&self, cfg: &RoundConfigV1) -> EntropyRecord`,
+`total_tickets(&self) -> u64` and `fixture_unviable(minimum, accept)` to that
+module — `record_for` rebuilds the `EntropyRecord` for a
 config whose `prize_schedule_hash` differs, and `total_tickets` returns the sum
 of the fixture's accepted ticket counts. Do not change the existing fixture's
 default behaviour.
@@ -287,7 +384,7 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ---
 
-### Task 3: Derivation refuses a zero allocation
+### Task 4: Derivation refuses a zero allocation
 
 **Files:**
 - Modify: `crates/daowow-core/src/entitlements.rs:79` (`if amount == 0 { continue; }`)
@@ -376,7 +473,7 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ---
 
-### Task 4: Obligation universe on the seal
+### Task 5: Obligation universe on the seal
 
 **Files:**
 - Modify: `crates/daowow-core/src/seal.rs` (inside `impl RoundSeal`, beside `ledger`)
@@ -450,7 +547,7 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ---
 
-### Task 5: Memento codec
+### Task 6: Memento codec
 
 **Files:**
 - Create: `crates/daowow-core/src/memento.rs`
@@ -709,14 +806,16 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ---
 
-### Task 6: Pure retire decision
+### Task 7: Pure retire decision
 
 **Files:**
 - Modify: `crates/daowow-core/src/claim.rs` (after `validate_transfer`)
 - Test: `crates/daowow-core/src/claim/tests.rs`
 
 **Interfaces:**
-- Consumes: `ComputedDraw::{positions, locate}` (Task 2), `RoundSeal::total_accepted_batches` (Task 4)
+- Consumes: `ComputedDraw::{positions, locate}` (Task 3). It does NOT call
+  `total_accepted_batches`: the universe arrives as the `universe: u64`
+  parameter, and Task 8's contract is what reads it off the seal.
 - Produces: `RetireDecision { NonWinner, Winner { prize_index: u32 } }` and
   `retire_decision(args: &ClaimArgs, state: &PrizeRedemptionState, draw: &ComputedDraw<'_>, universe: u64) -> Result<RetireDecision, CoreError>`
 
@@ -730,7 +829,7 @@ Add to `crates/daowow-core/src/claim/tests.rs`. Build the draw with the
 
     #[test]
     fn a_non_winner_retires_with_nothing_paid() {
-        let f = Fixture::build(4, 8);
+        let f = fixture(1, true);
         let draw = ComputedDraw::new(&f.cfg, &f.record, &f.schedule).unwrap();
         let args = f.non_winning_claim_args(&draw);
         let state = PrizeRedemptionState::new(args.ticket_id());
@@ -739,7 +838,7 @@ Add to `crates/daowow-core/src/claim/tests.rs`. Build the draw with the
 
     #[test]
     fn a_winner_retires_only_when_every_batch_is_discharged() {
-        let f = Fixture::build(4, 8);
+        let f = fixture(1, true);
         let draw = ComputedDraw::new(&f.cfg, &f.record, &f.schedule).unwrap();
         let (args, prize_index) = f.winning_claim_args(&draw);
         let state = f.state_with_paid_count(&args, 3);
@@ -757,7 +856,7 @@ Add to `crates/daowow-core/src/claim/tests.rs`. Build the draw with the
     #[test]
     fn a_non_winner_carrying_payments_is_refused() {
         // Only a drawn ticket can ever have redeemed; anything else is forged.
-        let f = Fixture::build(4, 8);
+        let f = fixture(1, true);
         let draw = ComputedDraw::new(&f.cfg, &f.record, &f.schedule).unwrap();
         let args = f.non_winning_claim_args(&draw);
         let state = f.state_with_paid_count(&args, 1);
@@ -766,7 +865,7 @@ Add to `crates/daowow-core/src/claim/tests.rs`. Build the draw with the
 
     #[test]
     fn state_belonging_to_another_ticket_is_refused() {
-        let f = Fixture::build(4, 8);
+        let f = fixture(1, true);
         let draw = ComputedDraw::new(&f.cfg, &f.record, &f.schedule).unwrap();
         let args = f.non_winning_claim_args(&draw);
         let state = PrizeRedemptionState::new([0xAB; 32]);
@@ -775,7 +874,7 @@ Add to `crates/daowow-core/src/claim/tests.rs`. Build the draw with the
 
     #[test]
     fn every_claim_of_a_voided_round_is_a_non_winner() {
-        let f = Fixture::build_unviable(4, 8);
+        let f = fixture_unviable(1, true);
         let draw = ComputedDraw::new(&f.cfg, &f.record, &f.schedule).unwrap();
         assert!(!draw.is_success());
         let args = f.any_claim_args();
@@ -784,9 +883,10 @@ Add to `crates/daowow-core/src/claim/tests.rs`. Build the draw with the
     }
 ```
 
-Add the fixture helpers `non_winning_claim_args`, `winning_claim_args`,
-`state_with_paid_count`, `any_claim_args` and `build_unviable` to
-`computed_draw::tests::Fixture`, making it `pub(crate)` where needed.
+Add `non_winning_claim_args`, `winning_claim_args`, `state_with_paid_count`,
+`any_claim_args` and `fixture_unviable` to `computed_draw::tests`, making each
+`pub(crate)`. The fixture is the free function `fixture(minimum, accept)`, not an
+associated constructor.
 `state_with_paid_count` builds a state by calling `record_verified_prize`
 `n` times with distinct synthetic sources and an SMT absence proof from the
 host accumulator, mirroring how `redemption/tests.rs` constructs paid states.
@@ -871,15 +971,15 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ---
 
-### Task 7: Claim retire mode (contract)
+### Task 8: Claim retire mode (contract)
 
 **Files:**
 - Modify: `crates/daowow-core/src/error.rs:99` (append codes)
 - Modify: `contracts/entry-shard-type/src/claim.rs:86` (`(true, None) => err(CLAIM_ERROR_RETIRE)`)
 
 **Interfaces:**
-- Consumes: `retire_decision`, `RetireDecision` (Task 6); `MementoArgs`,
-  `MementoData`, `MEMENTO_RENDERER_V1` (Task 5); `RoundSeal::total_accepted_batches` (Task 4);
+- Consumes: `retire_decision`, `RetireDecision` (Task 7); `MementoArgs`,
+  `MementoData`, `MEMENTO_RENDERER_V1` (Task 6); `RoundSeal::total_accepted_batches` (Task 5);
   `daowow_contracts_common::config_by_commitment`
 - Produces: the retire transition; no new public Rust API
 
@@ -1090,7 +1190,7 @@ Expected: PASS.
 
 Run: `ls -l target/riscv64imac-unknown-none-elf/release/entry-shard-type`
 Note the size against the 209,360-byte baseline; the growth is a deployment
-cost item for the results document in Task 11.
+cost item for the results document in Task 12.
 
 - [ ] **Step 7: Commit**
 
@@ -1104,14 +1204,14 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ---
 
-### Task 8: Memento mode (contract)
+### Task 9: Memento mode (contract)
 
 **Files:**
 - Create: `contracts/entry-shard-type/src/memento.rs`
 - Modify: `contracts/entry-shard-type/src/main.rs:72-80` (dispatch) and the `mod` list
 
 **Interfaces:**
-- Consumes: `MementoArgs`, `MementoData` (Task 5), `ClaimArgs` (shipped)
+- Consumes: `MementoArgs`, `MementoData` (Task 6), `ClaimArgs` (shipped)
 - Produces: the tag-6 script mode
 
 - [ ] **Step 1: Write the failing VM tests**
@@ -1293,13 +1393,13 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ---
 
-### Task 9: Rejection suite
+### Task 10: Rejection suite
 
 **Files:**
 - Create: `tests/integration/tests/security_retirement.rs`
 
 **Interfaces:**
-- Consumes: every helper from Tasks 7 and 8
+- Consumes: every helper from Tasks 8 and 9
 - Produces: nothing; a gate
 
 - [ ] **Step 1: Write the first rejection test in full**
@@ -1389,14 +1489,14 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ---
 
-### Task 10: Mutation probes
+### Task 11: Mutation probes
 
 **Files:**
 - No production changes; a verification pass with a written record
 
 **Interfaces:**
-- Consumes: the suites from Tasks 9 and 8
-- Produces: the evidence table for Task 11
+- Consumes: the suites from Tasks 10 and 9
+- Produces: the evidence table for Task 12
 
 - [ ] **Step 1: Probe each guard individually**
 
@@ -1445,7 +1545,7 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ---
 
-### Task 11: Devnet proof and handoff
+### Task 12: Devnet proof and handoff
 
 **Files:**
 - Modify: `tests/devnet/` (extend the existing claim lifecycle test)
