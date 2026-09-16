@@ -401,3 +401,31 @@ checks into two `if` blocks rather than one per condition; a maintainer adding a
 field must re-read the block to see which invariants exist. Stylistic.
 
 Task 5: complete (commits 9112849..a70db65, review clean, 0 fix rounds)
+Task 6: implementer DONE_WITH_CONCERNS — commit 2e1014d, 141 -> 146 (5 new).
+Concern 1: renamed a pre-existing local `fixture()` in claim/tests.rs to
+`mint_fixture()` to resolve a collision with the imported computed_draw fixture;
+mechanical, ~10 call sites, no assertion changed. Fine.
+Concern 2 (the one I asked it to flag rather than paper over): fixture(1, true)
+has 4 accepted tickets against a 4-weight schedule, so EVERY accepted ticket
+wins and there is no genuine accepted-but-undrawn ticket. It used an
+out-of-range identity (shard_id = entry_shard_count) instead and said so.
+
+Finding, found by following that concern up against the implementation: the
+membership test is `shard_id != args.shard_id || position != args.position`. An
+out-of-range shard makes the LEFT operand true for every drawn position, so the
+right half never decides anything. Deleting `|| position != args.position`
+leaves the entire suite green — the guard is unpinned. The mutation would
+classify any ticket sharing a shard with a winner as that winner, which then
+fails the paid_count check and is permanently unretirable, capacity stranded,
+with no error explaining why.
+Ruling: fix. This is the function where both error directions are financial, and
+an unpinned membership test on it is not acceptable. Fix round 1 dispatched:
+add a same-shard/different-position non-winner test, KEEP the out-of-range one,
+and prove it bites with a disable/re-enable round trip. Implementation unchanged
+— only coverage was short.
+Cost if wrong: one extra test. The round trip is required as evidence rather
+than reasoning, per the standing lesson in ckb-transactions.feedback.md.
+
+NOTE: my Task 6 dispatch asserted the fixture would have a real undrawn ticket.
+It does not — 4 tickets, 4 prizes. Fourth unverified premise of mine this run.
+The instruction to flag rather than force a vacuous test is what caught it.
