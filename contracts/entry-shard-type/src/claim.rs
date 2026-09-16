@@ -235,6 +235,15 @@ fn retire(script: &Script, args: &ClaimArgs, input: &[u8]) -> Result<i8, i8> {
         .map_err(|_| CLAIM_ERROR_UNIVERSE)?;
     let witness = ckb_std::high_level::load_witness(0, Source::GroupInput)
         .map_err(|_| CLAIM_ERROR_UNIVERSE)?;
+    // Deliberately redundant with `ComputedDraw::new`'s own
+    // `schedule.commitment() != cfg.prize_schedule_hash` check a few lines
+    // below: the schedule is the one input the retiring holder supplies
+    // directly (via this witness), so this call asserts the contract's own
+    // precondition on it rather than depending on `ComputedDraw::new`
+    // continuing to re-derive and check that same commitment internally. No
+    // test can distinguish this call from a plain `decode` at this call
+    // site, because `ComputedDraw::new` already refuses a mismatched
+    // schedule on its own — that is expected, not a gap.
     let schedule =
         daowow_core::schedule::PrizeSchedule::decode_committed(&witness, &cfg.prize_schedule_hash)
             .map_err(|_| CLAIM_ERROR_UNIVERSE)?;

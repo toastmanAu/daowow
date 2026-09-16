@@ -257,6 +257,26 @@ fn a_winner_retires_only_when_every_batch_is_discharged() {
     );
 }
 
+/// `retire_decision` compares `paid_count()` to `universe` with a strict
+/// `!=`, not a one-sided `< universe`. Nothing today should be able to
+/// record more paid sources than the round's own batch universe (each
+/// source is a distinct real batch, inserted under an absence proof), but
+/// that is an invariant of other modules, not of `retire_decision` itself —
+/// the `!=` is defence against that invariant ever failing elsewhere.
+/// A `<` in its place would let an over-credited winner retire as though
+/// exactly discharged instead of refusing it.
+#[test]
+fn a_winner_with_more_paid_sources_than_the_universe_is_refused() {
+    let f = fixture(1, true);
+    let draw = ComputedDraw::new(&f.cfg, &f.record, &f.schedule).unwrap();
+    let (args, _prize_index) = f.winning_claim_args(&draw);
+    let state = f.state_with_paid_count(&args, 4);
+    assert_eq!(
+        retire_decision(&args, &state, &draw, 3),
+        Err(CoreError::StateTransition)
+    );
+}
+
 #[test]
 fn a_claim_sharing_a_winners_shard_but_not_its_position_is_a_non_winner() {
     // `non_winning_claim_args` only ever varies shard_id (a shard past the
