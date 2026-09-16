@@ -555,3 +555,32 @@ prize_index/universe fields are unused until the winner-path test, producing
 dead_code warnings in the claim_retirement binary. Task 8 should consume them.
 
 Task 7: complete (commits fc5c6b5..4461d8b, review clean, 0 fix rounds)
+
+Task 8: implementer DONE_WITH_CONCERNS — commit d3ec2da. Winner path now passes
+END TO END: claim_retirement 3/3 (non-winner + two winner-memento tests). Core
+147/147. entry-shard-type 225,008 -> 228,096 bytes. It confirmed no change was
+needed in claim.rs or daowow-core, which is the answer I wanted to the
+stop-and-report instruction — Task 7's claim-side memento checks were right.
+
+NEW TRAP, verified, worth adding to ~/.claude/rules/ckb-transactions.feedback.md:
+CKB runs script groups in script-hash order, and a script hash is
+hash(code_hash || hash_type || args). Under ckb-testtool this project deploys
+with hash_type = data (common/mod.rs uses hash_type: 0 / Data1), so code_hash IS
+the binary's data hash. Therefore ANY byte-level change to a contract binary
+reshuffles script-group execution order across the whole suite. Growing
+entry-shard-type by 3,088 bytes for the memento mode flipped which of two
+independently-failing groups reported first in
+security_claims.rs::duplicate_position_is_rejected (-38 SHARD_CLAIM_CELL vs -93
+CLAIM_GROUP; both correct rejections of the same malformed mint). Consequence:
+every rejection test asserting ONE exact code where two groups could both reject
+is fragile against unrelated contract growth. Note the nuance: under a mainnet
+Type ID deployment code_hash is held constant by construction, so this
+fragility is an artifact of data-hash deployment in tests, not of the protocol.
+Ruling: accept the widening of that one pre-existing test (it is from
+sub-project 1 and redesigning its transaction is out of scope), but carry the
+sharpened rule into Task 10 — isolation is not merely for ATTRIBUTION, it is
+what makes an exact-code assertion STABLE. Task 10 must construct each rejection
+so exactly one script group can reject, then assert the exact code.
+Cost if wrong: a widened assertion accepts a code that a future bug could also
+produce. Bounded here because both accepted codes are legitimate rejections of
+the same malformed transaction.
