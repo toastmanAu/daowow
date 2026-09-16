@@ -32,6 +32,7 @@ use daowow_core::accumulator::mmr;
 use daowow_core::encoding::{PayoutItem, SettlementFundingDataV3, SETTLEMENT_FUNDING_SIZE};
 use daowow_core::error::codes::*;
 use daowow_core::leaf::liability_leaf;
+use daowow_core::redemption::PrizeRedemptionState;
 
 entry!(main);
 
@@ -449,8 +450,11 @@ fn redeem(
         {
             return err(SETTLE_ERROR_PROOF);
         }
-        // successor claim with the identical type script must exist
-        let mut successor = false;
+        // successor claim with the identical type script must exist, and its
+        // paid-set counters must advance by exactly this item. Without this
+        // an unchanged successor would pass the claim script as a transfer
+        // while this side paid the prize again.
+        let mut successor: Option<usize> = None;
         let mut i = 0usize;
         while let Ok(cell) = load_cell(i, Source::Output) {
             if cell
@@ -458,12 +462,34 @@ fn redeem(
                 .to_opt()
                 .is_some_and(|t| t.as_slice() == claim_type.as_slice())
             {
-                successor = true;
+                successor = Some(i);
                 break;
             }
             i += 1;
         }
-        if !successor {
+        let Some(successor) = successor else {
+            return err(SETTLE_ERROR_REDEEM);
+        };
+        let before_state = match load_cell_data(item.claim_input_index as usize, Source::Input) {
+            Ok(d) => match PrizeRedemptionState::decode(&d) {
+                Ok(s) => s,
+                Err(_) => return err(SETTLE_ERROR_REDEEM),
+            },
+            Err(_) => return err(SETTLE_ERROR_REDEEM),
+        };
+        let after_state = match load_cell_data(successor, Source::Output) {
+            Ok(d) => match PrizeRedemptionState::decode(&d) {
+                Ok(s) => s,
+                Err(_) => return err(SETTLE_ERROR_REDEEM),
+            },
+            Err(_) => return err(SETTLE_ERROR_REDEEM),
+        };
+        if after_state.ticket() != ticket
+            || before_state.ticket() != ticket
+            || after_state.paid_count() != before_state.paid_count().wrapping_add(1)
+            || after_state.paid_total() != before_state.paid_total().wrapping_add(item.amount)
+            || after_state.paid_root() == before_state.paid_root()
+        {
             return err(SETTLE_ERROR_REDEEM);
         }
         // payment: ordinary cell under the claim's current lock

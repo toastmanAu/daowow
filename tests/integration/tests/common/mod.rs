@@ -509,6 +509,38 @@ pub fn claim_outputs_for(
     out
 }
 
+/// A live claim cell for `(shard_id, position)` under `lock`, carrying the
+/// initial paid-set state. Seeds history only; the claim script does not run.
+pub fn seed_claim(
+    world: &mut World,
+    lock: &Script,
+    shard_id: u32,
+    position: u64,
+) -> (OutPoint, daowow_core::claim::ClaimArgs) {
+    let args = daowow_core::claim::ClaimArgs {
+        commitment: world.config_hash,
+        shard_id,
+        position,
+    };
+    let type_script = world.claim_type_script(shard_id, position);
+    let cell = CellOutputBuilder::default()
+        .capacity(pack_u64(claim_cell_capacity(lock)))
+        .lock(lock.clone())
+        .type_(Some(type_script).pack())
+        .build();
+    let op = world.context.create_cell(
+        cell,
+        Bytes::from(daowow_core::claim::initial_state_bytes(&args).to_vec()),
+    );
+    (op, args)
+}
+
+pub fn redemption_witness(
+    items: &[daowow_core::witness::RedemptionItem<'_>],
+) -> ckb_testtool::ckb_types::packed::Bytes {
+    pack_pbytes(&daowow_core::witness::encode_redemption_witness(items).unwrap())
+}
+
 pub fn smt_leaf(entry: &EntryDataV1) -> Hash32 {
     daowow_core::leaf::entry_leaf(entry)
 }
