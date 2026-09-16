@@ -669,3 +669,24 @@ script-hash order reshuffles and UNRELATED rejection tests may flip their codes
 — expected noise, disappears on restore, must not be chased.
 Also told it that finding an UNPINNED guard is the most valuable result it can
 produce, and to record it precisely rather than fix it or adjust the probe.
+
+Background security scanner fired mid-run: HIGH "Authorization / Business Logic
+Check Removed" against contracts/entry-shard-type/src/claim.rs, naming the
+removal of `if expected_index.is_some() && found != 1 { err(CLAIM_ERROR_RETIRE) }`
+— the guard requiring a winner to issue exactly one memento.
+
+Verified FALSE POSITIVE, not acknowledged on faith: `git status` and `git diff`
+both empty, and `git show HEAD:...claim.rs` has the guard intact at lines
+310-312. The scanner sampled the working tree while Task 10's mutation probe had
+that guard deleted; the probe's restore had completed by the time I checked.
+
+Deliberately took NO action. "Fixing" it mid-probe would have restored the guard
+underneath the running agent, its named test
+(a_winner_retiring_with_no_memento_is_refused) would then have passed, and the
+probe would have recorded "guard NOT pinned" for a guard that works — inverting
+the verdict on the most safety-relevant check in the memento path.
+
+Standing note for future sessions: a mutation-testing pass and a background
+security scanner are structurally in conflict — one introduces exactly the
+patterns the other exists to catch. Verify against HEAD, not the working tree,
+before acting on a scanner finding during a probe run.
