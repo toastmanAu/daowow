@@ -101,13 +101,14 @@ def recover_settlement_history(case, node, funding, funding_hash, payout, payout
             flush=True,
         )
         # Commit a payout only on the original node; the fork remains at funding.
+        # The follow-up spends the funding cell (and its change); any other
+        # input, such as a claim cell, lives in the shared prefix and stays.
         candidate = copy.deepcopy(payout)
-        candidate["inputs"] = [
-            input_cell(recovered_hash, 0),
-            input_cell(recovered_hash, 1),
-        ]
-        candidate["outputs"][1]["capacity"] = hex(
-            int(candidate["outputs"][1]["capacity"], 16) - 100_000
+        for cell in candidate["inputs"]:
+            if cell["previous_output"]["tx_hash"] == funding_hash:
+                cell["previous_output"]["tx_hash"] = recovered_hash
+        candidate["outputs"][-1]["capacity"] = hex(
+            int(candidate["outputs"][-1]["capacity"], 16) - 100_000
         )
         orphan_payout, _ = commit(node, candidate)
         assert_committed(case, node, orphan_payout)
@@ -124,8 +125,8 @@ def recover_settlement_history(case, node, funding, funding_hash, payout, payout
         case.assertEqual(restored["status"], "live")
         case.assertEqual(restored["cell"], recovered["cell"])
         final = copy.deepcopy(candidate)
-        final["outputs"][1]["capacity"] = hex(
-            int(final["outputs"][1]["capacity"], 16) - 100_000
+        final["outputs"][-1]["capacity"] = hex(
+            int(final["outputs"][-1]["capacity"], 16) - 100_000
         )
         start = int(fork.rpc("get_tip_header")["number"], 16) + 1
         final_hash, _ = commit(fork, final)
@@ -135,7 +136,7 @@ def recover_settlement_history(case, node, funding, funding_hash, payout, payout
         paid = live_cell(node, {"tx_hash": final_hash, "index": "0x0"})
         case.assertEqual(paid["status"], "live")
         case.assertEqual(paid["cell"]["output"], payout["outputs"][0])
-        case.assertEqual(paid["cell"]["data"]["content"], "0x")
+        case.assertEqual(paid["cell"]["data"]["content"], payout["outputs_data"][0])
         for cell in final["inputs"]:
             case.assertIn(
                 live_cell(node, cell["previous_output"])["status"], ("unknown", "dead")
@@ -146,8 +147,8 @@ def recover_settlement_history(case, node, funding, funding_hash, payout, payout
                 ("unknown", "dead"),
             )
         duplicate = copy.deepcopy(final)
-        duplicate["outputs"][1]["capacity"] = hex(
-            int(duplicate["outputs"][1]["capacity"], 16) - 100_000
+        duplicate["outputs"][-1]["capacity"] = hex(
+            int(duplicate["outputs"][-1]["capacity"], 16) - 100_000
         )
         with case.assertRaisesRegex(RuntimeError, "Unknown|Dead|Resolve"):
             fork.rpc("send_transaction", [duplicate, "passthrough"])

@@ -290,10 +290,59 @@ fn main() {
             item,
             &payout_proof,
         )]);
+        // The single winning ticket (shard 0, position 0) redeems its prize
+        // from the claim minted in the append. Transaction shape agreed with
+        // the Python harness: inputs [funding, claim, sponsor]; outputs
+        // [funding successor, claim successor, payment, change].
+        let funding = *derived.funding();
+        assert_eq!(derived.prizes().len(), 1);
+        let prize = derived.prizes()[0];
+        let claim_args = daowow_core::claim::ClaimArgs {
+            commitment: cfg.commitment(),
+            shard_id: 0,
+            position: 0,
+        };
+        assert_eq!(prize.ticket, claim_args.ticket_id());
+        let source =
+            daowow_core::redemption::prize_source(&cfg.commitment(), batch_id, &receipt.digest);
+        let paid = daowow_core::accumulator::smt::host::SmtHost::new();
+        let key = daowow_core::redemption::prize_obligation_key(&prize.ticket, &source);
+        let absence = paid.absence_proof(&[key]).unwrap();
+        let claim_before = daowow_core::redemption::PrizeRedemptionState::new(prize.ticket);
+        let claim_after = claim_before
+            .record_verified_prize(&source, prize.amount, &absence)
+            .unwrap();
+        let mut prizes = daowow_core::accumulator::mmr::host::MmrHost::new();
+        prizes
+            .append(&daowow_core::leaf::prize_leaf(&prize.ticket, prize.amount))
+            .unwrap();
+        let mmr_proof = prizes.membership_proof(0).unwrap();
+        let redemption_witness = daowow_core::witness::encode_redemption_witness(&[
+            daowow_core::witness::RedemptionItem {
+                claim_input_index: 1,
+                payment_output_index: 2,
+                prize_index: 0,
+                amount: prize.amount,
+                mmr_proof: &mmr_proof,
+                absence_proof: &absence,
+            },
+        ])
+        .unwrap();
+        let mut after_redeem = funding;
+        after_redeem.prize_paid = funding.prize_pool;
         Some(
-            json!({"data": hex(&derived.funding().encode()), "type": script(cfg.settlement_type, &funding_args),
+            json!({"data": hex(&funding.encode()), "type": script(cfg.settlement_type, &funding_args),
             "lock": script(cfg.settlement_type, &[0]), "witness": hex(funding_witness.as_slice()),
-            "payout_witness": hex(&payout_witness), "principal": item.principal, "prize": item.prize}),
+            "payout_witness": hex(&payout_witness), "principal": item.principal, "prize": item.prize,
+            "prize_pool": funding.prize_pool,
+            "redemption": {
+                "witness": hex(&redemption_witness),
+                "claim_data_after": hex(&claim_after.encode()),
+                "funding_data_after": hex(&after_redeem.encode()),
+                "amount": prize.amount,
+                "claim_input_index": 1,
+                "payment_output_index": 2,
+            }}),
         )
     } else {
         None

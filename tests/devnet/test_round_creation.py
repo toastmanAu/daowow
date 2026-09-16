@@ -701,8 +701,10 @@ class RoundCreationTests(unittest.TestCase):
             self.assertEqual(funding_export["entropy"], entropy_export["entropy"])
             settlement = funding_export["settlement"]
             self.assertEqual(settlement["principal"], 400 * CKB)
-            self.assertEqual(settlement["prize"], realized - 400 * CKB)
-            self.assertGreater(settlement["prize"], 0)
+            # prizes are owed to tickets, not to the depositor's payout
+            self.assertEqual(settlement["prize"], 0)
+            self.assertEqual(settlement["prize_pool"], realized - 400 * CKB)
+            self.assertGreater(settlement["prize_pool"], 0)
             funding_tx = {
                 "version": "0x0",
                 "cell_deps": dao_deps
@@ -749,7 +751,83 @@ class RoundCreationTests(unittest.TestCase):
             self.assertEqual(live["status"], "live")
             self.assertEqual(live["cell"]["output"], funding_tx["outputs"][0])
             self.assertEqual(live["cell"]["data"]["content"], settlement["data"])
-            payout_change = copy.deepcopy(funding_tx["outputs"][1])
+            # The winning claim (minted in the append at the first claim
+            # output) redeems the batch prize into its own lock. The prize is
+            # far below a cell's occupied capacity, so the sponsor tops the
+            # payment cell up; the funding successor keeps the principal.
+            redemption = settlement["redemption"]
+            claim_index = 4 if partial else 3
+            claim_output = entry_tx["outputs"][claim_index]
+            self.assertEqual(claim_output["lock"], fixture["lock"])
+            payment_capacity = max(redemption["amount"], 61 * CKB)
+            topup = payment_capacity - redemption["amount"]
+            redeem_change = copy.deepcopy(funding_tx["outputs"][1])
+            redeem_change["capacity"] = hex(
+                int(redeem_change["capacity"], 16) - topup - 100_000
+            )
+            redeem = {
+                "version": "0x0",
+                "cell_deps": protocol_deps,
+                "header_deps": [],
+                "inputs": [
+                    input_cell(funding_hash, 0),
+                    input_cell(entry_hash, claim_index),
+                    input_cell(funding_hash, 1),
+                ],
+                "outputs": [
+                    {
+                        "capacity": hex(realized - settlement["prize_pool"]),
+                        "lock": settlement["lock"],
+                        "type": settlement["type"],
+                    },
+                    claim_output,
+                    {
+                        "capacity": hex(payment_capacity),
+                        "lock": fixture["lock"],
+                        "type": None,
+                    },
+                    redeem_change,
+                ],
+                "outputs_data": [
+                    redemption["funding_data_after"],
+                    redemption["claim_data_after"],
+                    "0x",
+                    "0x",
+                ],
+                "witnesses": [redemption["witness"], "0x", "0x"],
+            }
+            unchanged_claim = copy.deepcopy(redeem)
+            unchanged_claim["outputs_data"][1] = entry_tx["outputs_data"][claim_index]
+            with self.assertRaisesRegex(RuntimeError, "ValidationFailure"):
+                node.rpc("send_transaction", [unchanged_claim, "passthrough"])
+            redeem_hash, _ = commit(node, redeem)
+            for i in (0, 1):
+                live = node.rpc(
+                    "get_live_cell", [{"tx_hash": redeem_hash, "index": hex(i)}, True]
+                )
+                self.assertEqual(live["status"], "live")
+                self.assertEqual(
+                    live["cell"]["data"]["content"], redeem["outputs_data"][i]
+                )
+            paid_prize = node.rpc(
+                "get_live_cell", [{"tx_hash": redeem_hash, "index": "0x2"}, True]
+            )
+            self.assertEqual(paid_prize["status"], "live")
+            self.assertEqual(
+                int(paid_prize["cell"]["output"]["capacity"], 16), payment_capacity
+            )
+            with self.assertRaisesRegex(RuntimeError, "Unknown|Dead|Resolve"):
+                node.rpc("send_transaction", [redeem, "passthrough"])
+            print(
+                "DAOWOW claim redeemed the batch prize",
+                redeem_hash,
+                "prize",
+                redemption["amount"],
+                "topup",
+                topup,
+                flush=True,
+            )
+            payout_change = copy.deepcopy(redeem_change)
             payout_change["capacity"] = hex(
                 int(payout_change["capacity"], 16) - 100_000
             )
@@ -758,16 +836,20 @@ class RoundCreationTests(unittest.TestCase):
                 "version": "0x0",
                 "cell_deps": protocol_deps,
                 "header_deps": [],
-                "inputs": [input_cell(funding_hash, 0), input_cell(funding_hash, 1)],
+                "inputs": [input_cell(redeem_hash, 0), input_cell(redeem_hash, 3)],
                 "outputs": [
-                    {"capacity": hex(realized), "lock": fixture["lock"], "type": None},
+                    {
+                        "capacity": hex(settlement["principal"]),
+                        "lock": fixture["lock"],
+                        "type": None,
+                    },
                     payout_change,
                 ],
                 "outputs_data": ["0x", "0x"],
                 "witnesses": [settlement["payout_witness"], "0x"],
             }
             underpaid = copy.deepcopy(payout)
-            underpaid["outputs"][0]["capacity"] = hex(realized - 1)
+            underpaid["outputs"][0]["capacity"] = hex(settlement["principal"] - 1)
             underpaid["outputs"][1]["capacity"] = hex(
                 int(payout_change["capacity"], 16) + 1
             )
@@ -797,7 +879,7 @@ class RoundCreationTests(unittest.TestCase):
             )
             if recover:
                 recover_settlement_history(
-                    self, node, funding_tx, funding_hash, payout, payout_hash
+                    self, node, funding_tx, funding_hash, redeem, redeem_hash
                 )
             if partial:
                 refunded = node.rpc(
@@ -814,8 +896,7 @@ class RoundCreationTests(unittest.TestCase):
                     int(refunded["cell"]["output"]["capacity"], 16), 400 * CKB
                 )
                 self.assertEqual(
-                    int(live["cell"]["output"]["capacity"], 16),
-                    400 * CKB + settlement["prize"],
+                    int(live["cell"]["output"]["capacity"], 16), 400 * CKB
                 )
                 for txhash, out_index in [
                     (aggregate_hash, 1),
