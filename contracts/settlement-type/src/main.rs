@@ -152,6 +152,8 @@ fn main() -> i8 {
         || before.prize_pool != after.prize_pool
         || before.liabilities_root != after.liabilities_root
         || before.liability_count != after.liability_count
+        || before.prize_count != after.prize_count
+        || before.prize_root != after.prize_root
     {
         return err(SETTLE_ERROR_ROUND_MISMATCH);
     }
@@ -305,12 +307,24 @@ fn main() -> i8 {
     if expected_in != in_cap {
         return err(SETTLE_ERROR_CONSERVATION);
     }
-    if !is_final && after.payout_cursor != cursor {
+    if !is_final && (after.payout_cursor != cursor || after.prize_paid != before.prize_paid) {
         return err(SETTLE_ERROR_CURSOR);
     }
-    if (is_final && cursor != before.liability_count)
-        || (!is_final && cursor >= before.liability_count)
-    {
+    // Prizes are redeemed by claims, not paid here. While any prize is
+    // outstanding the cell stays open even after the last principal payout;
+    // it may be drained only once principal and prizes are both complete.
+    let prizes_outstanding = before.prize_count != 0 && before.prize_paid != before.prize_pool;
+    if cursor > before.liability_count {
+        return err(SETTLE_ERROR_CURSOR);
+    }
+    if is_final {
+        if cursor != before.liability_count {
+            return err(SETTLE_ERROR_CURSOR);
+        }
+        if prizes_outstanding {
+            return err(SETTLE_ERROR_REDEEM);
+        }
+    } else if cursor == before.liability_count && !prizes_outstanding {
         return err(SETTLE_ERROR_CURSOR);
     }
     let _ = PayoutItem {

@@ -616,28 +616,12 @@ fn phase2_fixture_history(
     let funding_capacity = occupied
         + ((r.deposit_capacity - occupied) as u128 * WITHDRAW_AR as u128 / DEPOSIT_AR as u128)
             as u64;
-    let draw = daowow_core::computed_draw::ComputedDraw::new(&cfg, &record, &schedule).unwrap();
-    let winners: Vec<_> = draw
-        .positions()
-        .iter()
-        .map(|(_, position)| {
-            (
-                entries[*position as usize],
-                proofs[*position as usize].as_slice(),
-            )
-        })
-        .collect();
-    let views: Vec<_> = winners
-        .iter()
-        .map(|(entry, proof)| daowow_core::computed_draw::WinnerProof { entry, proof })
-        .collect();
     let input = daowow_core::entitlements::EntitlementInput {
         batch_id,
         receipt: &receipt,
         entries: &entries[predecessor_entries..],
         capacities: &capacities,
         realized_total: funding_capacity,
-        winners: &views,
     };
     let expected =
         daowow_core::entitlements::InitialEntitlements::derive(&cfg, &record, &schedule, &input)
@@ -647,7 +631,6 @@ fn phase2_fixture_history(
         &schedule,
         &entries[predecessor_entries..],
         &capacities,
-        &winners,
     )
     .unwrap();
     let witness = WitnessArgs::new_builder()
@@ -723,7 +706,7 @@ fn phase2_rejects_maximum_sized_invalid_payload_without_exhausting_heap() {
 }
 
 #[test]
-fn phase2_creates_64_distinct_liabilities_across_accumulators() {
+fn phase2_creates_32_liabilities_and_32_prizes_across_accumulators() {
     for acc in [ACC_MMR, ACC_SMT, ACC_IMT] {
         let (mut r, tx) = phase2_fixture_history(
             acc,
@@ -736,13 +719,16 @@ fn phase2_creates_64_distinct_liabilities_across_accumulators() {
         );
         let funding =
             SettlementFundingDataV3::decode(&tx.outputs_data().get(0).unwrap().raw_data()).unwrap();
-        assert_eq!(funding.liability_count, 64);
+        // 32 distinct depositors of this batch; the 32 drawn winners are
+        // ticket-keyed prizes, no longer owner records in the liability tree
+        assert_eq!(funding.liability_count, 32);
+        assert_eq!(funding.prize_count, 32);
         assert_eq!(funding.principal_liability, 32_000 * SHANNONS);
         assert_eq!(funding.batch_id, 32);
         let tx = detach_evidence(tx);
         let cycles = expect_ok(&mut r.world.context, &tx);
         println!(
-            "64-liability creation accumulator={acc} cycles={cycles} evidence_bytes={}",
+            "32-liability creation accumulator={acc} cycles={cycles} evidence_bytes={}",
             tx.witnesses().get(1).unwrap().raw_data().len()
         );
         drain_created_funding(&mut r, &tx);
@@ -766,7 +752,6 @@ fn drain_created_funding(r: &mut DaoRound, creation: &TransactionView) {
     let funding =
         SettlementFundingDataV3::decode(&creation.outputs_data().get(0).unwrap().raw_data())
             .unwrap();
-    let winners = evidence.winner_proofs();
     let entitlement = daowow_core::entitlements::InitialEntitlements::derive(
         &cfg,
         &record,
@@ -777,12 +762,12 @@ fn drain_created_funding(r: &mut DaoRound, creation: &TransactionView) {
             entries: evidence.entries(),
             capacities: evidence.capacities(),
             realized_total: funding.realized_total,
-            winners: &winners,
         },
     )
     .unwrap();
     let items = entitlement.liabilities();
-    assert_eq!(items.len(), 64);
+    assert_eq!(items.len(), 32);
+    assert_eq!(entitlement.prizes().len(), 32);
     let mut host = daowow_core::accumulator::mmr::host::MmrHost::new();
     for item in items {
         host.append(&daowow_core::leaf::liability_leaf(
@@ -802,7 +787,6 @@ fn drain_created_funding(r: &mut DaoRound, creation: &TransactionView) {
         let entry = evidence
             .entries()
             .iter()
-            .chain(winners.iter().map(|w| w.entry))
             .find(|entry| entry.participant_lock_hash == item.participant_lock_hash)
             .unwrap();
         let lock = base_lock
@@ -850,10 +834,24 @@ fn drain_created_funding(r: &mut DaoRound, creation: &TransactionView) {
         creation.outputs_data().get(0).unwrap().raw_data(),
     );
     let (sponsor, sponsor_lock) = r.world.funding_cell(gifts + 100 * SHANNONS);
+    // Principal payouts are no longer the final drain: the prize pool stays
+    // in the funding successor until every winning claim has redeemed it.
+    let owed_total: u64 = items.iter().map(|item| item.principal + item.prize).sum();
+    let mut after_payout = funding;
+    after_payout.payout_cursor = items.len() as u64;
+    let funding_successor = creation
+        .outputs()
+        .get(0)
+        .unwrap()
+        .as_builder()
+        .capacity(pack_u64(funding.realized_total - owed_total))
+        .build();
     let mut tx = TransactionBuilder::default()
         .input(CellInput::new(funding_op, 0))
         .input(CellInput::new(sponsor, 0))
-        .witness(Bytes::from(witness));
+        .witness(Bytes::from(witness))
+        .output(funding_successor)
+        .output_data(Bytes::from(after_payout.encode().to_vec()));
     for output in outputs {
         tx = tx.output(output).output_data(Bytes::new());
     }
@@ -868,7 +866,7 @@ fn drain_created_funding(r: &mut DaoRound, creation: &TransactionView) {
         .build();
     let cycles = expect_ok(&mut r.world.context, &tx);
     println!(
-        "64-liability created-funding drain accumulator={} cycles={cycles} sponsor_gifts={gifts}",
+        "32-liability created-funding drain accumulator={} cycles={cycles} sponsor_gifts={gifts}",
         cfg.accumulator_id
     );
     let mut outputs: Vec<_> = tx.outputs().into_iter().collect();
@@ -1039,7 +1037,7 @@ fn phase2_detached_evidence_is_authenticated_and_bounded() {
             }
             2 => {
                 let mut data = witnesses[1].raw_data().to_vec();
-                data[0] = 2;
+                data[0] = 1; // retired wire version
                 witnesses[1] = Bytes::from(data).pack();
             }
             index => {
@@ -1279,7 +1277,7 @@ fn phase2_rejects_malformed_or_substituted_witness_fields() {
             }
             4 => {
                 let mut payload = original.output_type().to_opt().unwrap().raw_data().to_vec();
-                payload[0] = 2;
+                payload[0] = 1; // retired wire version
                 builder = builder.output_type(Some(Bytes::from(payload)).pack());
             }
             _ => builder = builder.input_type(Some(Bytes::from(vec![0; 7])).pack()),

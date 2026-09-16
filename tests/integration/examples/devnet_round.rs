@@ -250,13 +250,8 @@ fn main() {
             &schedule,
             &[entry],
             &[400 * 100_000_000],
-            &[(entry, &proof)],
         )
         .unwrap();
-        let winners = [daowow_core::computed_draw::WinnerProof {
-            entry: &entry,
-            proof: &proof,
-        }];
         let derived = daowow_core::entitlements::InitialEntitlements::derive(
             &cfg,
             record.as_ref().unwrap(),
@@ -267,7 +262,6 @@ fn main() {
                 entries: &[entry],
                 capacities: &[400 * 100_000_000],
                 realized_total: realized,
-                winners: &winners,
             },
         )
         .unwrap();

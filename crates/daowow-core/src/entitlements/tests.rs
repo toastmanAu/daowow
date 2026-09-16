@@ -2,11 +2,12 @@ use super::*;
 use crate::{
     accumulator::mmr::{self, host::MmrHost},
     computed_draw::{
-        tests::{fixture, winners, Fixture},
+        tests::{fixture, Fixture},
         ComputedDraw,
     },
-    leaf::liability_leaf,
+    leaf::{liability_leaf, prize_leaf},
     lifecycle::{batch_id, AggregationState},
+    ticket::ticket_id,
 };
 use alloc::vec;
 
@@ -27,12 +28,32 @@ fn receipt(f: &Fixture, shard: usize) -> BatchCommitment {
 }
 
 #[test]
-fn independent_batches_pay_the_same_global_winners_and_full_capacity() {
+fn success_round_credits_prizes_to_tickets_and_principal_to_depositors() {
     let f = fixture(1, true);
     let d = ComputedDraw::new(&f.cfg, &f.record, &f.schedule).unwrap();
     // Independent Python hashlib candidate/retry calculation from pinned seed.
     assert_eq!(d.positions(), &[(0, 3), (1, 2), (2, 1), (3, 0)]);
-    let owners = winners(&f, &d);
+    let commitment = f.cfg.commitment();
+    // weights [4,3,2,1] over pool 100: 40, 30, 20, 10 to global 3, 2, 1, 0
+    let mut expected = vec![
+        PrizeEntitlement {
+            ticket: ticket_id(&commitment, 2, 1),
+            amount: 40,
+        },
+        PrizeEntitlement {
+            ticket: ticket_id(&commitment, 2, 0),
+            amount: 30,
+        },
+        PrizeEntitlement {
+            ticket: ticket_id(&commitment, 0, 1),
+            amount: 20,
+        },
+        PrizeEntitlement {
+            ticket: ticket_id(&commitment, 0, 0),
+            amount: 10,
+        },
+    ];
+    expected.sort_by(|a, b| a.ticket.cmp(&b.ticket));
     for shard in [0, 2] {
         let receipt = receipt(&f, shard);
         let input = EntitlementInput {
@@ -41,55 +62,40 @@ fn independent_batches_pay_the_same_global_winners_and_full_capacity() {
             entries: &f.entries[shard][..1],
             capacities: &[250],
             realized_total: 350,
-            winners: &owners,
         };
         let derived = InitialEntitlements::derive(&f.cfg, &f.record, &f.schedule, &input).unwrap();
+        // principal only, to the depositor of this batch
         assert_eq!(
             derived.liabilities(),
-            &[
-                PayoutItem {
-                    participant_lock_hash: [10; 32],
-                    principal: if shard == 0 { 250 } else { 0 },
-                    prize: 30
-                },
-                PayoutItem {
-                    participant_lock_hash: [12; 32],
-                    principal: if shard == 2 { 250 } else { 0 },
-                    prize: 70
-                },
-            ]
+            &[PayoutItem {
+                participant_lock_hash: [10 + shard as u8; 32],
+                principal: 250,
+                prize: 0
+            }]
         );
+        assert_eq!(derived.prizes(), expected.as_slice());
         let mut tree = MmrHost::new();
-        for p in derived.liabilities() {
-            tree.append(&liability_leaf(
-                &p.participant_lock_hash,
-                p.principal,
-                p.prize,
-            ))
-            .unwrap();
+        for p in derived.prizes() {
+            tree.append(&prize_leaf(&p.ticket, p.amount)).unwrap();
         }
-        assert_eq!(
-            derived.funding(),
-            &SettlementFundingDataV3 {
-                round_id: f.cfg.round_id,
-                batch_id: input.batch_id,
-                realized_total: 350,
-                principal_liability: 250,
-                prize_pool: 100,
-                payout_cursor: 0,
-                liability_count: 2,
-                liabilities_root: tree.root().unwrap(),
-                prize_count: 0,
-                prize_root: [0; 32],
-                prize_paid: 0,
-            }
-        );
-        for (i, p) in derived.liabilities().iter().enumerate() {
+        let f3 = derived.funding();
+        assert_eq!(f3.prize_count, 4);
+        assert_eq!(f3.prize_root, tree.root().unwrap());
+        assert_eq!(f3.prize_paid, 0);
+        assert_eq!(f3.prize_pool, 100);
+        assert_eq!(f3.principal_liability, 250);
+        assert_eq!(f3.liability_count, 1);
+        let mut liabilities = MmrHost::new();
+        liabilities
+            .append(&liability_leaf(&[10 + shard as u8; 32], 250, 0))
+            .unwrap();
+        assert_eq!(f3.liabilities_root, liabilities.root().unwrap());
+        for (i, p) in derived.prizes().iter().enumerate() {
             mmr::verify_membership(
-                &derived.funding().liabilities_root,
-                2,
+                &f3.prize_root,
+                4,
                 i as u64,
-                &liability_leaf(&p.participant_lock_hash, p.principal, p.prize),
+                &prize_leaf(&p.ticket, p.amount),
                 &tree.membership_proof(i as u64).unwrap(),
             )
             .unwrap();
@@ -98,10 +104,31 @@ fn independent_batches_pay_the_same_global_winners_and_full_capacity() {
 }
 
 #[test]
+fn prize_domain_conserves_and_is_sorted_and_unique() {
+    let f = fixture(1, true);
+    let receipt = receipt(&f, 0);
+    let input = EntitlementInput {
+        batch_id: batch_id(0, 0).unwrap(),
+        receipt: &receipt,
+        entries: &f.entries[0][..1],
+        capacities: &[250],
+        realized_total: 350,
+    };
+    let derived = InitialEntitlements::derive(&f.cfg, &f.record, &f.schedule, &input).unwrap();
+    let prizes = derived.prizes();
+    assert!(prizes.windows(2).all(|w| w[0].ticket < w[1].ticket));
+    let total: u64 = prizes.iter().map(|p| p.amount).sum();
+    let principal: u64 = derived
+        .liabilities()
+        .iter()
+        .map(|l| l.principal + l.prize)
+        .sum();
+    assert_eq!(total + principal, 350);
+}
+
+#[test]
 fn zero_yield_omits_zero_total_winner_only_records() {
     let f = fixture(1, true);
-    let d = ComputedDraw::new(&f.cfg, &f.record, &f.schedule).unwrap();
-    let owners = winners(&f, &d);
     let receipt = receipt(&f, 0);
     let input = EntitlementInput {
         batch_id: 0,
@@ -109,7 +136,6 @@ fn zero_yield_omits_zero_total_winner_only_records() {
         entries: &f.entries[0][..1],
         capacities: &[250],
         realized_total: 250,
-        winners: &owners,
     };
     let e = InitialEntitlements::derive(&f.cfg, &f.record, &f.schedule, &input).unwrap();
     assert_eq!(
@@ -121,13 +147,13 @@ fn zero_yield_omits_zero_total_winner_only_records() {
         }]
     );
     assert_eq!(e.funding().liability_count, 1);
+    assert!(e.prizes().is_empty());
+    assert_eq!(e.funding().prize_count, 0);
 }
 
 #[test]
 fn every_receipt_field_and_actual_capacity_is_bound() {
     let f = fixture(1, true);
-    let d = ComputedDraw::new(&f.cfg, &f.record, &f.schedule).unwrap();
-    let owners = winners(&f, &d);
     let original = receipt(&f, 0);
     for mutation in 0..9 {
         let mut receipt = original;
@@ -150,17 +176,14 @@ fn every_receipt_field_and_actual_capacity_is_bound() {
             entries: &entries,
             capacities: &capacities,
             realized_total: 350,
-            winners: &owners,
         };
         assert!(InitialEntitlements::derive(&f.cfg, &f.record, &f.schedule, &input).is_err());
     }
 }
 
 #[test]
-fn rejects_unaccepted_batch_ids_missing_winners_and_realized_underflow() {
+fn rejects_unaccepted_batch_ids_and_realized_underflow() {
     let f = fixture(1, true);
-    let d = ComputedDraw::new(&f.cfg, &f.record, &f.schedule).unwrap();
-    let owners = winners(&f, &d);
     let receipt = receipt(&f, 0);
     let mut input = EntitlementInput {
         batch_id: 0,
@@ -168,7 +191,6 @@ fn rejects_unaccepted_batch_ids_missing_winners_and_realized_underflow() {
         entries: &f.entries[0][..1],
         capacities: &[250],
         realized_total: 350,
-        winners: &owners,
     };
     for id in [1, 1u64 << 56, u64::MAX] {
         input.batch_id = id;
@@ -176,9 +198,6 @@ fn rejects_unaccepted_batch_ids_missing_winners_and_realized_underflow() {
     }
     input.batch_id = 0;
     input.realized_total = 249;
-    assert!(InitialEntitlements::derive(&f.cfg, &f.record, &f.schedule, &input).is_err());
-    input.realized_total = 350;
-    input.winners = &[];
     assert!(InitialEntitlements::derive(&f.cfg, &f.record, &f.schedule, &input).is_err());
 }
 
@@ -192,7 +211,6 @@ fn failed_round_returns_yield_to_depositor_without_winners() {
         entries: &f.entries[0][..1],
         capacities: &[250],
         realized_total: 351,
-        winners: &[],
     };
     let e = InitialEntitlements::derive(&f.cfg, &f.record, &f.schedule, &input).unwrap();
     assert_eq!(
@@ -266,7 +284,6 @@ fn failed_round_consolidates_before_proportional_rounding() {
             entries: &entries,
             capacities: &capacities,
             realized_total: 1203,
-            winners: &[],
         };
         let e = InitialEntitlements::derive(&cfg, &record, &f.schedule, &input).unwrap();
         assert_eq!(
@@ -331,7 +348,6 @@ fn later_batch_uses_its_actual_nonce_range_not_the_first_batch() {
         entries: &f.entries[0][1..],
         capacities: &[250, 300],
         realized_total: 555,
-        winners: &[],
     };
     let e = InitialEntitlements::derive(&f.cfg, &record, &f.schedule, &input).unwrap();
     assert_eq!(
@@ -368,7 +384,6 @@ fn receipt_replay_is_bounded_and_maximum_realized_value_conserves() {
         entries: &f.entries[0][..1],
         capacities: &[250],
         realized_total: u64::MAX,
-        winners: &[],
     };
     let e = InitialEntitlements::derive(&f.cfg, &f.record, &f.schedule, &input).unwrap();
     assert_eq!(

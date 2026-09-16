@@ -1,7 +1,6 @@
 //! Pure initial liabilities. Chain provenance and actual DAO realization must
 //! be authenticated by the contract caller, not inferred from these structs.
 use crate::{
-    computed_draw::WinnerProof,
     encoding::{EntryDataV1, PayoutItem, RoundConfigV1, SettlementFundingDataV3},
     lifecycle::BatchCommitment,
     schedule::PrizeSchedule,
@@ -21,7 +20,13 @@ pub struct EntitlementInput<'a> {
     pub entries: &'a [EntryDataV1],
     pub capacities: &'a [u64],
     pub realized_total: u64,
-    pub winners: &'a [WinnerProof<'a>],
+}
+
+/// One winning ticket's obligation from this batch, immutable once committed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PrizeEntitlement {
+    pub ticket: crate::hash::Hash32,
+    pub amount: u64,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -29,6 +34,7 @@ pub struct EntitlementInput<'a> {
 pub struct InitialEntitlements {
     funding: SettlementFundingDataV3,
     liabilities: Vec<PayoutItem>,
+    prizes: Vec<PrizeEntitlement>,
 }
 
 impl InitialEntitlements {
@@ -50,21 +56,38 @@ impl InitialEntitlements {
             .realized_total
             .checked_sub(principal_total)
             .ok_or(CoreError::Conservation)?;
-        let owners = draw.verify_winners(input.winners)?;
         let mut amounts: BTreeMap<crate::hash::Hash32, (u64, u64)> = BTreeMap::new();
         for (e, capacity) in input.entries.iter().zip(input.capacities) {
             let item = amounts.entry(e.participant_lock_hash).or_default();
             item.0 = item.0.checked_add(*capacity).ok_or(CoreError::Overflow)?;
         }
+        // Prize domain: winning tickets, never owners. Principal stays with the
+        // depositor in the participant-keyed domain below.
+        let mut prizes: Vec<PrizeEntitlement> = Vec::new();
         if draw.is_success() {
-            for (owner, prize) in owners
-                .into_iter()
-                .zip(schedule.allocate(draw.total_tickets(), prize_pool)?)
+            let commitment = cfg.commitment();
+            let allocated = schedule.allocate(draw.total_tickets(), prize_pool)?;
+            if allocated.len() != draw.positions().len() {
+                return Err(CoreError::StateTransition);
+            }
+            for (i, ((prize_index, position), amount)) in
+                draw.positions().iter().zip(allocated).enumerate()
             {
-                if prize != 0 {
-                    let item = amounts.entry(owner).or_default();
-                    item.1 = item.1.checked_add(prize).ok_or(CoreError::Overflow)?;
+                if *prize_index != i as u64 {
+                    return Err(CoreError::StateTransition);
                 }
+                if amount == 0 {
+                    continue;
+                }
+                let (shard_id, local) = draw.locate(*position)?;
+                prizes.push(PrizeEntitlement {
+                    ticket: crate::ticket::ticket_id(&commitment, shard_id, local),
+                    amount,
+                });
+            }
+            prizes.sort_by_key(|p| p.ticket);
+            if prizes.windows(2).any(|w| w[0].ticket == w[1].ticket) {
+                return Err(CoreError::StateTransition);
             }
         } else {
             // Consolidate BEFORE division so entry splitting cannot bias dust.
@@ -105,9 +128,29 @@ impl InitialEntitlements {
                 prize,
             });
         }
-        if sum != input.realized_total || liabilities.is_empty() {
+        let mut prize_peaks = [[0u8; 32]; mmr::MAX_PEAKS];
+        let mut prize_total = 0u64;
+        for (i, p) in prizes.iter().enumerate() {
+            prize_total = prize_total
+                .checked_add(p.amount)
+                .ok_or(CoreError::Overflow)?;
+            prize_peaks = mmr::append_peaks(
+                &prize_peaks[..mmr::peaks_shape(i as u64)?],
+                i as u64,
+                &crate::leaf::prize_leaf(&p.ticket, p.amount),
+            )?;
+        }
+        if sum.checked_add(prize_total).ok_or(CoreError::Overflow)? != input.realized_total
+            || liabilities.is_empty()
+        {
             return Err(CoreError::Conservation);
         }
+        let prize_count = prizes.len() as u64;
+        let prize_root = if prize_count == 0 {
+            [0; 32]
+        } else {
+            mmr::bag_peaks(&prize_peaks[..mmr::peaks_shape(prize_count)?])?
+        };
         let count = liabilities.len() as u64;
         let root = mmr::bag_peaks(&peaks[..mmr::peaks_shape(count)?])?;
         Ok(Self {
@@ -120,11 +163,12 @@ impl InitialEntitlements {
                 payout_cursor: 0,
                 liability_count: count,
                 liabilities_root: root,
-                prize_count: 0,
-                prize_root: [0; 32],
+                prize_count,
+                prize_root,
                 prize_paid: 0,
             },
             liabilities,
+            prizes,
         })
     }
     /// Immutable initial state to compare byte-for-byte with the funding cell.
@@ -135,6 +179,10 @@ impl InitialEntitlements {
     /// capacity and its consolidated prize or failed-round yield allocation.
     pub fn liabilities(&self) -> &[PayoutItem] {
         &self.liabilities
+    }
+    /// Winning tickets' obligations, ascending by ticket id; empty on failed rounds.
+    pub fn prizes(&self) -> &[PrizeEntitlement] {
+        &self.prizes
     }
 }
 

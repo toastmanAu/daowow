@@ -193,14 +193,12 @@ pub fn validate_initial_funding(cfg: &RoundConfigV1, batch_id: u64, digest: &Has
     };
     let evidence = EntitlementWitness::decode(payload).ok()?;
     let realized = realized_capacity(input_index, &data, header_index)?;
-    let winners = evidence.winner_proofs();
     let input = EntitlementInput {
         batch_id,
         receipt: &receipt,
         entries: evidence.entries(),
         capacities: evidence.capacities(),
         realized_total: realized,
-        winners: &winners,
     };
     let expected = InitialEntitlements::derive(cfg, &entropy, evidence.schedule(), &input).ok()?;
 
