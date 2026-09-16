@@ -2,15 +2,19 @@
 //!
 //! Mint delegates counting to the OPEN shard transition of the same identity,
 //! which must be present as input and output. Transfer keeps data identical.
-//! Any data change (redemption) or burn (retirement) is rejected until the
-//! sub-projects that authenticate them exist.
+//! A data change is a redemption: one settlement funding cell of this round
+//! transitions in the same transaction and names this claim in its redemption
+//! witness; the output state is exactly the input with that source recorded.
+//! Burn (retirement) is rejected until sub-project 3 authenticates it.
 
 use ckb_std::ckb_constants::Source;
 use ckb_std::ckb_types::packed::Script;
+use ckb_std::ckb_types::prelude::*;
 use ckb_std::high_level::{load_cell, load_cell_data};
 use daowow_core::claim::{initial_state_bytes, validate_transfer, ClaimArgs};
-use daowow_core::encoding::SHARD_DATA_SIZE;
+use daowow_core::encoding::{SettlementFundingDataV3, SETTLEMENT_FUNDING_SIZE, SHARD_DATA_SIZE};
 use daowow_core::error::codes::*;
+use daowow_core::redemption::{prize_source, PrizeRedemptionState};
 use daowow_core::CoreError;
 
 fn err(e: i8) -> Result<i8, i8> {
@@ -78,11 +82,103 @@ pub fn run(script: &Script) -> Result<i8, i8> {
             };
             match validate_transfer(&args, &input, &data) {
                 Ok(()) => Ok(0),
-                Err(CoreError::StateTransition) => err(CLAIM_ERROR_TRANSITION),
+                Err(CoreError::StateTransition) => redeem(script, &args, &input, &data),
                 Err(_) => err(CLAIM_ERROR_DATA),
             }
         }
         (true, None) => err(CLAIM_ERROR_RETIRE),
         (false, None) => err(CLAIM_ERROR_GROUP),
     }
+}
+
+/// Data changed: this must be an authenticated redemption. The funding cell
+/// of one batch transitions in this transaction, its redemption witness names
+/// this claim, and the output state is exactly the input state with that
+/// source's prize recorded. Lock must not change.
+fn redeem(script: &Script, args: &ClaimArgs, input: &[u8], output: &[u8]) -> Result<i8, i8> {
+    let in_lock = load_cell(0, Source::GroupInput)
+        .map_err(|_| CLAIM_ERROR_DATA)?
+        .lock();
+    let out_lock = load_cell(0, Source::GroupOutput)
+        .map_err(|_| CLAIM_ERROR_DATA)?
+        .lock();
+    if in_lock.as_slice() != out_lock.as_slice() {
+        return err(CLAIM_ERROR_TRANSITION);
+    }
+    // exactly one settlement funding input of this commitment, and our own index
+    let mut funding: Option<(usize, [u8; 72])> = None;
+    let mut own_index: Option<usize> = None;
+    let mut i = 0usize;
+    while let Ok(cell) = load_cell(i, Source::Input) {
+        if let Some(t) = cell.type_().to_opt() {
+            let a = t.args().raw_data();
+            if t.as_slice() == script.as_slice() {
+                if own_index.replace(i).is_some() {
+                    return err(CLAIM_ERROR_GROUP);
+                }
+            } else if a.len() == 72 && a[..32] == args.commitment {
+                if funding.is_some() {
+                    return err(CLAIM_ERROR_REDEEM);
+                }
+                let mut fixed = [0u8; 72];
+                fixed.copy_from_slice(&a);
+                funding = Some((i, fixed));
+            }
+        }
+        i += 1;
+    }
+    let (Some((funding_index, funding_args)), Some(own_index)) = (funding, own_index) else {
+        return err(CLAIM_ERROR_REDEEM);
+    };
+    let funding_data =
+        load_cell_data(funding_index, Source::Input).map_err(|_| CLAIM_ERROR_REDEEM)?;
+    if funding_data.len() != SETTLEMENT_FUNDING_SIZE {
+        return err(CLAIM_ERROR_REDEEM);
+    }
+    let funding_state =
+        SettlementFundingDataV3::decode(&funding_data).map_err(|_| CLAIM_ERROR_REDEEM)?;
+    let Some(cfg) = daowow_contracts_common::config_by_commitment(
+        &args.commitment,
+        &funding_state.round_id,
+        Source::CellDep,
+    ) else {
+        return err(CLAIM_ERROR_REDEEM);
+    };
+    let funding_type = load_cell(funding_index, Source::Input)
+        .map_err(|_| CLAIM_ERROR_REDEEM)?
+        .type_()
+        .to_opt()
+        .ok_or(CLAIM_ERROR_REDEEM)?;
+    if !daowow_contracts_common::script_matches(&funding_type, &cfg.settlement_type)
+        || !daowow_contracts_common::script_matches(script, &cfg.entry_shard_type)
+    {
+        return err(CLAIM_ERROR_REDEEM);
+    }
+    let witness = ckb_std::high_level::load_witness(funding_index, Source::Input)
+        .map_err(|_| CLAIM_ERROR_REDEEM)?;
+    let items = daowow_core::witness::decode_redemption_witness(&witness)
+        .map_err(|_| CLAIM_ERROR_REDEEM)?;
+    let mut mine = None;
+    for item in &items {
+        if item.claim_input_index as usize == own_index {
+            if mine.is_some() {
+                return err(CLAIM_ERROR_REDEEM);
+            }
+            mine = Some(*item);
+        }
+    }
+    let Some(item) = mine else {
+        return err(CLAIM_ERROR_REDEEM);
+    };
+    let batch_id = u64::from_le_bytes(funding_args[32..40].try_into().unwrap());
+    let digest: [u8; 32] = funding_args[40..72].try_into().unwrap();
+    let source = prize_source(&args.commitment, batch_id, &digest);
+    let before = PrizeRedemptionState::decode(input).map_err(|_| CLAIM_ERROR_DATA)?;
+    let expected = before
+        .record_verified_prize(&source, item.amount, item.absence_proof)
+        .map_err(|_| CLAIM_ERROR_REDEEM)?;
+    if output != expected.encode() {
+        return err(CLAIM_ERROR_REDEEM);
+    }
+    Ok(0)
 }

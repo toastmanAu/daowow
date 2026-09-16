@@ -5,6 +5,11 @@
 //! seventy-two-byte-args settlement type executes and enforces the payout rules.
 //! data: SettlementFundingDataV3 (fixed 160 bytes)
 //!
+//! Redemption (witness tagged 0xFF): claim cells of this round redeem their
+//! committed prizes; each amount is proven in the immutable prize tree, paid
+//! to the claim's current lock, and the claim's successor must exist. The
+//! cell may be drained only once principal and prizes are both complete.
+//!
 //! Creation (from dao-lock phase 2): cursor = zero, positive liability count.
 //! Update: each MMR proof authenticates the next unpaid ordinal against the
 //! immutable liability root/count. The numeric cursor advances exactly once
@@ -19,6 +24,7 @@
 #![no_main]
 
 use ckb_std::ckb_constants::Source;
+use ckb_std::ckb_types::prelude::*;
 use ckb_std::entry;
 use ckb_std::high_level::{load_cell, load_cell_capacity, load_cell_data, load_witness};
 use daowow_contracts_common::daowow_alloc;
@@ -162,6 +168,10 @@ fn main() -> i8 {
         Ok(w) => w,
         Err(_) => return err(SETTLE_ERROR_DATA),
     };
+    if daowow_core::witness::is_redemption_witness(&witness_raw) {
+        let after_ref = if is_final { None } else { Some(&after) };
+        return redeem(&script, &args, &before, after_ref, is_final, &witness_raw);
+    }
     let payouts = match daowow_core::witness::decode_settlement_witness(&witness_raw) {
         Ok(p) => p,
         Err(_) => return err(SETTLE_ERROR_DATA),
@@ -333,6 +343,182 @@ fn main() -> i8 {
         prize: 0,
     };
     0
+}
+
+/// Redemption mode: claims of this round redeem their committed prizes from
+/// this batch. Each item is authenticated against the immutable prize tree,
+/// paid to the claim's current lock, and requires the claim's successor to
+/// exist; the claim script separately proves its paid-set transition.
+fn redeem(
+    script: &ckb_std::ckb_types::packed::Script,
+    args: &[u8],
+    before: &SettlementFundingDataV3,
+    after: Option<&SettlementFundingDataV3>,
+    is_final: bool,
+    witness_raw: &[u8],
+) -> i8 {
+    use daowow_core::claim::{ClaimArgs, CLAIM_ARGS_SIZE, CLAIM_TAG};
+    if before.prize_count == 0 {
+        return err(SETTLE_ERROR_REDEEM);
+    }
+    let items = match daowow_core::witness::decode_redemption_witness(witness_raw) {
+        Ok(i) => i,
+        Err(_) => return err(SETTLE_ERROR_DATA),
+    };
+    let commitment: [u8; 32] = args[..32].try_into().unwrap();
+    let Some(cfg) = daowow_contracts_common::config_by_commitment(
+        &commitment,
+        &before.round_id,
+        Source::CellDep,
+    ) else {
+        return err(SETTLE_ERROR_DATA);
+    };
+    if !daowow_contracts_common::script_matches(script, &cfg.settlement_type) {
+        return err(SETTLE_ERROR_DATA);
+    }
+    let in_cap = match load_cell_capacity(0, Source::GroupInput) {
+        Ok(c) => c,
+        Err(_) => return err(SETTLE_ERROR_CONSERVATION),
+    };
+    let new_funding_cap = if is_final {
+        0
+    } else {
+        match load_cell_capacity(0, Source::GroupOutput) {
+            Ok(c) => c,
+            Err(_) => return err(SETTLE_ERROR_CONSERVATION),
+        }
+    };
+    if !is_final {
+        if load_cell(0, Source::GroupInput).unwrap().lock()
+            != load_cell(0, Source::GroupOutput).unwrap().lock()
+        {
+            return err(SETTLE_ERROR_CONSERVATION);
+        }
+        let occupied =
+            match ckb_std::high_level::load_cell_occupied_capacity(0, Source::GroupOutput) {
+                Ok(c) => c,
+                Err(_) => return err(SETTLE_ERROR_CONSERVATION),
+            };
+        if new_funding_cap < occupied {
+            return err(SETTLE_ERROR_CONSERVATION);
+        }
+    }
+    let mut paid: u64 = 0;
+    let mut prev_prize: Option<u64> = None;
+    let mut used_claims: alloc::vec::Vec<u32> = alloc::vec::Vec::new();
+    let mut used_payments: alloc::vec::Vec<u32> = alloc::vec::Vec::new();
+    for item in &items {
+        if prev_prize.is_some_and(|p| item.prize_index <= p)
+            || used_claims.contains(&item.claim_input_index)
+            || used_payments.contains(&item.payment_output_index)
+            || item.amount == 0
+        {
+            return err(SETTLE_ERROR_REDEEM);
+        }
+        prev_prize = Some(item.prize_index);
+        used_claims.push(item.claim_input_index);
+        used_payments.push(item.payment_output_index);
+        // the claim input: canonical claim type of this round
+        let claim = match load_cell(item.claim_input_index as usize, Source::Input) {
+            Ok(c) => c,
+            Err(_) => return err(SETTLE_ERROR_REDEEM),
+        };
+        let Some(claim_type) = claim.type_().to_opt() else {
+            return err(SETTLE_ERROR_REDEEM);
+        };
+        let claim_args = claim_type.args().raw_data();
+        if !daowow_contracts_common::script_matches(&claim_type, &cfg.entry_shard_type)
+            || claim_args.len() != CLAIM_ARGS_SIZE
+            || claim_args[0] != CLAIM_TAG
+            || claim_args[1..33] != commitment
+        {
+            return err(SETTLE_ERROR_REDEEM);
+        }
+        let ticket = match ClaimArgs::decode(&claim_args) {
+            Ok(a) => a.ticket_id(),
+            Err(_) => return err(SETTLE_ERROR_REDEEM),
+        };
+        if mmr::verify_membership(
+            &before.prize_root,
+            before.prize_count,
+            item.prize_index,
+            &daowow_core::leaf::prize_leaf(&ticket, item.amount),
+            item.mmr_proof,
+        )
+        .is_err()
+        {
+            return err(SETTLE_ERROR_PROOF);
+        }
+        // successor claim with the identical type script must exist
+        let mut successor = false;
+        let mut i = 0usize;
+        while let Ok(cell) = load_cell(i, Source::Output) {
+            if cell
+                .type_()
+                .to_opt()
+                .is_some_and(|t| t.as_slice() == claim_type.as_slice())
+            {
+                successor = true;
+                break;
+            }
+            i += 1;
+        }
+        if !successor {
+            return err(SETTLE_ERROR_REDEEM);
+        }
+        // payment: ordinary cell under the claim's current lock
+        let payment = match load_cell(item.payment_output_index as usize, Source::Output) {
+            Ok(c) => c,
+            Err(_) => return err(SETTLE_ERROR_REDEEM),
+        };
+        if payment.lock().as_slice() != claim.lock().as_slice()
+            || payment.type_().to_opt().is_some()
+            || !matches!(
+                load_cell_data(item.payment_output_index as usize, Source::Output),
+                Ok(d) if d.is_empty()
+            )
+        {
+            return err(SETTLE_ERROR_REDEEM);
+        }
+        let cap = match load_cell_capacity(item.payment_output_index as usize, Source::Output) {
+            Ok(c) => c,
+            Err(_) => return err(SETTLE_ERROR_CONSERVATION),
+        };
+        let occupied = match ckb_std::high_level::load_cell_occupied_capacity(
+            item.payment_output_index as usize,
+            Source::Output,
+        ) {
+            Ok(c) => c,
+            Err(_) => return err(SETTLE_ERROR_CONSERVATION),
+        };
+        if cap < item.amount || cap < occupied {
+            return err(SETTLE_ERROR_CONSERVATION);
+        }
+        paid = match paid.checked_add(item.amount) {
+            Some(p) => p,
+            None => return err(SETTLE_ERROR_CONSERVATION),
+        };
+    }
+    let prize_paid = match before.prize_paid.checked_add(paid) {
+        Some(p) if p <= before.prize_pool => p,
+        _ => return err(SETTLE_ERROR_REDEEM),
+    };
+    match after {
+        Some(after) => {
+            if after.payout_cursor != before.payout_cursor || after.prize_paid != prize_paid {
+                return err(SETTLE_ERROR_REDEEM);
+            }
+        }
+        None => {
+            if before.payout_cursor != before.liability_count || prize_paid != before.prize_pool {
+                return err(SETTLE_ERROR_REDEEM);
+            }
+        }
+    }
+    match paid.checked_add(new_funding_cap) {
+        Some(expected) if expected == in_cap => 0,
+        _ => err(SETTLE_ERROR_CONSERVATION),
+    }
 }
 
 fn public_lock(script: &ckb_std::ckb_types::packed::Script) -> i8 {

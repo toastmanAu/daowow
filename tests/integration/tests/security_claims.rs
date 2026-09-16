@@ -235,6 +235,7 @@ const CLAIM_MINT: &str = "-94";
 const CLAIM_TRANSITION: &str = "-95";
 const CLAIM_GROUP: &str = "-93";
 const CLAIM_RETIRE: &str = "-96";
+const CLAIM_REDEEM: &str = "-97";
 
 #[test]
 fn append_without_a_claim_per_ticket_is_rejected() {
@@ -460,7 +461,7 @@ fn transfer_with_altered_data_is_rejected() {
 }
 
 #[test]
-fn transfer_to_a_paid_looking_state_is_rejected_as_transition() {
+fn transfer_to_a_paid_looking_state_is_an_unauthenticated_redemption() {
     // a decodable, ticket-matching but different state is the redemption shape
     use daowow_core::redemption::{prize_obligation_key, prize_payment_leaf, PrizeRedemptionState};
     let mut f = fixture();
@@ -479,7 +480,9 @@ fn transfer_to_a_paid_looking_state_is_rejected_as_transition() {
         .as_advanced_builder()
         .set_outputs_data(vec![Bytes::from(paid.encode().to_vec()).pack()])
         .build();
-    expect_code(&mut f, &tx, CLAIM_TRANSITION);
+    // a changed paid set is the redemption shape; with no funding input in
+    // the transaction the claim script refuses it as an unauthenticated redeem
+    expect_code(&mut f, &tx, CLAIM_REDEEM);
 }
 
 #[test]
