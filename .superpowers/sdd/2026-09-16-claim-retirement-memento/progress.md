@@ -94,3 +94,28 @@ financial-script code and each needs its own review surface.
 Cost if wrong: a batched task's review is coarser, so a defect in one half is
 likelier to be attributed to the other. Both halves are separately committed,
 so a bad batch is revertable per-file.
+
+Task 1 review: spec MET, quality approved, one Important (plan-mandated)
+finding — no test distinguishes `div_ceil` from floor division, because every
+brief-specified weight set has `min == 1` or divides exactly. A regression to
+`sum / min` would pass all three tests.
+
+Ruling: valid and load-bearing — the closed form is the premise of the whole
+viability gate, and floor would under-state the bar in the non-exact case,
+letting a zero allocation through, which is the exact hole this design closes.
+Fix in round 1. Cost if wrong: one extra test.
+
+Ruling: the reviewer's suggested weights `[3, 7]` are WRONG for this purpose and
+must not be used. Verified by computing the real allocation: `[3,7]` puts the
+minimum at index 0, which absorbs the rounding dust, so at pool 3 it allocates
+[1,2] — no zero, no bracket. Use `[7, 3]`: ceil(10/3)=4 vs floor=3, and at pool
+3 it allocates [3,0] (position 1 zero) while at pool 4 it allocates [3,1] (all
+positive). That distinguishes ceil from floor AND brackets the threshold.
+Cost if wrong: none, verified numerically before dispatch.
+
+Finding (new, from checking the above): when the smallest weight sits at index
+0, `min_viable_pool` OVER-states the bar, because index 0 receives the dust and
+can never be the binding position. The formula is therefore conservative, never
+permissive — it may void a round that would in fact have paid every prize, but
+it cannot admit one that would not. Safe direction. Document it rather than
+complicate the formula.
