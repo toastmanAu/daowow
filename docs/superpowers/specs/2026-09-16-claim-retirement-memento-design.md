@@ -1,8 +1,10 @@
 # Claim NFT sub-project 3: retirement and the winner memento
 
 Date: 2026-09-16. Status: design for user review. Decisions recorded here were
-made by the user on 2026-09-16: a batch may not allocate a zero prize to a
-drawn position; retirement is its own transaction rather than riding the final
+made by the user on 2026-09-16: a round whose committed schedule cannot yield a
+positive prize for every drawn position is voided at the draw rather than
+discovered at settlement, and a batch may not allocate a zero prize to a drawn
+position; retirement is its own transaction rather than riding the final
 redemption; the memento is a new args tag on `entry-shard-type` rather than a
 separate binary; the memento's data is the self-contained 54-byte layout below.
 
@@ -36,24 +38,86 @@ other evidence that a batch owed a ticket nothing is that batch's funding cell,
 and a final drain consumes it. A winner with one zeroed batch would therefore be
 unretirable forever, with its capacity stranded.
 
-**Amendment.** On a successful round, `InitialEntitlements::derive` rejects a
-batch whose allocation gives any drawn prize position zero, returning
-`CoreError::Conservation`. This supersedes the "skipped" sentence in the
-sub-project 2 design. The universe then is exactly the batches, and completeness
-is a count.
+**Amendment, in two parts.** The round refuses to draw at all if its schedule is
+unyieldable, and derivation keeps a guard that a drawn round cannot trip.
 
-The check must be on the computed allocation, not on the pool size: a pool of at
+### Part one: void an unyieldable draw
+
+`allocate_prizes_complete` zeroes position `i` exactly when `pool * w_i < Σw`,
+and index `0` absorbs the dust, so an allocation is zero-free if and only if
+
+```
+pool >= ceil(Σw / w_min)      over weights_for(total_tickets)
+```
+
+Call that the **pool bar**. It is a closed form over the committed schedule, not
+a simulation. For the `[40, 25, 20, 10, 5]` schedule the bar is 20 shannons; for
+a pathological `[1, 1, 1000]` it is 1002.
+
+Every batch's pool is the DAO yield on at least one ticket price:
+`AggregationState::accept` rejects an empty batch and requires
+`principal == ticket_count * ticket_price` with `ticket_count >= 1`, and
+`prize_pool = realized_total - input_capacity` where `input_capacity >= principal`.
+So the worst case over every batch a round can produce is a pure function of the
+schedule and `ticket_price`, knowable before any deposit matures.
+
+`ComputedDraw::new` gains that as a second success condition beside the existing
+`total >= cfg.minimum_tickets`:
+
+```
+viable  <=>  schedule.min_viable_pool(total_tickets) <= cfg.ticket_price / VIABILITY_RATIO
+```
+
+with `VIABILITY_RATIO = 1_000_000`. A round that is not viable draws no
+positions and is a **failed round** — the existing, already-tested void path: no
+prizes are owed, depositors recover principal and yield through the
+participant-keyed path untouched, and every claim retires immediately as a
+non-winner. No capacity is stranded and no partial payment can have happened,
+because the decision is derived from round-level data only (`total_tickets`, the
+committed schedule, `ticket_price`) and is therefore identical for every batch
+and for retirement. A round cannot pay prizes from one batch and then discover
+another is unyieldable.
+
+The ratio is where the economic assumption lives, and it is an assumption, not a
+theorem: it asserts that DAO compensation over a full term exceeds one part per
+million of the deposited principal. At a 100 CKB ticket it permits a pool bar of
+10,000 shannons against a realistic term yield of roughly 0.2 to 0.3 per cent —
+about a 2,000-fold margin. Changing the ratio is a one-constant change.
+
+This gate cannot live in `RoundConfigV1::validate()` or in `round-type`:
+the config carries `prize_schedule_hash`, not the weights, and the schedule
+bytes first appear on chain at phase-two settlement. `ComputedDraw::new` is the
+earliest point that holds the config and the committed schedule together, and it
+already owns the success-or-failure decision.
+
+### Part two: derivation still refuses a zero
+
+On a successful round, `InitialEntitlements::derive` rejects a batch whose
+allocation gives any drawn prize position zero, returning
+`CoreError::Conservation`. This supersedes the "amounts of zero create no
+obligation and are skipped" sentence in the sub-project 2 design.
+
+With part one in place this guard cannot fire for a round drawn under a config
+and schedule that passed the viability gate, so it is no longer a liveness
+cliff. It is retained for two reasons. Configs deployed before this work exist —
+the deployment manifest is still `prototype-code-cells-only` — and a round drawn
+under one has had no viability gate applied. And it is the invariant that makes
+the retirement count argument sound; leaving it implicit would mean the
+completeness proof rests on a check in a different module with no local
+statement of what it guarantees.
+
+The guard must test the computed allocation, not the pool size: a pool of at
 least one shannon per position is **not** sufficient, because weights
 `[1, 1, 1000]` with a pool of `3` allocate `[1, 0, 2]`.
 
-Accepted consequence: a successful batch whose realized yield is pathologically
-small relative to its schedule's weight spread becomes unsettleable, stranding
-that batch's capacity until the schedule or batch policy changes. Real yields are
-many orders of magnitude above the threshold, so this is unreachable in practice.
-The alternative — redistributing dust so every drawn position receives at least
-one shannon — removes the cliff but changes sub-project 2's committed allocation
-vectors; it is recorded here as a known option, not adopted. Failed rounds are
-unaffected: they allocate no per-ticket prizes at all.
+Residual risk, now quantified: a batch strands only if actual DAO compensation
+over a full term fell below one part per million of principal, which would also
+make the round economically pointless. The alternative of redistributing dust so
+every drawn position receives at least one shannon is recorded as a known option
+and not adopted; it changes sub-project 2's committed allocation vectors and is
+unnecessary once an unyieldable schedule cannot draw.
+
+Failed rounds are unaffected throughout: they allocate no per-ticket prizes.
 
 ## Evidence
 
@@ -219,12 +283,16 @@ more than one.
 
 Pure core, host tests: the obligation-universe sum over a sealed multi-shard
 round; winner lookup including a ticket at a shard boundary and an empty shard;
-the zero-allocation rejection, with a case proving pool size alone is not the
-condition (`[1, 1, 1000]` at pool `3`); memento codec round trip and rejection
+the pool bar in closed form, including the truncation `weights_for` applies when
+`total_tickets` is below the schedule length; the viability gate voiding a round
+with a pathological schedule while a sane one draws; the zero-allocation
+rejection, with a case proving pool size alone is not the condition
+(`[1, 1, 1000]` at pool `3`); memento codec round trip and rejection
 of every malformed length, version and field.
 
 VM suites under `ckb-testtool`. Accepted: non-winner retires after the seal;
-every claim of a failed round retires; winner retires after all batches, with
+every claim of a failed round retires; every claim of a round voided as
+unyieldable retires, and no prize is payable from any of its batches; winner retires after all batches, with
 the memento issued; memento transfers; memento burns. Rejected: retire before
 the entropy record exists; winner retire with `paid_count` one short of the
 universe; winner retire with no memento; non-winner retire with a memento; two
@@ -253,6 +321,10 @@ from the helper instead.
   `accounting` for the first time; only `settlement-type` pulls them in today.
   The binary is already the largest at 209,360 bytes, so its code cell grows.
   Measure it, because deployment cost is a mainnet economic item.
+- `ComputedDraw::new` gains a success condition, so any fixture whose schedule is
+  wide relative to its ticket price now yields a failed round. Check the
+  existing draw and entitlement fixtures against the bar before assuming a
+  regression.
 - Sub-project 2's derivation, its golden vectors and any test that relied on a
   zero allocation change with the amendment. `cargo test -p daowow-core --test
   gen_vectors` rewrites `tests/vectors/daowow_core_vectors.json`, and
