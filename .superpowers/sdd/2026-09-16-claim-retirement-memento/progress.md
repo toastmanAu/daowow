@@ -288,3 +288,19 @@ previously claimed unqualified that no capacity is stranded.
 Task 3: minor (deferred): derive() now returns CoreError::Conservation for both a
 malformed batch and a genuine zero-yield round; a caller wanting to distinguish
 them has no way to. Diagnosability, not correctness.
+Task 3: review spec MET, quality approved, one Important (plan-mandated).
+Reviewer mutation-reasoned both tests: reverting the guard to `continue` turns
+BOTH red, and they cover genuinely different shapes — partial zero (RED output
+showed prize_count: 1 of 4 drawn) and all-zero. Neither is vacuous. Vector
+oracles confirmed untouched.
+
+Finding: the code comment I specified in the brief claims the guard is
+"unreachable for a round drawn under the viability gate". False, and this same
+diff disproves it — MAX_POOL_BAR gates the schedule's weight spread at draw
+time and says nothing about realized yield, so a gate-passing round still trips
+the guard when prize_pool == 0.
+Ruling: fix it. A comment asserting a branch is dead code for current configs is
+how a guard gets deleted, and it also contradicts the spec I corrected an hour
+ago. Fix round 1 dispatched (comment only, no logic). Corrected the wording at
+source in the plan too, so it cannot propagate to a later task's brief.
+Cost if wrong: none, comment-only.

@@ -363,9 +363,13 @@ In `entitlements.rs`, replace the skip at line 79:
                 // A zero here can never be discharged: record_verified_prize
                 // rejects amount == 0, and the only other evidence the batch
                 // owed this ticket nothing is a funding cell the final drain
-                // consumes. The viability gate in ComputedDraw makes this
-                // unreachable for a round drawn under it; configs predating
-                // that gate still exist, so refuse rather than skip.
+                // consumes. MAX_POOL_BAR removes the STRUCTURAL case at the
+                // draw -- a weight spread too wide for any realistic pool --
+                // but not this guard: yield is unknown at the draw, so a
+                // gate-passing round still trips it when prize_pool == 0, and
+                // pre-gate configs exist. The retirement universe counts such
+                // a batch either way, so tolerating a zero would leave every
+                // winner of that round unretirable.
                 if amount == 0 {
                     return Err(CoreError::Conservation);
                 }
