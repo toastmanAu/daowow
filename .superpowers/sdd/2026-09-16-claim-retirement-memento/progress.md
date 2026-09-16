@@ -386,3 +386,18 @@ amount" premise is enforced in entitlements.rs, not here and not in seal.rs, so
 any comment must attribute it there. Also told it to DERIVE the winning and
 non-winning identities from the real draw rather than hardcoding a position —
 a non-winner test that accidentally picks a winning position asserts nothing.
+Task 5: review spec MET, quality approved, no Critical/Important. The reviewer
+checked each of the six decode rejections is BOTH enforced and independently
+pinned, and confirmed each test mutates exactly one field with the rest valid —
+so deleting any single condition turns its named test red. No coverage gap.
+It also verified ticket_id parity by reading BOTH call sites rather than
+assuming: MementoArgs::ticket_id and ClaimArgs::ticket_id call the same free
+function with the same argument order. That parity is what the on-chain
+cross-check in Task 8 depends on; if they diverged, the memento would
+commemorate a different ticket than the claim it is issued beside.
+
+Task 5: minor (deferred): memento.rs groups the structural and semantic decode
+checks into two `if` blocks rather than one per condition; a maintainer adding a
+field must re-read the block to see which invariants exist. Stylistic.
+
+Task 5: complete (commits 9112849..a70db65, review clean, 0 fix rounds)
