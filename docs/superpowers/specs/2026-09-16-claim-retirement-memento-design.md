@@ -3,7 +3,8 @@
 Date: 2026-09-16. Status: design for user review. Decisions recorded here were
 made by the user on 2026-09-16: a round whose committed schedule cannot yield a
 positive prize for every drawn position is voided at the draw rather than
-discovered at settlement, and a batch may not allocate a zero prize to a drawn
+discovered at settlement (the viability bound became an absolute constant during
+implementation — see below), and a batch may not allocate a zero prize to a drawn
 position; retirement is its own transaction rather than riding the final
 redemption; the memento is a new args tag on `entry-shard-type` rather than a
 separate binary; the memento's data is the self-contained 54-byte layout below.
@@ -54,35 +55,50 @@ Call that the **pool bar**. It is a closed form over the committed schedule, not
 a simulation. For the `[40, 25, 20, 10, 5]` schedule the bar is 20 shannons; for
 a pathological `[1, 1, 1000]` it is 1002.
 
-Every batch's pool is the DAO yield on at least one ticket price:
-`AggregationState::accept` rejects an empty batch and requires
-`principal == ticket_count * ticket_price` with `ticket_count >= 1`, and
-`prize_pool = realized_total - input_capacity` where `input_capacity >= principal`.
-So the worst case over every batch a round can produce is a pure function of the
-schedule and `ticket_price`, knowable before any deposit matures.
-
 `ComputedDraw::new` gains that as a second success condition beside the existing
 `total >= cfg.minimum_tickets`:
 
 ```
-viable  <=>  schedule.min_viable_pool(total_tickets) <= cfg.ticket_price / VIABILITY_RATIO
+viable  <=>  schedule.min_viable_pool(total_tickets) <= MAX_POOL_BAR
 ```
 
-with `VIABILITY_RATIO = 1_000_000`. A round that is not viable draws no
-positions and is a **failed round** — the existing, already-tested void path: no
-prizes are owed, depositors recover principal and yield through the
+with `MAX_POOL_BAR = 1_000_000` shannons (0.01 CKB). A round that is not viable
+draws no positions and is a **failed round** — the existing, already-tested void
+path: no prizes are owed, depositors recover principal and yield through the
 participant-keyed path untouched, and every claim retires immediately as a
 non-winner. No capacity is stranded and no partial payment can have happened,
-because the decision is derived from round-level data only (`total_tickets`, the
-committed schedule, `ticket_price`) and is therefore identical for every batch
-and for retirement. A round cannot pay prizes from one batch and then discover
-another is unyieldable.
+because the decision is derived from round-level data only (`total_tickets` and
+the committed schedule) and is therefore identical for every batch and for
+retirement. A round cannot pay prizes from one batch and then discover another
+is unyieldable.
 
-The ratio is where the economic assumption lives, and it is an assumption, not a
-theorem: it asserts that DAO compensation over a full term exceeds one part per
-million of the deposited principal. At a 100 CKB ticket it permits a pool bar of
-10,000 shannons against a realistic term yield of roughly 0.2 to 0.3 per cent —
-about a 2,000-fold margin. Changing the ratio is a one-constant change.
+The bound is deliberately an absolute constant rather than a fraction of
+`cfg.ticket_price`. An earlier draft of this design used
+`ticket_price / 1_000_000`, which is wrong for a reason worth recording:
+`ticket_price` sits at offset 36 of `RoundConfigV1::encode()`, so it is inside
+`commitment()` and therefore inside the draw seed
+`H("DAOWOW_AUTHENTICATED_DRAW_V1" ‖ commitment ‖ record)`. Deriving the
+viability allowance from it would make whether a round draws depend on a value
+that also decides which tickets win, and would make any change to a ticket price
+reshuffle the draw rather than rescale it.
+
+The economic assumption is now explicit rather than hidden in a ratio: every
+batch a round can produce yields more than 0.01 CKB. The smallest batch is one
+ticket — `AggregationState::accept` rejects an empty batch and forces
+`principal == ticket_count * ticket_price` with `ticket_count >= 1` — and a
+realistic ticket funds at least its own 220 CKB claim cell, whose DAO
+compensation over a full term runs to tens of millions of shannons, roughly
+twenty times the bound. Every schedule in the repository today sits far below
+it: the core draw fixture's `[4, 3, 2, 1]` has bar 10 and the integration
+harness's `[1; 32]` has bar 32.
+
+What this bound does NOT do is adapt to an unusually small ticket price. A round
+priced below the claim-cell floor could still produce a batch whose pool falls
+under its schedule's bar. That costs nothing in safety — part two below still
+refuses such a batch, so the retirement count argument holds either way — and
+costs only that such a round would strand a batch rather than void cleanly. A
+future `RoundConfigV1` version that commits a minimum ticket price would close
+it; this design does not add a config field for it.
 
 This gate cannot live in `RoundConfigV1::validate()` or in `round-type`:
 the config carries `prize_schedule_hash`, not the weights, and the schedule

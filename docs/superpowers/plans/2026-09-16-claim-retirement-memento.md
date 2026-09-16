@@ -40,25 +40,29 @@ content check to the claim.
 - CKB executes script groups in script-hash order, not input order. When two
   scripts would both reject, the reported code is hash luck. To pin a guard in
   script A, construct the transaction so script B is consistent.
-- `VIABILITY_RATIO = 1_000_000`. Pool bar allowance is `cfg.ticket_price / VIABILITY_RATIO`.
+- `MAX_POOL_BAR = 1_000_000` shannons (0.01 CKB). A round draws only if
+  `schedule.min_viable_pool(total) <= MAX_POOL_BAR`. The allowance is an absolute
+  constant and must NOT be derived from `cfg.ticket_price`: `ticket_price` is at
+  offset 36 of `RoundConfigV1::encode()`, so it is inside `commitment()` and
+  therefore inside the draw seed — changing it reshuffles which tickets win.
 - `MEMENTO_TAG = 6`, `MEMENTO_ARGS_SIZE = 45`, `MEMENTO_DATA_SIZE = 54`,
   `MEMENTO_RENDERER_V1 = 1`.
 - `WINNER_TEMPLATE_SHA256 = sha256(ticketWinner.png) =
   de98837659f7b6a7abc1125a12ec0dd64dc0cc053d93f48007b1459e6f5cb46d`.
 - Commit messages are `<type>: <description>` and end with
   `Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>`.
-- Existing fixtures use `ticket_price = 100 * SHANNONS = 10_000_000_000` and
-  schedules `[1; 32]` (bar 32) and `[4, 3, 2, 1]` (bar 10) against an allowance
-  of 10_000. All pass the viability gate — this was checked before writing this
-  plan. A test that needs an unviable round must construct a pathological
-  schedule on purpose.
+- Every existing fixture passes the gate unchanged, checked before dispatch:
+  the core `computed_draw` fixture's `[4, 3, 2, 1]` has bar 10, and the
+  integration harness's `[1; 32]` has bar 32 (bar 8 when truncated to 8 tickets),
+  all far below `MAX_POOL_BAR`. NO fixture needs editing. A test that needs an
+  unviable round must construct a pathological schedule on purpose.
 
 ## File structure
 
 | File | Responsibility |
 | --- | --- |
 | `crates/daowow-core/src/schedule.rs` | add `min_viable_pool` beside `allocate` |
-| `crates/daowow-core/src/computed_draw.rs` | scale the test fixture's ticket price, then add `VIABILITY_RATIO` and the success condition |
+| `crates/daowow-core/src/computed_draw.rs` | add `MAX_POOL_BAR` and the success condition |
 | `crates/daowow-core/src/seal.rs` | add `RoundSeal::total_accepted_batches` |
 | `crates/daowow-core/src/entitlements.rs` | reject a zero allocation |
 | `crates/daowow-core/src/memento.rs` (new) | `MementoArgs`, `MementoData`, capacity, template constant |
@@ -169,109 +173,15 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ---
 
-### Task 2: Scale the core draw fixture to a realistic ticket price
-
-**Files:**
-- Modify: `crates/daowow-core/src/computed_draw.rs:136` (`ticket_price: 100`) and the
-  entry principals in the same `fixture_with_accumulator` function
-- Modify: `crates/daowow-core/src/entitlements/tests.rs`, `crates/daowow-core/src/entitlement_witness.rs`
-  (assertions on absolute amounts)
-- Test: the existing core suite; no new tests
-
-**Interfaces:**
-- Consumes: nothing
-- Produces: a `computed_draw::tests` fixture whose rounds stay successful once
-  Task 3's viability gate lands
-
-**Why this task exists:** the fixture sets `ticket_price: 100` shannons. A
-100-shannon ticket cannot fund a cell, let alone a prize, so once Task 3 gates on
-`min_viable_pool(total) <= ticket_price / 1_000_000` every fixture round becomes a
-failed round. This was measured, not predicted: applying the gate to the current
-fixture fails exactly three tests —
-`computed_draw::tests::draws_only_accepted_prefixes_across_empty_shards`,
-`entitlement_witness::tests::decoded_evidence_derives_entitlements_and_rejects_altered_capacity`,
-and `entitlements::tests::success_round_credits_prizes_to_tickets_and_principal_to_depositors`.
-The gate is right; the fixture is economically incoherent. Fix the fixture first.
-
-- [ ] **Step 1: Record the baseline**
-
-Run: `cargo test -p daowow-core --lib 2>&1 | tail -3`
-Expected: `124 passed; 0 failed`. Write the number down; it must not change.
-
-- [ ] **Step 2: Scale the fixture by 10^8**
-
-In `fixture_with_accumulator` in `crates/daowow-core/src/computed_draw.rs`,
-multiply every CKB-denominated amount by `100_000_000` so a ticket costs 100 CKB,
-matching the integration harness. Every ratio stays identical:
-
-```rust
-            // 100 CKB. The [4,3,2,1] schedule's pool bar is 10 against an
-            // allowance of ticket_price / VIABILITY_RATIO = 10_000, so the
-            // viability gate added in Task 3 leaves these rounds successful.
-            ticket_price: 100 * 100_000_000,
-```
-
-and, in the entry construction inside the same function:
-
-```rust
-                    ticket_count: 2,
-                    principal: 200 * 100_000_000,
-```
-
-`AggregationState::new_bound` requires
-`frozen.ticket_count * cfg.ticket_price == frozen.principal_total`, and `accept`
-requires `entry.ticket_count * cfg.ticket_price == entry.principal`, so every
-other amount derived from these in the same function scales by the same factor.
-Read the whole function and scale each remaining literal or justify leaving it:
-position bases, entry nonces, shard ids, ticket counts and block heights are
-ordinals, not amounts, and must NOT scale.
-
-- [ ] **Step 3: Scale the dependent assertions**
-
-Run: `cargo test -p daowow-core --lib 2>&1 | tail -30`
-
-The three tests named above assert absolute amounts. Each expected value must
-become **exactly** its old value times `100_000_000`. For example
-`PayoutItem { principal: 250, prize: 100 }` becomes
-`PayoutItem { principal: 25_000_000_000, prize: 10_000_000_000 }`.
-
-**Stop and report if any produced value is not exactly old x 10^8.** That would
-mean integer rounding in `allocate_prizes` changes behaviour under scaling, which
-is a real finding about the allocation and not a fixture detail. Do not paper
-over it by pasting whatever the test happened to print.
-
-- [ ] **Step 4: Verify the whole suite**
-
-Run: `cargo test -p daowow-core --lib`
-Expected: `124 passed; 0 failed` — the same count as Step 1. A different count
-means a test was lost or silently added; investigate before continuing.
-
-- [ ] **Step 5: Check no_std and clippy**
-
-Run: `cargo check -p daowow-core --no-default-features && cargo clippy -p daowow-core --lib -- -D warnings`
-Expected: both clean.
-
-- [ ] **Step 6: Commit**
-
-```bash
-git add crates/daowow-core/src/computed_draw.rs crates/daowow-core/src/entitlements/tests.rs \
-        crates/daowow-core/src/entitlement_witness.rs
-git commit -m "test: give the core draw fixture a realistic ticket price
-
-Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
-```
-
----
-
-### Task 3: Void an unyieldable draw
+### Task 2: Void an unyieldable draw
 
 **Files:**
 - Modify: `crates/daowow-core/src/computed_draw.rs:57` (the `if total != 0 && ...` condition)
 - Test: `crates/daowow-core/src/computed_draw.rs` `mod tests`
 
 **Interfaces:**
-- Consumes: `PrizeSchedule::min_viable_pool` (Task 1), `RoundConfigV1::ticket_price`
-- Produces: `computed_draw::VIABILITY_RATIO: u64`; `ComputedDraw::is_success()` now
+- Consumes: `PrizeSchedule::min_viable_pool` (Task 1)
+- Produces: `computed_draw::MAX_POOL_BAR: u64`; `ComputedDraw::is_success()` now
   returns false for an unviable schedule
 
 - [ ] **Step 1: Write the failing test**
@@ -283,9 +193,10 @@ The fixture in `computed_draw.rs` `mod tests` builds `cfg`, `record` and a
     #[test]
     fn an_unyieldable_schedule_voids_the_round() {
         let f = fixture(1, true);
-        // Sane schedule: bar 10 against allowance ticket_price / 1_000_000.
+        // Sane schedule: bar 10, far below MAX_POOL_BAR. This is the shipped
+        // fixture's own schedule, so the gate must leave it drawing.
         let sane = PrizeSchedule::new(&[4, 3, 2, 1]).unwrap();
-        assert!(sane.min_viable_pool(f.total_tickets()).unwrap() <= f.cfg.ticket_price / VIABILITY_RATIO);
+        assert!(sane.min_viable_pool(f.total_tickets()).unwrap() <= MAX_POOL_BAR);
 
         // Pathological spread: bar exceeds the allowance, so the round must fail.
         let mut wide_weights = [1u64; 32];
@@ -326,7 +237,7 @@ default behaviour.
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `cargo test -p daowow-core --lib computed_draw::tests -- --nocapture`
-Expected: FAIL, `cannot find value 'VIABILITY_RATIO'`, and after adding the
+Expected: FAIL, `cannot find value 'MAX_POOL_BAR'`, and after adding the
 constant, `unyieldable schedule must not draw`.
 
 - [ ] **Step 3: Write the implementation**
@@ -335,12 +246,21 @@ Add near the top of `computed_draw.rs`, below the imports:
 
 ```rust
 /// A round draws only if its committed schedule can pay every drawn position a
-/// positive amount from the smallest batch the round can produce. The smallest
-/// batch is one ticket (`AggregationState::accept` rejects an empty batch and
-/// forces `principal == ticket_count * ticket_price`), so the worst-case pool is
-/// the DAO yield on `ticket_price`. This ratio is the economic assumption: that
-/// a full term yields more than one part per million of principal.
-pub const VIABILITY_RATIO: u64 = 1_000_000;
+/// positive amount out of a pool this small. `min_viable_pool` is the exact
+/// zero-free threshold for a schedule, so capping it caps how wide the weight
+/// spread may be relative to what any batch will realistically yield.
+///
+/// 0.01 CKB. The smallest batch a round can produce is one ticket
+/// (`AggregationState::accept` rejects an empty batch), and a realistic ticket
+/// funds at least its own 220 CKB claim cell, whose DAO compensation over a full
+/// term runs to tens of millions of shannons — roughly twenty times this bound.
+///
+/// Deliberately an absolute constant rather than a fraction of
+/// `cfg.ticket_price`: `ticket_price` sits at offset 36 of
+/// `RoundConfigV1::encode()`, so it is inside `commitment()` and therefore inside
+/// the draw seed. Deriving the allowance from it would make the viability of a
+/// round depend on a value that also decides which tickets win.
+pub const MAX_POOL_BAR: u64 = 1_000_000;
 ```
 
 Then replace the success condition at line 57:
@@ -353,7 +273,7 @@ Then replace the success condition at line 57:
         // only, so every batch and retirement reach the same verdict.
         if total != 0
             && total >= cfg.minimum_tickets
-            && schedule.min_viable_pool(total)? <= cfg.ticket_price / VIABILITY_RATIO
+            && schedule.min_viable_pool(total)? <= MAX_POOL_BAR
         {
             positions = vec![(0, 0); schedule.weights_for(total)?.len()];
             crate::draw::draw_positions(&seed, total, positions.len() as u64, &mut positions)?;
@@ -363,10 +283,12 @@ Then replace the success condition at line 57:
 - [ ] **Step 4: Run the whole core suite**
 
 Run: `cargo test -p daowow-core --lib`
-Expected: PASS. If an existing draw or entitlement test now sees a failed round,
-check its schedule against `min_viable_pool` before assuming a regression —
-per Global Constraints the shipped fixtures all pass the bar, so a failure means
-that test introduced its own schedule.
+Expected: PASS, with the same test count as before your change plus your two new
+tests. NO existing test should change behaviour: every shipped fixture's bar
+(10 for the core fixture, 32 for the integration harness) is far below
+`MAX_POOL_BAR`, which was verified before this task was dispatched. If an
+existing test DOES flip to a failed round, stop and report it — that means a
+fixture's schedule is wider than believed, not that the test needs updating.
 
 - [ ] **Step 5: Check no_std and clippy**
 
@@ -384,7 +306,7 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ---
 
-### Task 4: Derivation refuses a zero allocation
+### Task 3: Derivation refuses a zero allocation
 
 **Files:**
 - Modify: `crates/daowow-core/src/entitlements.rs:79` (`if amount == 0 { continue; }`)
@@ -473,7 +395,7 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ---
 
-### Task 5: Obligation universe on the seal
+### Task 4: Obligation universe on the seal
 
 **Files:**
 - Modify: `crates/daowow-core/src/seal.rs` (inside `impl RoundSeal`, beside `ledger`)
@@ -547,7 +469,7 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ---
 
-### Task 6: Memento codec
+### Task 5: Memento codec
 
 **Files:**
 - Create: `crates/daowow-core/src/memento.rs`
@@ -806,16 +728,16 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ---
 
-### Task 7: Pure retire decision
+### Task 6: Pure retire decision
 
 **Files:**
 - Modify: `crates/daowow-core/src/claim.rs` (after `validate_transfer`)
 - Test: `crates/daowow-core/src/claim/tests.rs`
 
 **Interfaces:**
-- Consumes: `ComputedDraw::{positions, locate}` (Task 3). It does NOT call
+- Consumes: `ComputedDraw::{positions, locate}` (Task 2). It does NOT call
   `total_accepted_batches`: the universe arrives as the `universe: u64`
-  parameter, and Task 8's contract is what reads it off the seal.
+  parameter, and Task 7's contract is what reads it off the seal.
 - Produces: `RetireDecision { NonWinner, Winner { prize_index: u32 } }` and
   `retire_decision(args: &ClaimArgs, state: &PrizeRedemptionState, draw: &ComputedDraw<'_>, universe: u64) -> Result<RetireDecision, CoreError>`
 
@@ -971,15 +893,15 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ---
 
-### Task 8: Claim retire mode (contract)
+### Task 7: Claim retire mode (contract)
 
 **Files:**
 - Modify: `crates/daowow-core/src/error.rs:99` (append codes)
 - Modify: `contracts/entry-shard-type/src/claim.rs:86` (`(true, None) => err(CLAIM_ERROR_RETIRE)`)
 
 **Interfaces:**
-- Consumes: `retire_decision`, `RetireDecision` (Task 7); `MementoArgs`,
-  `MementoData`, `MEMENTO_RENDERER_V1` (Task 6); `RoundSeal::total_accepted_batches` (Task 5);
+- Consumes: `retire_decision`, `RetireDecision` (Task 6); `MementoArgs`,
+  `MementoData`, `MEMENTO_RENDERER_V1` (Task 5); `RoundSeal::total_accepted_batches` (Task 4);
   `daowow_contracts_common::config_by_commitment`
 - Produces: the retire transition; no new public Rust API
 
@@ -1190,7 +1112,7 @@ Expected: PASS.
 
 Run: `ls -l target/riscv64imac-unknown-none-elf/release/entry-shard-type`
 Note the size against the 209,360-byte baseline; the growth is a deployment
-cost item for the results document in Task 12.
+cost item for the results document in Task 11.
 
 - [ ] **Step 7: Commit**
 
@@ -1204,14 +1126,14 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ---
 
-### Task 9: Memento mode (contract)
+### Task 8: Memento mode (contract)
 
 **Files:**
 - Create: `contracts/entry-shard-type/src/memento.rs`
 - Modify: `contracts/entry-shard-type/src/main.rs:72-80` (dispatch) and the `mod` list
 
 **Interfaces:**
-- Consumes: `MementoArgs`, `MementoData` (Task 6), `ClaimArgs` (shipped)
+- Consumes: `MementoArgs`, `MementoData` (Task 5), `ClaimArgs` (shipped)
 - Produces: the tag-6 script mode
 
 - [ ] **Step 1: Write the failing VM tests**
@@ -1393,13 +1315,13 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ---
 
-### Task 10: Rejection suite
+### Task 9: Rejection suite
 
 **Files:**
 - Create: `tests/integration/tests/security_retirement.rs`
 
 **Interfaces:**
-- Consumes: every helper from Tasks 8 and 9
+- Consumes: every helper from Tasks 7 and 8
 - Produces: nothing; a gate
 
 - [ ] **Step 1: Write the first rejection test in full**
@@ -1489,14 +1411,14 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ---
 
-### Task 11: Mutation probes
+### Task 10: Mutation probes
 
 **Files:**
 - No production changes; a verification pass with a written record
 
 **Interfaces:**
-- Consumes: the suites from Tasks 10 and 9
-- Produces: the evidence table for Task 12
+- Consumes: the suites from Tasks 9 and 8
+- Produces: the evidence table for Task 11
 
 - [ ] **Step 1: Probe each guard individually**
 
@@ -1545,7 +1467,7 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ---
 
-### Task 12: Devnet proof and handoff
+### Task 11: Devnet proof and handoff
 
 **Files:**
 - Modify: `tests/devnet/` (extend the existing claim lifecycle test)

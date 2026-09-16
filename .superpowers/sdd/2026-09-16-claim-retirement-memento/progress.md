@@ -135,3 +135,36 @@ numbers in prose. Lesson for the rest of this run: a subagent's narrated numbers
 are not evidence; check the code when a number looks off by exactly the dust.
 
 Task 1: complete (commits 9d132bb..6223a19, review clean after 1 fix round)
+
+Task 2 (fixture scaling): BLOCKED by the implementer, correctly. It found that
+`ticket_price` sits at offset 36 of `RoundConfigV1::encode()`, so it is inside
+`commitment()` and therefore inside the draw seed
+H("DAOWOW_AUTHENTICATED_DRAW_V1" || commitment || record). Scaling it does not
+rescale amounts — it RESHUFFLES which tickets win. Confirmed by reading
+encoding.rs:111 and computed_draw.rs:51. Consequences it hit: a golden vector
+pinned against an independent Python hashlib computation broke, prize assignment
+changed tier, and two further tests failed because the toy fixture's numbers are
+rounding-dominated (a true 50/50 split allocating 66/33), so old x 1e8 does not
+hold. It committed nothing; working tree reverted clean.
+
+Ruling: SUPERSEDES ruling F2. My F2 was wrong — it assumed ticket_price was a
+pure amount. Do not scale the fixture. Instead the viability allowance becomes an
+absolute constant, MAX_POOL_BAR = 1_000_000 shannons (0.01 CKB), replacing
+`cfg.ticket_price / VIABILITY_RATIO`. Verified before re-dispatch: the core
+fixture's [4,3,2,1] has bar 10, the integration harness's [1;32] has bar 32 (8
+when truncated), and the pathological test schedule has bar 2.9e17 — so NO
+fixture changes at all, and the void test still exercises the gate. Task 2
+(scaling) is deleted and the plan is back to 11 tasks, restored from 88ae175
+with F1/F3/F4 reapplied rather than renumbered, to avoid renumbering errors.
+
+Why this is safe: the retirement count argument rests on the DERIVATION guard
+(reject a zero allocation), not on the draw gate. The gate only makes the
+failure graceful instead of stranding a batch. So making the allowance less
+adaptive cannot weaken the correctness of retirement.
+Cost if wrong: the bound does not adapt to an unusually small ticket price, so a
+round priced below the claim-cell floor could strand a batch rather than void
+cleanly. Recorded in the spec as a known limit with the config-field fix that
+would close it.
+
+Deferred minor: the implementer observed the core fixture's numbers are
+rounding-dominated (66/33 for a true 50/50). Not touched, not needed now.
