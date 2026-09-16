@@ -690,3 +690,23 @@ Standing note for future sessions: a mutation-testing pass and a background
 security scanner are structurally in conflict — one introduces exactly the
 patterns the other exists to catch. Verify against HEAD, not the working tree,
 before acting on a scanner finding during a probe run.
+Scanner findings 2-4, all verified FALSE POSITIVES against HEAD, all matching
+Task 10 probe rows, no action taken on any:
+- memento.rs group-size guard (load_cell(1, Group*)) — present at HEAD line 45.
+- memento.rs mint guard — BOTH halves present at HEAD lines 63-64. NOTE: the
+  scanner named the wrong half. It reported Source::Input != 1 as removed and
+  suggested restoring it; the live diff showed Source::Output != 0 was the one
+  deleted. Acting on the scanner's rendering without reading the diff would have
+  edited an untouched line and left the real mutation in place.
+- claim.rs schedule commitment — HEAD line 239 uses decode_committed(&witness,
+  &cfg.prize_schedule_hash); the probe swapped in the uncommitted decode.
+  This is the guard holding the draw honest: the schedule arrives in the RETIRING
+  HOLDER'S OWN WITNESS, so without the commitment check they could supply any
+  weights, changing weights_for(total), changing how many positions are drawn,
+  changing who retire_decision believes won. The full authentication chain is
+  claim args -> commitment -> config (cell dep) -> schedule (witness + hash), and
+  this is its only holder-supplied input.
+
+Standing method note reinforced four times now: verify a scanner finding against
+`git show HEAD:<file>`, never the working tree, and read the actual `git diff`
+rather than the scanner's rendering of it.
