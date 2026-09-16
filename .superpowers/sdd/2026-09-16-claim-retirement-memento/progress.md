@@ -319,3 +319,14 @@ Task 4 (obligation universe on the seal): dispatched (sonnet), BASE 71ff552,
 confined to seal.rs. Told not to weaken the test if building a multi-batch
 ledger is hard — a fixture where every shard has 0 or 1 batch would not catch a
 summation that ignores per-shard counts.
+Task 3: re-review ADDRESSED, no new breakage. The re-reviewer did NOT quote the
+comment as instructed, so I read it myself. All three required points are in
+fact present and accurate — my first read used a truncating sed range and
+appeared to show point 3 missing, which it is not.
+
+Task 3: minor (deferred): the comment says "The seal's accepted-batch count
+retires this batch regardless" where "counts this batch" is meant — a batch is
+not retired, a claim is. Meaning survives from the rest of the sentence; not
+worth a fix round.
+
+Task 3: complete (commits de78023..71ff552, review clean after 1 fix round)
