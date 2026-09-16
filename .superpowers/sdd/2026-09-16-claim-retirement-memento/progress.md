@@ -520,3 +520,38 @@ conditions so do not duplicate them; the three integration failures to ignore
 work around if making the winner path pass requires touching claim.rs or
 daowow-core — that would mean Task 7's claim-side memento checks are wrong,
 which is a finding, not something to patch from the memento side.
+Task 7: review spec MET, quality approved, no Critical/Important new to the diff.
+The reviewer re-derived the round-id offset from source rather than trusting the
+brief: EntryShardDataV1 round_id at 0..32 -> AggregationState frozen at 1..102 ->
+ledger-relative 1..33 -> RoundSeal ledgers start at offset 5 -> seal-relative
+6..38 (matching entropy.rs's existing bare-seal slice) -> EntropyRecord prepends
+one tag byte -> record-relative 7..39, which is what claim.rs uses. It also
+noted WHY the accepted test is a real canary for this: config_by_commitment
+requires exact round_id equality, so an off-by-one makes config lookup fail and
+the test goes red. Dep authentication confirmed exact (own code_hash + hash_type
++ full args + data tag 4, no prefix matching), core functions called not
+reimplemented, and the fixture confirmed to build a real config/seal/record with
+genuine MMR proofs rather than a stub.
+
+Task 7: minor (deferred) INHERITED FROM TASK 6, flagged by this review as the
+exact case I asked it to check: `retire_decision` returns the same
+CoreError::StateTransition for two very different conditions — a winner who has
+not collected everything (benign, retry later) and a non-winner carrying
+recorded payments (impossible under correct operation, i.e. corruption). Both
+surface as CLAIM_ERROR_INCOMPLETE, so an operator cannot tell a normal
+early-retire attempt from a corrupted claim by error code.
+Ruling: defer, do not open a fix round. Safety is unaffected — both reject — and
+I checked it does not blunt Task 11's mutation probes: at core level the two
+branches differ by Ok-vs-Err, not by error variant, so deleting either guard
+still turns its named test red. It is diagnosability only. Recorded for the
+final whole-branch review to decide before merge.
+Cost if wrong: a corrupted claim looks like an ordinary "too early" rejection
+and nobody investigates it.
+
+Task 7: minor (deferred): security_redemption.rs:616's widened accepted-code set
+probably includes an unreachable -96 for that shape; harmless but imprecise.
+Task 7: minor (deferred): SealedRound's winning_shard/winning_position/
+prize_index/universe fields are unused until the winner-path test, producing
+dead_code warnings in the claim_retirement binary. Task 8 should consume them.
+
+Task 7: complete (commits fc5c6b5..4461d8b, review clean, 0 fix rounds)
