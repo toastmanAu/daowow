@@ -616,3 +616,33 @@ Task 8: minor (deferred): prefer restructuring duplicate_position_is_rejected so
 only one script group can fail, rather than accepting either code.
 
 Task 8: complete (commits 4461d8b..d3ec2da, review clean, 0 fix rounds)
+
+Task 9: implementer DONE_WITH_CONCERNS — commit ec1ba06, 15 of the 16 table rows
+in tests/integration/tests/security_retirement.rs, each isolated to exactly one
+script group and asserting an exact code. It verified isolation empirically with
+a negative control (flipped an expected code, confirmed a real failure at
+Inputs[0].Type with the right source, reverted) rather than assuming it. Added
+seed_claim_with_paid_count to common/mod.rs. No contract or core source touched.
+
+It EXCLUDED `two_mementos_for_one_retiring_claim_are_refused` rather than widen
+to an OR-of-codes, which is what I asked for. Reason, with probe evidence: two
+identical-args mementos are necessarily ONE script group, so the memento's
+group-size guard (-102) and the claim's duplicate guard (-96) both fire
+independently and the reported code is hash-order luck. Probes: claim + 2
+mementos -> -96; 2 mementos alone -> -102.
+
+Ruling: accept the exclusion, but its own probe data shows HALF the case is
+isolatable — two mementos with NO claim input is a single-script-group
+transaction by construction, immune to any future hash reshuffle. Fix round 1
+dispatched to add `two_mementos_of_one_identity_are_refused` asserting exactly
+-102, pinning the memento group-size guard which is otherwise untested. The
+claim-side `found > 1` stays unpinnable; the design spec already documents that
+pair as deliberate defence in depth.
+Cost if wrong: one test. Told it to CONFIRM the transaction really contains only
+one script group rather than assume, since a stray lock or typed cell in the
+fixture would collapse the isolation argument.
+
+Plan amended: Task 10's mutation-probe table referenced the excluded test. Row
+replaced with the memento group-size guard against the new test, plus an
+explicit UNPINNABLE row for the claim-side duplicate check so the probe task
+does not hunt for a test that cannot exist.

@@ -1438,7 +1438,8 @@ because they only went red together.
 | viability gate | drop the `min_viable_pool` term | `an_unyieldable_schedule_voids_the_round` |
 | zero-allocation refusal | restore `continue` | `a_batch_allocating_zero_to_a_drawn_position_is_refused` |
 | memento count for a winner | allow `found != 1` | `a_winner_retiring_with_no_memento_is_refused` |
-| memento duplicate check | drop the `found > 1` branch | `two_mementos_for_one_retiring_claim_are_refused` |
+| memento group-size guard | drop the `load_cell(1, Group*)` check | `two_mementos_of_one_identity_are_refused` |
+| claim-side memento duplicate (`found > 1`) | — | **UNPINNABLE, do not probe.** Two identical-args mementos are necessarily one script group, so the memento group-size guard fires too and the reported code is script-hash luck. Deliberate defence in depth; the design spec says so explicitly. Record it as unpinned rather than hunting for a test. |
 | memento lock equality | drop the lock comparison | `a_memento_locked_to_a_stranger_is_refused` |
 | memento data equality | drop the `data != expected` branch | `a_memento_with_the_wrong_winnings_is_refused` |
 | memento mint claim-input count | accept any count | `a_memento_minted_with_no_retiring_claim_is_refused` |
