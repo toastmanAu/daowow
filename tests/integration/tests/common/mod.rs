@@ -373,6 +373,18 @@ impl World {
         self.script_for(&r, Bytes::from(args.to_vec()))
     }
 
+    /// Winner memento type script for one ticket (after `create_round`).
+    pub fn memento_type_script(&mut self, shard_id: u32, position: u64) -> Script {
+        let r = self.deps.entry_shard_type;
+        let args = daowow_core::memento::MementoArgs {
+            commitment: self.config_hash,
+            shard_id,
+            position,
+        }
+        .encode();
+        self.script_for(&r, Bytes::from(args.to_vec()))
+    }
+
     pub fn dao_lock_script(&mut self, round_id: &Hash32, batch_id: u64) -> Script {
         self.dao_lock_script_with_digest(round_id, batch_id, &[0; 32])
     }
@@ -599,6 +611,10 @@ pub struct SealedRound {
     pub winning_position: u64,
     pub prize_index: u32,
     pub universe: u64,
+    /// `(batch_id, digest)` of every accepted batch across every shard, in the
+    /// exact identities `prize_source` uses — the real obligation universe a
+    /// winner must fully discharge before retiring.
+    pub batches: Vec<(u64, Hash32)>,
 }
 
 /// Raw witness carrying the committed prize schedule, as `retire()` expects
@@ -639,6 +655,7 @@ pub fn sealed_round_with_entropy(
     let cfg = full_config(&base_cfg, &world.deps);
 
     let mut ledgers = Vec::new();
+    let mut batches: Vec<(u64, Hash32)> = Vec::new();
     for shard_id in 0..shards {
         let entries: Vec<EntryDataV1> = (0..tickets_per_shard)
             .map(|nonce| EntryDataV1 {
@@ -674,9 +691,13 @@ pub fn sealed_round_with_entropy(
         };
         let capacities = vec![1000 * SHANNONS; tickets_per_shard as usize];
         let state = daowow_core::lifecycle::AggregationState::new(&cfg, &frozen).unwrap();
-        let (accepted, _receipt) = state
+        let (accepted, receipt) = state
             .accept(&cfg, &entries, &capacities, &proof_refs)
             .unwrap();
+        batches.push((
+            daowow_core::lifecycle::batch_id(shard_id, 0).unwrap(),
+            receipt.digest,
+        ));
         let closed = accepted
             .close(&cfg, daowow_core::epoch::absolute_epoch_since(200).unwrap())
             .unwrap();
@@ -727,7 +748,147 @@ pub fn sealed_round_with_entropy(
         winning_position,
         prize_index: prize_index as u32,
         universe,
+        batches,
     }
+}
+
+/// Minimum capacity of a memento cell under `lock` (shannons). Mirrors
+/// `claim_cell_capacity`: CKB counts a script as code_hash + hash_type +
+/// args, not its molecule serialization.
+pub fn memento_cell_capacity(lock: &Script) -> u64 {
+    let lock_size = 32 + 1 + lock.args().raw_data().len() as u64;
+    daowow_core::memento::memento_occupied_capacity(lock_size)
+}
+
+/// A claim for `round`'s winning ticket, pre-loaded with a fully paid
+/// `PrizeRedemptionState`: one recorded source per accepted batch of the
+/// sealed round, using the round's real `prize_source` identities (mirrors
+/// the incremental-host pattern in `claim_redemption.rs`). `retire_decision`
+/// requires exactly `paid_count == universe` for a winner to retire.
+pub fn seed_paid_claim(
+    world: &mut World,
+    lock: &Script,
+    round: &SealedRound,
+) -> (OutPoint, daowow_core::claim::ClaimArgs) {
+    let args = daowow_core::claim::ClaimArgs {
+        commitment: world.config_hash,
+        shard_id: round.winning_shard,
+        position: round.winning_position,
+    };
+    let ticket = args.ticket_id();
+    let mut host = SmtHost::new();
+    let mut state = daowow_core::redemption::PrizeRedemptionState::new(ticket);
+    for (i, (batch_id, digest)) in round.batches.iter().enumerate() {
+        let source = daowow_core::redemption::prize_source(&world.config_hash, *batch_id, digest);
+        let key = daowow_core::redemption::prize_obligation_key(&ticket, &source);
+        let absence = host.absence_proof(&[key]).unwrap();
+        let amount = (i as u64 + 1) * SHANNONS;
+        state = state
+            .record_verified_prize(&source, amount, &absence)
+            .unwrap();
+        host.insert(
+            &key,
+            &daowow_core::redemption::prize_payment_leaf(&ticket, &source, amount),
+        )
+        .unwrap();
+    }
+    let type_script = world.claim_type_script(round.winning_shard, round.winning_position);
+    let cell = CellOutputBuilder::default()
+        .capacity(pack_u64(claim_cell_capacity(lock)))
+        .lock(lock.clone())
+        .type_(Some(type_script).pack())
+        .build();
+    let op = world
+        .context
+        .create_cell(cell, Bytes::from(state.encode().to_vec()));
+    (op, args)
+}
+
+/// Retire `claim_op` (a fully paid winner) with no successor, minting its
+/// memento at `round.winning_shard/position` under `lock`. Mirrors the
+/// accepted non-winner retirement shape, adding the memento output the
+/// claim's own script requires of a winner.
+pub fn retire_with_memento(
+    world: &mut World,
+    round: &SealedRound,
+    lock: &Script,
+    claim_op: OutPoint,
+    args: &daowow_core::claim::ClaimArgs,
+) -> TransactionView {
+    let (_, claim_data) = world.cell(&claim_op);
+    let state = daowow_core::redemption::PrizeRedemptionState::decode(&claim_data).unwrap();
+    let memento_type = world.memento_type_script(args.shard_id, args.position);
+    let memento_data = daowow_core::memento::MementoData {
+        renderer_version: daowow_core::memento::MEMENTO_RENDERER_V1,
+        prize_index: round.prize_index,
+        paid_count: state.paid_count(),
+        paid_total: state.paid_total(),
+    }
+    .encode();
+    TransactionBuilder::default()
+        .input(CellInput::new_builder().previous_output(claim_op).build())
+        .output(
+            CellOutputBuilder::default()
+                .capacity(pack_u64(memento_cell_capacity(lock)))
+                .lock(lock.clone())
+                .type_(Some(memento_type).pack())
+                .build(),
+        )
+        .output_data(pack_pbytes(&memento_data))
+        .cell_dep(round.config_dep.clone())
+        .cell_dep(round.entropy_dep.clone())
+        .witness(schedule_witness(&round.schedule))
+        .build()
+}
+
+/// A live memento cell under `lock`, independent of any retiring claim.
+/// Transfer/burn exercise only the memento's own group (content correctness
+/// against a draw is the claim script's job, proven by `retire_with_memento`).
+pub fn seed_memento(world: &mut World, lock: &Script, round: &SealedRound) -> OutPoint {
+    let memento_type = world.memento_type_script(round.winning_shard, round.winning_position);
+    let data = daowow_core::memento::MementoData {
+        renderer_version: daowow_core::memento::MEMENTO_RENDERER_V1,
+        prize_index: round.prize_index,
+        paid_count: 1,
+        paid_total: SHANNONS,
+    }
+    .encode();
+    let cell = CellOutputBuilder::default()
+        .capacity(pack_u64(memento_cell_capacity(lock)))
+        .lock(lock.clone())
+        .type_(Some(memento_type).pack())
+        .build();
+    world.context.create_cell(cell, Bytes::from(data.to_vec()))
+}
+
+/// Transfer `memento_op` under `lock`, keeping its data byte-identical (the
+/// memento's only transfer requirement; ownership authorization is the
+/// cell's separate lock script, not this type script).
+pub fn transfer_memento(world: &mut World, lock: &Script, memento_op: OutPoint) -> TransactionView {
+    let (cell, data) = world.cell(&memento_op);
+    TransactionBuilder::default()
+        .input(CellInput::new_builder().previous_output(memento_op).build())
+        .output(cell.as_builder().lock(lock.clone()).build())
+        .output_data(data.pack())
+        .build()
+}
+
+/// Burn `memento_op`: consume with no successor, recovering its capacity to
+/// a plain cell. Free — a memento carries no rights to discharge.
+pub fn burn_memento(world: &mut World, memento_op: OutPoint) -> TransactionView {
+    let (cell, _) = world.cell(&memento_op);
+    let capacity: u64 = cell.capacity().unpack();
+    let (_, plain_lock) = world.always_success();
+    TransactionBuilder::default()
+        .input(CellInput::new_builder().previous_output(memento_op).build())
+        .output(
+            CellOutputBuilder::default()
+                .capacity(pack_u64(capacity))
+                .lock(plain_lock)
+                .build(),
+        )
+        .output_data(Bytes::new().pack())
+        .build()
 }
 
 pub fn expect_fail(context: &mut Context, tx: &TransactionView) -> ckb_testtool::ckb_error::Error {

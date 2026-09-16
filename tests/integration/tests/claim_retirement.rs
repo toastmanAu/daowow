@@ -35,3 +35,25 @@ fn a_non_winner_retires_once_the_round_is_sealed() {
     expect_ok(&mut w.context, &tx);
     let _ = args;
 }
+
+#[test]
+fn a_winner_retires_and_receives_one_memento() {
+    let mut w = World::new(ACC_MMR);
+    let round = sealed_round_with_entropy(&mut w, 4, 8);
+    let (_, lock) = w.always_success();
+    let (claim_op, args) = seed_paid_claim(&mut w, &lock, &round);
+    let tx = retire_with_memento(&mut w, &round, &lock, claim_op, &args);
+    expect_ok(&mut w.context, &tx);
+}
+
+#[test]
+fn a_memento_transfers_and_burns() {
+    let mut w = World::new(ACC_MMR);
+    let round = sealed_round_with_entropy(&mut w, 4, 8);
+    let (_, lock) = w.always_success();
+    let memento_op = seed_memento(&mut w, &lock, &round);
+    let transfer_tx = transfer_memento(&mut w, &lock, memento_op.clone());
+    expect_ok(&mut w.context, &transfer_tx);
+    let burn_tx = burn_memento(&mut w, memento_op);
+    expect_ok(&mut w.context, &burn_tx);
+}
