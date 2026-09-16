@@ -761,3 +761,56 @@ fn redemption_witness_on_a_prizeless_batch_is_rejected() {
     let built = build_redeem(&mut fx, &[0], None, false);
     expect_code(&mut fx, &built.tx, &[SETTLE_REDEEM, SETTLE_DATA]);
 }
+
+#[test]
+fn items_out_of_prize_order_are_rejected_by_the_settlement_only() {
+    // both claim scripts find their own item regardless of order, so only the
+    // settlement's strict prize-index ordering can reject this transaction
+    let mut fx = fixture(&PRIZES, false);
+    let mut by_amount: Vec<usize> = (0..fx.claims.len()).collect();
+    by_amount.sort_by_key(|i| fx.claims[*i].amount);
+    let which = [by_amount[0], by_amount[1]];
+    let built = build_redeem_with(&mut fx, &which, None, false, &mut |items, _| {
+        items.reverse();
+    });
+    expect_code(&mut fx, &built.tx, &[SETTLE_REDEEM]);
+}
+
+#[test]
+fn two_items_naming_the_same_claim_input_are_rejected() {
+    let mut fx = fixture(&PRIZES, false);
+    let mut by_amount: Vec<usize> = (0..fx.claims.len()).collect();
+    by_amount.sort_by_key(|i| fx.claims[*i].amount);
+    let which = [by_amount[0], by_amount[1]];
+    let built = build_redeem_with(&mut fx, &which, None, false, &mut |items, _| {
+        items[1].0 = items[0].0;
+    });
+    // the settlement's dedup and the second claim's "not named" check both
+    // refuse; which reports first depends on script-hash order
+    expect_code(&mut fx, &built.tx, &[SETTLE_REDEEM, CLAIM_REDEEM]);
+}
+
+#[test]
+fn zero_amount_item_is_rejected() {
+    let mut fx = fixture(&PRIZES, false);
+    let built = build_redeem_with(&mut fx, &[0], None, false, &mut |items, _| {
+        items[0].3 = 0;
+    });
+    // settlement rejects amount 0 before any proof; the claim rejects it in
+    // record_verified_prize. Either code proves no zero-value marker is paid.
+    expect_code(&mut fx, &built.tx, &[SETTLE_REDEEM, CLAIM_REDEEM]);
+}
+
+#[test]
+fn forged_paid_root_in_the_successor_is_rejected_by_the_claim_only() {
+    // counters advance exactly and the root differs, so the settlement's
+    // successor check passes; only the claim's byte-exact recomputation of
+    // its successor can refuse a root that the absence proof did not produce
+    let mut fx = fixture(&PRIZES, false);
+    let built = build_redeem_with(&mut fx, &[0], None, false, &mut |_, outputs| {
+        let mut data = outputs[1].1.to_vec();
+        data[40] ^= 1; // inside paid_root (bytes 33..65)
+        outputs[1].1 = Bytes::from(data);
+    });
+    expect_code(&mut fx, &built.tx, &[CLAIM_REDEEM]);
+}

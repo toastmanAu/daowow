@@ -344,6 +344,10 @@ pub fn decode_settlement_witness(data: &[u8]) -> Result<Vec<SettlementPayout<'_>
 
 pub const REDEMPTION_WITNESS_TAG: u8 = 0xFF;
 pub const MAX_REDEMPTION_ITEMS: usize = 32;
+/// Whole-witness bound. Every claim script in the transaction loads this
+/// witness into its own 512 KiB never-freed heap alongside proof copies, so
+/// the per-item proof budget alone (32 x 2 x 8192) is not jointly admissible.
+pub const MAX_REDEMPTION_WITNESS_BYTES: usize = 128 * 1024;
 
 /// One claim's redemption: which input is the claim, which output is paid,
 /// which prize leaf is claimed and for how much, with the funding-side MMR
@@ -367,7 +371,14 @@ pub fn encode_redemption_witness(items: &[RedemptionItem<'_>]) -> Result<Vec<u8>
     if items.is_empty() || items.len() > MAX_REDEMPTION_ITEMS {
         return Err(CoreError::Encoding);
     }
-    let mut out = Vec::new();
+    let size: usize = 5 + items
+        .iter()
+        .map(|i| 32 + i.mmr_proof.len() + i.absence_proof.len())
+        .sum::<usize>();
+    if size > MAX_REDEMPTION_WITNESS_BYTES {
+        return Err(CoreError::Encoding);
+    }
+    let mut out = Vec::with_capacity(size);
     out.push(REDEMPTION_WITNESS_TAG);
     write_u32(&mut out, items.len() as u32);
     for item in items {
@@ -388,7 +399,10 @@ pub fn encode_redemption_witness(items: &[RedemptionItem<'_>]) -> Result<Vec<u8>
 
 pub fn decode_redemption_witness(data: &[u8]) -> Result<Vec<RedemptionItem<'_>>, CoreError> {
     use crate::accumulator::MAX_PROOF_BYTES;
-    if data.len() < 5 || data[0] != REDEMPTION_WITNESS_TAG {
+    if data.len() < 5
+        || data.len() > MAX_REDEMPTION_WITNESS_BYTES
+        || data[0] != REDEMPTION_WITNESS_TAG
+    {
         return Err(CoreError::Encoding);
     }
     let n = read_u32(data, 1) as usize;
@@ -481,6 +495,35 @@ mod tests {
         let mut forged_len = wire.clone();
         forged_len[29..33].copy_from_slice(&8193u32.to_le_bytes()); // first mmr_len
         assert!(decode_redemption_witness(&forged_len).is_err());
+    }
+
+    #[test]
+    fn redemption_witness_total_size_is_bounded_below_the_script_heap() {
+        // 32 items at the per-proof cap would be 525,317 bytes: more than the
+        // 512 KiB contract heap. The whole-witness cap makes that unencodable
+        // and undecodable, while a realistic 32-item witness still fits.
+        let big = vec![0u8; crate::accumulator::MAX_PROOF_BYTES];
+        let item = RedemptionItem {
+            claim_input_index: 0,
+            payment_output_index: 0,
+            prize_index: 0,
+            amount: 1,
+            mmr_proof: &big,
+            absence_proof: &big,
+        };
+        assert!(encode_redemption_witness(&vec![item; 7]).is_ok());
+        assert!(encode_redemption_witness(&vec![item; 8]).is_err());
+        let mut oversize = vec![REDEMPTION_WITNESS_TAG];
+        oversize.extend_from_slice(&1u32.to_le_bytes());
+        oversize.resize(MAX_REDEMPTION_WITNESS_BYTES + 1, 0);
+        assert!(decode_redemption_witness(&oversize).is_err());
+        let small = vec![0u8; 1024];
+        let realistic = RedemptionItem {
+            mmr_proof: &small,
+            absence_proof: &small,
+            ..item
+        };
+        assert!(encode_redemption_witness(&vec![realistic; MAX_REDEMPTION_ITEMS]).is_ok());
     }
     use super::*;
     use crate::encoding::ACC_SMT;

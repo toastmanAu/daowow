@@ -194,11 +194,16 @@ fn main() -> i8 {
             Err(_) => return err(SETTLE_ERROR_CONSERVATION),
         }
     };
-    if !is_final
-        && load_cell(0, Source::GroupInput).unwrap().lock()
-            != load_cell(0, Source::GroupOutput).unwrap().lock()
-    {
-        return err(SETTLE_ERROR_CONSERVATION);
+    if !is_final {
+        let (Ok(group_in), Ok(group_out)) = (
+            load_cell(0, Source::GroupInput),
+            load_cell(0, Source::GroupOutput),
+        ) else {
+            return err(SETTLE_ERROR_DATA);
+        };
+        if group_in.lock() != group_out.lock() {
+            return err(SETTLE_ERROR_CONSERVATION);
+        }
     }
     if !is_final {
         let occupied =
@@ -390,9 +395,13 @@ fn redeem(
         }
     };
     if !is_final {
-        if load_cell(0, Source::GroupInput).unwrap().lock()
-            != load_cell(0, Source::GroupOutput).unwrap().lock()
-        {
+        let (Ok(group_in), Ok(group_out)) = (
+            load_cell(0, Source::GroupInput),
+            load_cell(0, Source::GroupOutput),
+        ) else {
+            return err(SETTLE_ERROR_DATA);
+        };
+        if group_in.lock() != group_out.lock() {
             return err(SETTLE_ERROR_CONSERVATION);
         }
         let occupied =
@@ -484,10 +493,16 @@ fn redeem(
             },
             Err(_) => return err(SETTLE_ERROR_REDEEM),
         };
+        let (Some(next_count), Some(next_total)) = (
+            before_state.paid_count().checked_add(1),
+            before_state.paid_total().checked_add(item.amount),
+        ) else {
+            return err(SETTLE_ERROR_REDEEM);
+        };
         if after_state.ticket() != ticket
             || before_state.ticket() != ticket
-            || after_state.paid_count() != before_state.paid_count().wrapping_add(1)
-            || after_state.paid_total() != before_state.paid_total().wrapping_add(item.amount)
+            || after_state.paid_count() != next_count
+            || after_state.paid_total() != next_total
             || after_state.paid_root() == before_state.paid_root()
         {
             return err(SETTLE_ERROR_REDEEM);

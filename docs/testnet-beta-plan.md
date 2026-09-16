@@ -56,9 +56,14 @@ need review. It is not a claim that these features exist today.
 Status 2026-09-16: mint and transfer are implemented as a claim mode of
 `entry-shard-type` (spec `superpowers/specs/2026-09-16-claim-mint-transfer-design.md`,
 results in the matching plan). Each append now mints one claim cell per ticket
-under the entrant's lock; holders can transfer. Redemption, ticket-indexed
-prize funding, retirement and the memento are not implemented; a claim's data
-cannot change and the cell cannot be consumed without a successor.
+under the entrant's lock; holders can transfer.
+
+Status 2026-09-16 (later): sub-project 2 (`superpowers/specs/2026-09-16-prize-redemption-design.md`)
+credits prizes to ticket ids in a v3 funding cell and lets the claim's current
+holder redeem each batch's prize once, into their own lock, up to 32 claims per
+transaction; a batch's funding cell drains only when principal and prizes are
+both complete. Retirement, the memento and unclaimed-prize handling are not
+implemented; a claim still cannot be consumed without a successor.
 
 - One claim NFT per positional ticket, issued to the entrant's wallet in the
   same transaction as its authenticated entry. Mint exactly once, with no
