@@ -452,3 +452,15 @@ HARNESS NOTE for Task 10: `expect_err` does not exist in
 tests/integration/tests/common/mod.rs — only expect_ok at line 560. The rejection
 suite needs it and every rejection test must assert an EXACT code, never a broad
 match.
+Task 6: re-review ADDRESSED. Confirmed the new test derives the winner's shard
+from the real draw via positions()/locate() rather than hardcoding, that
+retire_decision is unchanged, and that the round trip showed the OLD test
+staying green under the mutation — the half that proves it never bit.
+
+Task 6: minor (deferred): the helper guards its "this identity is not drawn"
+premise with `debug_assert!`, which is compiled out under `cargo test --release`.
+The project's gate runs the dev profile so it is live today, but a release-mode
+test run would silently drop the check and the test could go vacuous without
+failing. A plain `assert!` in a test helper costs nothing.
+
+Task 6: complete (commits a70db65..fc5c6b5, review clean after 1 fix round)
