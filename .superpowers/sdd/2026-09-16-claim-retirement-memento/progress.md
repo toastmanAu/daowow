@@ -464,3 +464,38 @@ test run would silently drop the check and the test could go vacuous without
 failing. A plain `assert!` in a test helper costs nothing.
 
 Task 6: complete (commits a70db65..fc5c6b5, review clean after 1 fix round)
+
+Task 7: implementer DONE_WITH_CONCERNS — commit 4461d8b. Core 147/147, clippy +
+no_std clean. entry-shard-type 209,360 -> 225,008 bytes (+15,648, +7.5%), as
+expected since the contract now links ComputedDraw/PrizeSchedule/draw/accounting
+for the first time.
+
+CONCERN 3 INVESTIGATED AND CONFIRMED — PRE-EXISTING BUG ON MAIN, not ours.
+`security_redemption.rs::redeeming_the_same_source_twice_is_rejected_by_the_claim`
+panics host-side at line 444: `in_cap - amount` subtract-with-overflow, i.e. the
+prize amount exceeds the funding cell's capacity in the test's own setup.
+The agent said it "predates this task", which is NOT the same as predating the
+branch — and Task 7 had itself edited that file, while Task 3 changed derive()
+behaviour, so either could plausibly have caused it. Checked properly: reverted
+crates/daowow-core and tests/integration to main's versions, re-ran the single
+test, and it FAILS THERE TOO. The line is present verbatim in `git show
+main:...`. So it has been broken on main since sub-project 2 merged, while that
+sub-project's handoff records security_redemption.rs as 22 passing tests.
+Ruling: out of scope for this sub-project — do not fix it here. Record it, tell
+the user, and leave it. It is a test-setup arithmetic fault, not a contract
+fault, so it does not indicate a live on-chain defect, but it does mean one
+adversarial redemption case has not actually been exercised since it was written.
+Cost if wrong: if it turns out to mask a real redemption defect, that defect
+stays unexercised. Surfacing it rather than silently fixing it keeps the decision
+with the user.
+
+Task 7 concern 2: it updated two pre-existing adversarial tests that asserted the
+old unconditional -96 for burning a claim with no successor; they now assert -98
+(CLAIM_ERROR_UNIVERSE) because retire() actually attempts authentication instead
+of refusing outright. Carried to the reviewer to judge — same security property,
+narrower code, but the assertion now pins the evidence-gathering path rather than
+the retirement policy.
+
+Task 7 concern 1: main.rs still has no tag-6 dispatch, so only the NON-WINNER
+retirement path is provably spendable today. Winner retirement mints a memento
+and cannot pass end-to-end until Task 8. Correctly deferred, explicitly flagged.
