@@ -336,8 +336,152 @@ pub fn decode_settlement_witness(data: &[u8]) -> Result<Vec<SettlementPayout<'_>
     Ok(out)
 }
 
+// ---------------------------------------------------------------------------
+// Redemption witness: claims redeem ticket prizes from one funding cell.
+// Distinguished from the payout witness by a leading 0xFF (a payout witness
+// begins with a u32 count of at most 128, so its first byte is never 0xFF).
+// ---------------------------------------------------------------------------
+
+pub const REDEMPTION_WITNESS_TAG: u8 = 0xFF;
+pub const MAX_REDEMPTION_ITEMS: usize = 32;
+
+/// One claim's redemption: which input is the claim, which output is paid,
+/// which prize leaf is claimed and for how much, with the funding-side MMR
+/// membership proof and the claim-side paid-set absence proof.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RedemptionItem<'a> {
+    pub claim_input_index: u32,
+    pub payment_output_index: u32,
+    pub prize_index: u64,
+    pub amount: u64,
+    pub mmr_proof: &'a [u8],
+    pub absence_proof: &'a [u8],
+}
+
+pub fn is_redemption_witness(data: &[u8]) -> bool {
+    data.first() == Some(&REDEMPTION_WITNESS_TAG)
+}
+
+pub fn encode_redemption_witness(items: &[RedemptionItem<'_>]) -> Result<Vec<u8>, CoreError> {
+    use crate::accumulator::MAX_PROOF_BYTES;
+    if items.is_empty() || items.len() > MAX_REDEMPTION_ITEMS {
+        return Err(CoreError::Encoding);
+    }
+    let mut out = Vec::new();
+    out.push(REDEMPTION_WITNESS_TAG);
+    write_u32(&mut out, items.len() as u32);
+    for item in items {
+        if item.mmr_proof.len() > MAX_PROOF_BYTES || item.absence_proof.len() > MAX_PROOF_BYTES {
+            return Err(CoreError::Encoding);
+        }
+        write_u32(&mut out, item.claim_input_index);
+        write_u32(&mut out, item.payment_output_index);
+        out.extend_from_slice(&item.prize_index.to_le_bytes());
+        out.extend_from_slice(&item.amount.to_le_bytes());
+        write_u32(&mut out, item.mmr_proof.len() as u32);
+        out.extend_from_slice(item.mmr_proof);
+        write_u32(&mut out, item.absence_proof.len() as u32);
+        out.extend_from_slice(item.absence_proof);
+    }
+    Ok(out)
+}
+
+pub fn decode_redemption_witness(data: &[u8]) -> Result<Vec<RedemptionItem<'_>>, CoreError> {
+    use crate::accumulator::MAX_PROOF_BYTES;
+    if data.len() < 5 || data[0] != REDEMPTION_WITNESS_TAG {
+        return Err(CoreError::Encoding);
+    }
+    let n = read_u32(data, 1) as usize;
+    if n == 0 || n > MAX_REDEMPTION_ITEMS {
+        return Err(CoreError::Encoding);
+    }
+    let mut off = 5usize;
+    let mut out = Vec::with_capacity(n);
+    for _ in 0..n {
+        let head = read_bytes(data, &mut off, 24)?;
+        let claim_input_index = read_u32(head, 0);
+        let payment_output_index = read_u32(head, 4);
+        let prize_index = crate::encoding::read_u64(head, 8);
+        let amount = crate::encoding::read_u64(head, 16);
+        let mmr_len = read_u32(read_bytes(data, &mut off, 4)?, 0) as usize;
+        if mmr_len > MAX_PROOF_BYTES {
+            return Err(CoreError::Encoding);
+        }
+        let mmr_proof = read_bytes(data, &mut off, mmr_len)?;
+        let abs_len = read_u32(read_bytes(data, &mut off, 4)?, 0) as usize;
+        if abs_len > MAX_PROOF_BYTES {
+            return Err(CoreError::Encoding);
+        }
+        let absence_proof = read_bytes(data, &mut off, abs_len)?;
+        out.push(RedemptionItem {
+            claim_input_index,
+            payment_output_index,
+            prize_index,
+            amount,
+            mmr_proof,
+            absence_proof,
+        });
+    }
+    if off != data.len() {
+        return Err(CoreError::Encoding);
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn redemption_witness_round_trips_and_is_strict() {
+        let items = [
+            RedemptionItem {
+                claim_input_index: 1,
+                payment_output_index: 2,
+                prize_index: 0,
+                amount: 40,
+                mmr_proof: &[1, 2, 3],
+                absence_proof: &[4, 5],
+            },
+            RedemptionItem {
+                claim_input_index: 3,
+                payment_output_index: 4,
+                prize_index: 2,
+                amount: 7,
+                mmr_proof: &[9],
+                absence_proof: &[8, 8, 8, 8],
+            },
+        ];
+        let wire = encode_redemption_witness(&items).unwrap();
+        assert_eq!(wire[0], REDEMPTION_WITNESS_TAG);
+        assert!(is_redemption_witness(&wire));
+        assert!(!is_redemption_witness(&encode_settlement_witness(&[])));
+        let decoded = decode_redemption_witness(&wire).unwrap();
+        assert_eq!(decoded.len(), 2);
+        assert_eq!(decoded[1].amount, 7);
+        assert_eq!(decoded[1].absence_proof, &[8, 8, 8, 8]);
+        assert_eq!(decoded[0].claim_input_index, 1);
+        assert_eq!(decoded[0].payment_output_index, 2);
+        assert!(decode_redemption_witness(&wire[..wire.len() - 1]).is_err());
+        let mut trailing = wire.clone();
+        trailing.push(0);
+        assert!(decode_redemption_witness(&trailing).is_err());
+        assert!(decode_redemption_witness(&[]).is_err());
+        assert!(encode_redemption_witness(&[]).is_err());
+        let too_many = vec![items[0]; MAX_REDEMPTION_ITEMS + 1];
+        assert!(encode_redemption_witness(&too_many).is_err());
+        let big = vec![0u8; crate::accumulator::MAX_PROOF_BYTES + 1];
+        let oversize = [RedemptionItem {
+            mmr_proof: &big,
+            ..items[0]
+        }];
+        assert!(encode_redemption_witness(&oversize).is_err());
+        let mut forged_count = wire.clone();
+        forged_count[1..5].copy_from_slice(&33u32.to_le_bytes());
+        assert!(decode_redemption_witness(&forged_count).is_err());
+        let mut forged_len = wire.clone();
+        forged_len[29..33].copy_from_slice(&8193u32.to_le_bytes()); // first mmr_len
+        assert!(decode_redemption_witness(&forged_len).is_err());
+    }
     use super::*;
     use crate::encoding::ACC_SMT;
 
