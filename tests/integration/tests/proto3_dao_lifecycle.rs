@@ -735,7 +735,7 @@ fn phase2_creates_64_distinct_liabilities_across_accumulators() {
             1024,
         );
         let funding =
-            SettlementFundingDataV2::decode(&tx.outputs_data().get(0).unwrap().raw_data()).unwrap();
+            SettlementFundingDataV3::decode(&tx.outputs_data().get(0).unwrap().raw_data()).unwrap();
         assert_eq!(funding.liability_count, 64);
         assert_eq!(funding.principal_liability, 32_000 * SHANNONS);
         assert_eq!(funding.batch_id, 32);
@@ -764,7 +764,7 @@ fn drain_created_funding(r: &mut DaoRound, creation: &TransactionView) {
     let raw = creation.witnesses().get(1).unwrap().raw_data();
     let evidence = daowow_core::entitlement_witness::EntitlementWitness::decode(&raw).unwrap();
     let funding =
-        SettlementFundingDataV2::decode(&creation.outputs_data().get(0).unwrap().raw_data())
+        SettlementFundingDataV3::decode(&creation.outputs_data().get(0).unwrap().raw_data())
             .unwrap();
     let winners = evidence.winner_proofs();
     let entitlement = daowow_core::entitlements::InitialEntitlements::derive(
@@ -948,7 +948,7 @@ fn phase2_distinct_owner_creation_across_accumulators() {
         let schedule = daowow_core::schedule::PrizeSchedule::new(&[1; 32]).unwrap();
         let (mut r, tx) = phase2_fixture_owners(acc, 256, 1, schedule, 32, true);
         let funding =
-            SettlementFundingDataV2::decode(&tx.outputs_data().get(0).unwrap().raw_data()).unwrap();
+            SettlementFundingDataV3::decode(&tx.outputs_data().get(0).unwrap().raw_data()).unwrap();
         assert!(funding.liability_count >= 32);
         let tx = r.world.context.complete_tx(detach_evidence(tx));
         let cycles = r.world.context.verify_tx(&tx, 3_500_000_000).unwrap();
@@ -1142,7 +1142,7 @@ fn phase2_rejects_multiple_matching_withdrawal_inputs() {
 fn phase2_failed_round_returns_deposits_and_all_yield() {
     let (mut r, tx) = phase2_fixture_with(ACC_SMT, 4, 100, default_prize_schedule(), 2);
     let funding =
-        SettlementFundingDataV2::decode(&tx.outputs_data().get(0).unwrap().raw_data()).unwrap();
+        SettlementFundingDataV3::decode(&tx.outputs_data().get(0).unwrap().raw_data()).unwrap();
     assert_eq!(funding.principal_liability, 2000 * SHANNONS);
     assert_eq!(funding.liability_count, 1); // Same owner consolidated before allocation.
     assert_eq!(
@@ -1166,7 +1166,7 @@ fn phase2_flows_to_settlement_only() {
 fn phase2_rejects_forged_initial_liability_root() {
     let (mut r, tx) = phase2_fixture();
     let mut data =
-        SettlementFundingDataV2::decode(&tx.outputs_data().get(0).unwrap().raw_data()).unwrap();
+        SettlementFundingDataV3::decode(&tx.outputs_data().get(0).unwrap().raw_data()).unwrap();
     data.liabilities_root = [0x99; 32];
     let bad = tx
         .as_advanced_builder()
@@ -1180,7 +1180,7 @@ fn phase2_rejects_each_forged_initial_funding_field() {
     for mutation in 0..5 {
         let (mut r, tx) = phase2_fixture();
         let mut data =
-            SettlementFundingDataV2::decode(&tx.outputs_data().get(0).unwrap().raw_data()).unwrap();
+            SettlementFundingDataV3::decode(&tx.outputs_data().get(0).unwrap().raw_data()).unwrap();
         match mutation {
             0 => data.liability_count += 1,
             1 => data.principal_liability -= 1,
@@ -1352,7 +1352,7 @@ fn phase2_rejects_decoy_settlement_and_diverted_remainder() {
     let output = tx.outputs().get(0).unwrap();
     let total: u64 = output.capacity().unpack();
     let mut data =
-        SettlementFundingDataV2::decode(tx.outputs_data().get(0).unwrap().raw_data().as_ref())
+        SettlementFundingDataV3::decode(tx.outputs_data().get(0).unwrap().raw_data().as_ref())
             .unwrap();
     data.realized_total = 300 * SHANNONS;
     let decoy = output
@@ -1382,7 +1382,7 @@ fn phase2_rejects_wrong_batch_and_underclaimed_yield() {
         let (mut r, tx) = phase2_fixture();
         let output = tx.outputs().get(0).unwrap();
         let mut data =
-            SettlementFundingDataV2::decode(tx.outputs_data().get(0).unwrap().raw_data().as_ref())
+            SettlementFundingDataV3::decode(tx.outputs_data().get(0).unwrap().raw_data().as_ref())
                 .unwrap();
         let cap = if wrong_batch {
             data.batch_id = 2;

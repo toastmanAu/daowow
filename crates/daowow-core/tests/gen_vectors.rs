@@ -82,7 +82,7 @@ fn gen_vectors() {
     // 9. indexed settlement funding wire format
     let mut liabilities = mmr::host::MmrHost::new();
     liabilities.append(&liab).unwrap();
-    let funding = SettlementFundingDataV2 {
+    let funding = SettlementFundingDataV3 {
         round_id,
         batch_id: 1,
         realized_total: 110,
@@ -91,6 +91,9 @@ fn gen_vectors() {
         payout_cursor: 0,
         liability_count: 1,
         liabilities_root: liabilities.root().unwrap(),
+        prize_count: 0,
+        prize_root: [0; 32],
+        prize_paid: 0,
     };
 
     // 10. encoded sizes
@@ -121,11 +124,14 @@ fn gen_vectors() {
             "missing_reveal_fallback": hex(&fallback),
         },
         "liability_leaf": { "leaf": hex(&liab) },
-        "settlement_funding_v2": {
+        "settlement_funding_v3": {
             "canonical_hex": hex(&funding.encode()),
             "payout_cursor": funding.payout_cursor,
             "liability_count": funding.liability_count,
             "liabilities_root": hex(&funding.liabilities_root),
+            "prize_count": funding.prize_count,
+            "prize_root": hex(&funding.prize_root),
+            "prize_paid": funding.prize_paid,
         },
         "smt": {
             "key_domain": "32-byte big-endian nonce",

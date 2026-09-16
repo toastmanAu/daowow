@@ -1,5 +1,4 @@
-// DAOWOW deterministic vectors — generated from tests/vectors/daowow_core_vectors.json
-// (cargo test -p daowow-core --test gen_vectors). DO NOT EDIT BY HAND.
+// generated from tests/vectors/daowow_core_vectors.json
 "use strict";
 const DAOWOW_VECTORS = {
   "canonical_sizes": {
@@ -7,7 +6,7 @@ const DAOWOW_VECTORS = {
     "entry_data": 132,
     "payout_item": 48,
     "round_config": 358,
-    "settlement_funding": 128,
+    "settlement_funding": 160,
     "shard_data": 101
   },
   "domain_hash": {
@@ -49,6 +48,15 @@ const DAOWOW_VECTORS = {
   "mmr": {
     "membership_proof_pos2_hex": "02191881fb39afbbace1b34cab57f6fd13ce4ed49c27039345bea1037e11b5b5c44c3cfd4ab06a5789cc1322ace5a641fdaff392d5e5160258622149d859711a590002ce771e3e2d64a6e6b3443c7454ac89a56af896b00ee471b7122ba655f616bb8c305f0e1e86bae52b6b9dd3a53b4710d4bc9e7c948def0a2cc5407850974ad4f6",
     "root_after_5_appends": "7bc84fd1eb2cb519a1c8427e95d93555ff1ed2c49ecbd9cb26ff7af4342e9631"
+  },
+  "settlement_funding_v3": {
+    "canonical_hex": "4d61d25b4f45ce6748c37689ca322a5d645d602e45990957cdefb660b4d2fbb801000000000000006e0000000000000064000000000000000a000000000000000000000000000000010000000000000065b74f49597b9ae3a94084ae6be972ea6720520c5f940588e99e4e4d7f355ce4000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+    "liabilities_root": "65b74f49597b9ae3a94084ae6be972ea6720520c5f940588e99e4e4d7f355ce4",
+    "liability_count": 1,
+    "payout_cursor": 0,
+    "prize_count": 0,
+    "prize_paid": 0,
+    "prize_root": "0000000000000000000000000000000000000000000000000000000000000000"
   },
   "smt": {
     "absence_proof_hex": "4c4ff851f80b580d7706b2a62f103e9a039b53f2df7e75a94f61744a9fd88617370e9f744f0000000000000000000000000000000000000000000000000000000000000000503dc0738a56c57b44b7b71fc51553cf533476f1270be977cbc1dd0c0026e10b104f06",

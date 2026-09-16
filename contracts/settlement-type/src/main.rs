@@ -3,7 +3,7 @@
 //! args: config commitment (32 bytes) || batch_id (8 bytes) || batch digest (32)
 //! Public lock mode: args = [0]; authorises spending only when the matching
 //! seventy-two-byte-args settlement type executes and enforces the payout rules.
-//! data: SettlementFundingDataV2 (fixed 112 bytes)
+//! data: SettlementFundingDataV3 (fixed 160 bytes)
 //!
 //! Creation (from dao-lock phase 2): cursor = zero, positive liability count.
 //! Update: each MMR proof authenticates the next unpaid ordinal against the
@@ -23,7 +23,7 @@ use ckb_std::entry;
 use ckb_std::high_level::{load_cell, load_cell_capacity, load_cell_data, load_witness};
 use daowow_contracts_common::daowow_alloc;
 use daowow_core::accumulator::mmr;
-use daowow_core::encoding::{PayoutItem, SettlementFundingDataV2, SETTLEMENT_FUNDING_SIZE};
+use daowow_core::encoding::{PayoutItem, SettlementFundingDataV3, SETTLEMENT_FUNDING_SIZE};
 use daowow_core::error::codes::*;
 use daowow_core::leaf::liability_leaf;
 
@@ -87,7 +87,7 @@ fn main() -> i8 {
     if out_data.len() != SETTLEMENT_FUNDING_SIZE {
         return err(SETTLE_ERROR_DATA);
     }
-    let after = match SettlementFundingDataV2::decode(&out_data) {
+    let after = match SettlementFundingDataV3::decode(&out_data) {
         Ok(f) => f,
         Err(_) => return err(SETTLE_ERROR_DATA),
     };
@@ -138,7 +138,7 @@ fn main() -> i8 {
     if in_data.len() != SETTLEMENT_FUNDING_SIZE {
         return err(SETTLE_ERROR_DATA);
     }
-    let before = match SettlementFundingDataV2::decode(&in_data) {
+    let before = match SettlementFundingDataV3::decode(&in_data) {
         Ok(f) => f,
         Err(_) => return err(SETTLE_ERROR_DATA),
     };

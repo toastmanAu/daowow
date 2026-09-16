@@ -70,7 +70,7 @@ fn independent_batches_pay_the_same_global_winners_and_full_capacity() {
         }
         assert_eq!(
             derived.funding(),
-            &SettlementFundingDataV2 {
+            &SettlementFundingDataV3 {
                 round_id: f.cfg.round_id,
                 batch_id: input.batch_id,
                 realized_total: 350,
@@ -78,7 +78,10 @@ fn independent_batches_pay_the_same_global_winners_and_full_capacity() {
                 prize_pool: 100,
                 payout_cursor: 0,
                 liability_count: 2,
-                liabilities_root: tree.root().unwrap()
+                liabilities_root: tree.root().unwrap(),
+                prize_count: 0,
+                prize_root: [0; 32],
+                prize_paid: 0,
             }
         );
         for (i, p) in derived.liabilities().iter().enumerate() {

@@ -10,7 +10,7 @@ fn standalone_funding_creation_cannot_assert_its_own_entitlements() {
     let cfg = default_config([0x94; 32], ACC_MMR);
     let round = world.create_round(&cfg);
     let (input, _) = world.funding_cell(1000 * SHANNONS);
-    let funding = SettlementFundingDataV2 {
+    let funding = SettlementFundingDataV3 {
         round_id: cfg.round_id,
         batch_id: 0,
         realized_total: 900 * SHANNONS,
@@ -19,6 +19,9 @@ fn standalone_funding_creation_cannot_assert_its_own_entitlements() {
         payout_cursor: 0,
         liability_count: 1,
         liabilities_root: [7; 32],
+        prize_count: 0,
+        prize_root: [0; 32],
+        prize_paid: 0,
     };
     let tx = TransactionBuilder::default()
         .cell_dep(world.round_config_dep(&round))

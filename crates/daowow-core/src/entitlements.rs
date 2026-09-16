@@ -2,7 +2,7 @@
 //! be authenticated by the contract caller, not inferred from these structs.
 use crate::{
     computed_draw::WinnerProof,
-    encoding::{EntryDataV1, PayoutItem, RoundConfigV1, SettlementFundingDataV2},
+    encoding::{EntryDataV1, PayoutItem, RoundConfigV1, SettlementFundingDataV3},
     lifecycle::BatchCommitment,
     schedule::PrizeSchedule,
     seal::EntropyRecord,
@@ -27,7 +27,7 @@ pub struct EntitlementInput<'a> {
 #[derive(Debug, PartialEq, Eq)]
 /// Deterministically derived immutable initial funding and sorted liabilities.
 pub struct InitialEntitlements {
-    funding: SettlementFundingDataV2,
+    funding: SettlementFundingDataV3,
     liabilities: Vec<PayoutItem>,
 }
 
@@ -111,7 +111,7 @@ impl InitialEntitlements {
         let count = liabilities.len() as u64;
         let root = mmr::bag_peaks(&peaks[..mmr::peaks_shape(count)?])?;
         Ok(Self {
-            funding: SettlementFundingDataV2 {
+            funding: SettlementFundingDataV3 {
                 round_id: cfg.round_id,
                 batch_id: input.batch_id,
                 realized_total: input.realized_total,
@@ -120,12 +120,15 @@ impl InitialEntitlements {
                 payout_cursor: 0,
                 liability_count: count,
                 liabilities_root: root,
+                prize_count: 0,
+                prize_root: [0; 32],
+                prize_paid: 0,
             },
             liabilities,
         })
     }
     /// Immutable initial state to compare byte-for-byte with the funding cell.
-    pub fn funding(&self) -> &SettlementFundingDataV2 {
+    pub fn funding(&self) -> &SettlementFundingDataV3 {
         &self.funding
     }
     /// Unique participant hashes in ascending order, each with full principal

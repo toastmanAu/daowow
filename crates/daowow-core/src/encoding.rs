@@ -367,20 +367,20 @@ impl BatchDataV1 {
 }
 
 // ---------------------------------------------------------------------------
-// SettlementFundingDataV2
+// SettlementFundingDataV3
 // ---------------------------------------------------------------------------
 
-pub const SETTLEMENT_FUNDING_SIZE: usize = 112;
+pub const SETTLEMENT_FUNDING_SIZE: usize = 160;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SettlementFundingDataV2 {
+pub struct SettlementFundingDataV3 {
     pub round_id: Hash32,
     pub batch_id: u64,
     /// gross realised capacity from the DAO (principal surplus + compensation)
     pub realized_total: u64,
     /// total principal that must be returned to participants
     pub principal_liability: u64,
-    /// authorised prize pool (<= realised compensation after costs)
+    /// authorised prize pool; on a successful round the sum of prize leaves
     pub prize_pool: u64,
     /// Index of the next liability to pay in the immutable tree.
     pub payout_cursor: u64,
@@ -388,9 +388,15 @@ pub struct SettlementFundingDataV2 {
     pub liability_count: u64,
     /// Immutable accumulator root over liability leaves.
     pub liabilities_root: Hash32,
+    /// Immutable number of prize leaves (zero on failed rounds).
+    pub prize_count: u64,
+    /// Immutable MMR root over `prize_leaf(ticket, amount)` sorted by ticket.
+    pub prize_root: Hash32,
+    /// Sum of prizes redeemed so far; never exceeds `prize_pool`.
+    pub prize_paid: u64,
 }
 
-impl SettlementFundingDataV2 {
+impl SettlementFundingDataV3 {
     pub fn encode(&self) -> [u8; SETTLEMENT_FUNDING_SIZE] {
         let mut out = [0u8; SETTLEMENT_FUNDING_SIZE];
         out[0..32].copy_from_slice(&self.round_id);
@@ -401,6 +407,9 @@ impl SettlementFundingDataV2 {
         write_u64(&mut out, 64, self.payout_cursor);
         write_u64(&mut out, 72, self.liability_count);
         out[80..112].copy_from_slice(&self.liabilities_root);
+        write_u64(&mut out, 112, self.prize_count);
+        out[120..152].copy_from_slice(&self.prize_root);
+        write_u64(&mut out, 152, self.prize_paid);
         out
     }
 
@@ -410,7 +419,16 @@ impl SettlementFundingDataV2 {
         }
         let payout_cursor = read_u64(data, 64);
         let liability_count = read_u64(data, 72);
-        if liability_count == 0 || payout_cursor > liability_count {
+        let prize_pool = read_u64(data, 56);
+        let prize_count = read_u64(data, 112);
+        let prize_root = read_hash(data, 120);
+        let prize_paid = read_u64(data, 152);
+        if liability_count == 0
+            || payout_cursor > liability_count
+            || prize_paid > prize_pool
+            || (prize_count == 0) != (prize_root == [0; 32])
+            || (prize_count == 0 && prize_paid != 0)
+        {
             return Err(CoreError::Encoding);
         }
         Ok(Self {
@@ -418,10 +436,13 @@ impl SettlementFundingDataV2 {
             batch_id: read_u64(data, 32),
             realized_total: read_u64(data, 40),
             principal_liability: read_u64(data, 48),
-            prize_pool: read_u64(data, 56),
+            prize_pool,
             payout_cursor,
             liability_count,
             liabilities_root: read_hash(data, 80),
+            prize_count,
+            prize_root,
+            prize_paid,
         })
     }
 }
@@ -460,6 +481,42 @@ impl PayoutItem {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settlement_funding_v3_layout_and_consistency() {
+        let base = SettlementFundingDataV3 {
+            round_id: [1; 32],
+            batch_id: 2,
+            realized_total: 110,
+            principal_liability: 100,
+            prize_pool: 10,
+            payout_cursor: 0,
+            liability_count: 1,
+            liabilities_root: [3; 32],
+            prize_count: 2,
+            prize_root: [4; 32],
+            prize_paid: 5,
+        };
+        let wire = base.encode();
+        assert_eq!(wire.len(), SETTLEMENT_FUNDING_SIZE);
+        assert_eq!(&wire[112..120], &2u64.to_le_bytes());
+        assert_eq!(&wire[120..152], &[4; 32]);
+        assert_eq!(&wire[152..160], &5u64.to_le_bytes());
+        assert_eq!(SettlementFundingDataV3::decode(&wire), Ok(base));
+        assert!(SettlementFundingDataV3::decode(&wire[..112]).is_err());
+        let mut over = wire;
+        over[152..160].copy_from_slice(&11u64.to_le_bytes()); // paid > pool
+        assert!(SettlementFundingDataV3::decode(&over).is_err());
+        let mut zero_root = wire;
+        zero_root[120..152].fill(0); // count 2 with zero root
+        assert!(SettlementFundingDataV3::decode(&zero_root).is_err());
+        let mut no_prizes = wire;
+        no_prizes[112..120].fill(0);
+        no_prizes[120..152].fill(0);
+        assert!(SettlementFundingDataV3::decode(&no_prizes).is_err()); // paid 5, no prizes
+        no_prizes[152..160].fill(0);
+        assert!(SettlementFundingDataV3::decode(&no_prizes).is_ok());
+    }
 
     fn sample_config() -> RoundConfigV1 {
         RoundConfigV1 {
@@ -556,7 +613,7 @@ mod tests {
         };
         assert_eq!(BatchDataV1::decode(&b.encode()).unwrap(), b);
 
-        let f = SettlementFundingDataV2 {
+        let f = SettlementFundingDataV3 {
             round_id: [9; 32],
             batch_id: 1,
             realized_total: 1100,
@@ -565,8 +622,11 @@ mod tests {
             payout_cursor: 2,
             liability_count: 3,
             liabilities_root: [14; 32],
+            prize_count: 0,
+            prize_root: [0; 32],
+            prize_paid: 0,
         };
-        assert_eq!(SettlementFundingDataV2::decode(&f.encode()).unwrap(), f);
+        assert_eq!(SettlementFundingDataV3::decode(&f.encode()).unwrap(), f);
 
         let p = PayoutItem {
             participant_lock_hash: [15; 32],
@@ -577,8 +637,8 @@ mod tests {
     }
 
     #[test]
-    fn funding_v2_wire_layout_and_cursor_boundaries() {
-        let funding = SettlementFundingDataV2 {
+    fn funding_v3_wire_layout_and_cursor_boundaries() {
+        let funding = SettlementFundingDataV3 {
             round_id: [9; 32],
             batch_id: 0x0102,
             realized_total: 0x0304,
@@ -587,9 +647,12 @@ mod tests {
             payout_cursor: 0x090a,
             liability_count: 0x0b0c,
             liabilities_root: [14; 32],
+            prize_count: 0,
+            prize_root: [0; 32],
+            prize_paid: 0,
         };
         let encoded = funding.encode();
-        assert_eq!(encoded.len(), 112);
+        assert_eq!(encoded.len(), 160);
         assert_eq!(&encoded[..32], &[9; 32]);
         assert_eq!(
             &encoded[32..80],
@@ -598,44 +661,45 @@ mod tests {
                 0, 0, 0, 0, 10, 9, 0, 0, 0, 0, 0, 0, 12, 11, 0, 0, 0, 0, 0, 0,
             ]
         );
-        assert_eq!(&encoded[80..], &[14; 32]);
-        assert_eq!(SettlementFundingDataV2::decode(&encoded).unwrap(), funding);
+        assert_eq!(&encoded[80..112], &[14; 32]);
+        assert_eq!(&encoded[112..], &[0; 48]);
+        assert_eq!(SettlementFundingDataV3::decode(&encoded).unwrap(), funding);
         for cursor in [0, 1, u64::MAX] {
             let mut bytes = encoded;
             bytes[64..72].copy_from_slice(&cursor.to_le_bytes());
             bytes[72..80].copy_from_slice(&u64::MAX.to_le_bytes());
-            let decoded = SettlementFundingDataV2::decode(&bytes).unwrap();
+            let decoded = SettlementFundingDataV3::decode(&bytes).unwrap();
             assert_eq!(decoded.payout_cursor, cursor);
             assert_eq!(decoded.liability_count, u64::MAX);
         }
     }
 
     #[test]
-    fn funding_v2_rejects_bad_lengths_empty_tree_and_cursor_past_end() {
-        let mut bytes = [0u8; 112];
+    fn funding_v3_rejects_bad_lengths_empty_tree_and_cursor_past_end() {
+        let mut bytes = [0u8; 160];
         bytes[72] = 1;
-        assert!(SettlementFundingDataV2::decode(&bytes).is_ok());
+        assert!(SettlementFundingDataV3::decode(&bytes).is_ok());
         assert_eq!(
-            SettlementFundingDataV2::decode(&bytes[..111]),
+            SettlementFundingDataV3::decode(&bytes[..159]),
             Err(CoreError::Encoding)
         );
         assert_eq!(
-            SettlementFundingDataV2::decode(&[0; 113]),
+            SettlementFundingDataV3::decode(&[0; 161]),
             Err(CoreError::Encoding)
         );
         assert_eq!(
-            SettlementFundingDataV2::decode(&[0; 128]),
+            SettlementFundingDataV3::decode(&[0; 128]),
             Err(CoreError::Encoding)
         );
         bytes[72] = 0;
         assert_eq!(
-            SettlementFundingDataV2::decode(&bytes),
+            SettlementFundingDataV3::decode(&bytes),
             Err(CoreError::Encoding)
         );
         bytes[72] = 1;
         bytes[64] = 2;
         assert_eq!(
-            SettlementFundingDataV2::decode(&bytes),
+            SettlementFundingDataV3::decode(&bytes),
             Err(CoreError::Encoding)
         );
     }

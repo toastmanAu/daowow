@@ -171,7 +171,7 @@ struct Settlement {
     /// payouts must be consumed in strictly ascending lock-hash order
     participants: Vec<(Hash32, u64, u64, u64)>,
     host: MmrHost,
-    funding_data: SettlementFundingDataV2,
+    funding_data: SettlementFundingDataV3,
     funding_op: OutPoint,
 }
 
@@ -248,7 +248,7 @@ fn settlement_rejects_replay_after_cursor_advances() {
     expect_ok(&mut s.world.context, &first);
     chain_cell(&mut s.world, &s.funding_op, &first, 0);
     let (_, data) = s.world.cell(&s.funding_op);
-    s.funding_data = SettlementFundingDataV2::decode(&data).unwrap();
+    s.funding_data = SettlementFundingDataV3::decode(&data).unwrap();
     let replay = partial_payout(&mut s, &[0]);
     let error = expect_fail(&mut s.world.context, &replay);
     assert!(format!("{error:?}").contains("error code -73"), "{error:?}");
@@ -262,7 +262,7 @@ fn settlement_rejects_mutated_root_count_and_cursor() {
         let mut s = setup(6);
         let tx = partial_payout(&mut s, &[0]);
         let mut after =
-            SettlementFundingDataV2::decode(&tx.outputs_data().get(0).unwrap().raw_data()).unwrap();
+            SettlementFundingDataV3::decode(&tx.outputs_data().get(0).unwrap().raw_data()).unwrap();
         match field {
             0 => after.liabilities_root = [9; 32],
             1 => after.liability_count += 1,
@@ -381,7 +381,7 @@ fn setup_amounts(n_participants: u64, principal: u64, prize: u64) -> Settlement 
     // is not an additional liability charged to this funding cell.
     let funding_capacity = total_principal + total_prize;
 
-    let funding_data = SettlementFundingDataV2 {
+    let funding_data = SettlementFundingDataV3 {
         round_id,
         batch_id: 1,
         realized_total: funding_capacity,
@@ -390,6 +390,9 @@ fn setup_amounts(n_participants: u64, principal: u64, prize: u64) -> Settlement 
         payout_cursor: 0,
         liability_count: n_participants,
         liabilities_root: host.root().unwrap(),
+        prize_count: 0,
+        prize_root: [0; 32],
+        prize_paid: 0,
     };
 
     let holder_lock = world.settlement_public_lock();
