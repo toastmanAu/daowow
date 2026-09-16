@@ -96,6 +96,14 @@ impl PrizeSchedule {
     /// that value is positive iff `pool * w_i >= W`. The binding position is the
     /// smallest weight, giving `ceil(W / w_min)`. Index zero also receives the
     /// dust, so it is never the binding case.
+    ///
+    /// This is conservative, not exact: when the smallest weight happens to sit
+    /// at index 0, that position receives the dust and can never be the binding
+    /// one, so the true zero-free threshold is lower than `ceil(W / w_min)` in
+    /// that case (e.g. weights `[3, 7]` at pool 3 already allocates `[1, 2]`,
+    /// no zero, below this function's reported bar of `ceil(10/3) = 4`). The
+    /// formula therefore can void a round that would in fact have paid every
+    /// prize, but it can never admit one that would not.
     pub fn min_viable_pool(&self, tickets: u64) -> Result<u64, CoreError> {
         let weights = self.weights_for(tickets)?;
         let sum = crate::accounting::checked_sum(weights)?;
@@ -254,6 +262,22 @@ mod tests {
         let at = crate::accounting::allocate_prizes_complete(&[1, 1, 1000], bar).unwrap();
         assert!(at.iter().all(|a| *a > 0), "{at:?}");
         let below = crate::accounting::allocate_prizes_complete(&[1, 1, 1000], bar - 1).unwrap();
+        assert!(below.iter().any(|a| *a == 0), "{below:?}");
+    }
+
+    #[test]
+    fn min_viable_pool_rounds_up_not_down() {
+        // [7,3]: W=10, w_min=3. ceil(10/3) = 4; floor division would give 3.
+        // Minimum is at index 1 (not the dust-receiving index 0), so this
+        // case both distinguishes ceil from floor and brackets the real
+        // zero-free threshold end-to-end.
+        let s = PrizeSchedule::new(&[7, 3]).unwrap();
+        assert_eq!(s.min_viable_pool(100), Ok(4));
+
+        let at = crate::accounting::allocate_prizes_complete(&[7, 3], 4).unwrap();
+        assert!(at.iter().all(|a| *a > 0), "{at:?}");
+
+        let below = crate::accounting::allocate_prizes_complete(&[7, 3], 3).unwrap();
         assert!(below.iter().any(|a| *a == 0), "{below:?}");
     }
 }
