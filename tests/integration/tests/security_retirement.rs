@@ -510,21 +510,77 @@ fn an_entropy_record_of_another_round_is_refused() {
     expect_code(&mut w.context, &tx, CLAIM_ERROR_UNIVERSE);
 }
 
+/// Isolated to the memento group, and the ONLY script group with the power
+/// to reject in this transaction: no claim cell (of any identity) exists
+/// anywhere in it, so there is no competing claim group at all — nothing for
+/// a future entry-shard-type binary change to reshuffle against. The
+/// funding input's lock is `always_success`, which cannot itself reject.
+/// Two outputs sharing byte-identical memento args are, by construction, the
+/// SAME type script and therefore one script group with two members; the
+/// memento binary's own `load_cell(1, Source::GroupOutput).is_ok()` guard in
+/// `contracts/entry-shard-type/src/memento.rs::run` rejects any group with a
+/// second member unconditionally, before any content is even inspected.
+#[test]
+fn two_mementos_of_one_identity_are_refused() {
+    let mut w = World::new(ACC_MMR);
+    let round = sealed_round_with_entropy(&mut w, 4, 8);
+    let (_, lock) = w.always_success();
+    let (funding, _) = w.funding_cell(1_000 * SHANNONS);
+    let memento_type = w.memento_type_script(round.winning_shard, round.winning_position);
+    let memento_data = well_formed_memento_data(&round);
+    let out = CellOutputBuilder::default()
+        .capacity(pack_u64(memento_cell_capacity(&lock)))
+        .lock(lock.clone())
+        .type_(Some(memento_type).pack())
+        .build();
+
+    let tx = TransactionBuilder::default()
+        .input(CellInput::new_builder().previous_output(funding).build())
+        .output(out.clone())
+        .output_data(pack_pbytes(&memento_data))
+        .output(out)
+        .output_data(pack_pbytes(&memento_data))
+        .build();
+    // Confirm the isolation claim rather than assume it: exactly one input
+    // (the always-success funding cell, whose lock cannot reject) and both
+    // outputs share the identical type script (one script group, no claim
+    // cell anywhere), so the memento group is the only possible source of a
+    // rejection.
+    assert_eq!(tx.inputs().len(), 1);
+    let first_type = tx.outputs().get(0).unwrap().type_().to_opt().unwrap();
+    let second_type = tx.outputs().get(1).unwrap().type_().to_opt().unwrap();
+    assert_eq!(first_type.as_slice(), second_type.as_slice());
+    expect_code(&mut w.context, &tx, MEMENTO_ERROR_GROUP);
+}
+
 // NOTE on the row left out of this suite:
 //
 // `two_mementos_for_one_retiring_claim_are_refused` (brief: winner, two
 // identical memento outputs -> CLAIM_ERROR_RETIRE) cannot be isolated to one
-// script group. Two memento OUTPUTS with byte-identical args are, by
-// construction, the SAME type script and therefore ONE script group with two
-// members. The memento binary's own group-size guard
+// script group, and is NOT shipped here — do not go looking for a version of
+// it that asserts CLAIM_ERROR_RETIRE. Two memento OUTPUTS with byte-identical
+// args are, by construction, the SAME type script and therefore ONE script
+// group with two members. Adding a retiring claim of that same identity to
+// the transaction pulls in a SECOND, independently-failing group: the
+// memento binary's own group-size guard
 // (`load_cell(1, Source::GroupOutput).is_ok()` in
-// contracts/entry-shard-type/src/memento.rs::run) rejects any group with a
-// second member unconditionally, with MEMENTO_ERROR_GROUP, before any
-// content is even inspected. Separately, the claim's own
-// `check_memento_outputs` also rejects the duplicate with CLAIM_ERROR_RETIRE
-// (`found > 1`). Both rejections are real and independent, and which one CKB
-// reports depends on the sort order of the two groups' script hashes — which
-// depends on entry-shard-type's own code hash, i.e. on the exact contents of
-// the deployed binary. That is exactly the instability this file's tests are
-// built to avoid, so this row is intentionally left out rather than widened
-// into an or-of-codes assertion.
+// contracts/entry-shard-type/src/memento.rs::run, MEMENTO_ERROR_GROUP) and
+// the claim's own `check_memento_outputs` duplicate check
+// (`found > 1`, CLAIM_ERROR_RETIRE). Both rejections are real and
+// independent, and which one CKB reports depends on the sort order of the
+// two groups' script hashes — which depends on entry-shard-type's own code
+// hash, i.e. on the exact contents of the deployed binary. That is exactly
+// the instability this file's tests are built to avoid.
+//
+// `two_mementos_of_one_identity_are_refused` above pins the half of this
+// that IS isolatable: the memento binary's own group-size guard, tested with
+// no claim in the transaction at all, so there is no second group to race
+// against. The claim-side `found > 1` duplicate check remains permanently
+// unpinnable by an adversarial test in isolation — not a gap to fix, but
+// deliberate defence in depth (the retiring claim's own count check backs up
+// the memento's group-size guard, and vice versa, exactly so that either one
+// alone is sufficient). A mutation that disabled ONLY the claim's `found > 1`
+// branch would not be observable by any test that can be built here, because
+// the memento group's unconditional guard fires first whenever both are
+// present — that mutation is only observable by disabling the memento guard
+// too, which is a different, larger mutation.
