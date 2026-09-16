@@ -56,7 +56,7 @@
 **Interfaces:**
 - Produces: `leaf::prize_leaf(ticket: &Hash32, amount: u64) -> Hash32`; `redemption::prize_source(commitment: &Hash32, batch_id: u64, digest: &Hash32) -> Hash32`; `codes::CLAIM_ERROR_REDEEM = -97`, `codes::SETTLE_ERROR_REDEEM = -77`.
 
-- [ ] **Step 1: Failing tests**
+- [x] **Step 1: Failing tests**
 
 Append to `crates/daowow-core/src/leaf.rs` tests module (it has `#[cfg(test)] mod tests`; add inside):
 
@@ -92,11 +92,11 @@ fn prize_source_is_a_logical_batch_identity() {
 }
 ```
 
-- [ ] **Step 2: Run, expect `cannot find function`**
+- [x] **Step 2: Run, expect `cannot find function`**
 
 `cargo test -p daowow-core --lib leaf redemption`
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `leaf.rs`, after `liability_leaf`:
 
@@ -127,7 +127,7 @@ pub fn prize_source(commitment: &Hash32, batch_id: u64, digest: &Hash32) -> Hash
 
 `error.rs`: add `pub const SETTLE_ERROR_REDEEM: i8 = -77;` after `SETTLE_ERROR_ROUND_MISMATCH` and `pub const CLAIM_ERROR_REDEEM: i8 = -97;` after `CLAIM_ERROR_RETIRE`.
 
-- [ ] **Step 4: Run green, fmt, clippy, commit**
+- [x] **Step 4: Run green, fmt, clippy, commit**
 
 ```bash
 cargo test -p daowow-core --lib && cargo clippy -p daowow-core --lib -- -D warnings && cargo fmt -p daowow-core -- --check
@@ -144,7 +144,7 @@ git add crates/daowow-core/src && git commit -m "feat(core): prize leaf, prize s
 **Interfaces:**
 - Produces: `pub const SETTLEMENT_FUNDING_SIZE: usize = 160;` `pub struct SettlementFundingDataV3 { round_id, batch_id, realized_total, principal_liability, prize_pool, payout_cursor, liability_count, liabilities_root, prize_count: u64, prize_root: Hash32, prize_paid: u64 }` with `encode() -> [u8; 160]` and `decode(&[u8]) -> Result<Self, CoreError>`.
 
-- [ ] **Step 1: Failing codec test**
+- [x] **Step 1: Failing codec test**
 
 In `encoding.rs` tests module add:
 
@@ -186,7 +186,7 @@ In `encoding.rs` tests module add:
     }
 ```
 
-- [ ] **Step 2: Implement**
+- [x] **Step 2: Implement**
 
 Replace the V2 block (`pub const SETTLEMENT_FUNDING_SIZE` through the end of `impl SettlementFundingDataV2`) with:
 
@@ -269,11 +269,11 @@ impl SettlementFundingDataV3 {
 }
 ```
 
-- [ ] **Step 3: Rename every consumer**
+- [x] **Step 3: Rename every consumer**
 
 `grep -rn "SettlementFundingDataV2" --include=*.rs .` and replace with `SettlementFundingDataV3`; every struct literal gains `prize_count: 0, prize_root: [0; 32], prize_paid: 0` (proto4 `setup`, `security_entitlements`, `gen_vectors`, `entitlements.rs` derive until Task 5 fills it). In `gen_vectors.rs` rename the JSON key to `"settlement_funding_v3"` and add `"prize_count"`, `"prize_root"`, `"prize_paid"` entries. Update the doc comment at the top of `contracts/settlement-type/src/main.rs` (`data: SettlementFundingDataV3 (fixed 160 bytes)`).
 
-- [ ] **Step 4: Regenerate vectors**
+- [x] **Step 4: Regenerate vectors**
 
 ```bash
 cargo test -p daowow-core --test gen_vectors
@@ -291,7 +291,7 @@ cd apps/web && npm test 2>&1 | tail -5
 
 (If `gen_vectors` writes elsewhere, follow its `println!`/file path; the snippet is the one recorded in `apps/web/PROGRESS.md`.)
 
-- [ ] **Step 5: Build and run everything**
+- [x] **Step 5: Build and run everything**
 
 ```bash
 cargo test -p daowow-core --lib && cargo check -p daowow-core --no-default-features
@@ -301,7 +301,7 @@ cd tests/integration && cargo test 2>&1 | grep -E "^test result|FAILED"
 
 Expected: all green (the two pre-existing `smoke` failures remain). The funding cell capacity math is unchanged; only the cell data grew by 48 bytes, so any fixture that sized a funding cell at exactly its occupied capacity must add 48 CKB (watch for `-72` conservation failures in `proto4`).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add -A crates contracts tests apps/web/vectors.js && git commit -m "feat: settlement funding v3 with prize commitment fields"
@@ -318,7 +318,7 @@ git add -A crates contracts tests apps/web/vectors.js && git commit -m "feat: se
 - Produces: `pub fn locate(&self, global_position: u64) -> Result<(u32, u64), CoreError>`.
 - Removes: `WinnerProof`, `verify_winners`, test helper `winners`.
 
-- [ ] **Step 1: Failing test**
+- [x] **Step 1: Failing test**
 
 In `computed_draw.rs` tests add:
 
@@ -338,7 +338,7 @@ In `computed_draw.rs` tests add:
     }
 ```
 
-- [ ] **Step 2: Implement `locate`; delete winners**
+- [x] **Step 2: Implement `locate`; delete winners**
 
 After `is_success`:
 
@@ -362,7 +362,7 @@ After `is_success`:
 
 Delete `WinnerProof`, `verify_winners`, the `winners` test helper, and these tests that only exercised owner verification: `rejects_missing_extra_wrong_owner_and_tampered_proofs`, `owner_verification_supports_each_configured_accumulator`, `forged_owner_ranges_fail_without_overflow_or_index_panics`, `genuine_frozen_proofs_do_not_authorize_excluded_entries`. In `draws_only_accepted_prefixes_across_empty_shards` and `failed_and_empty_rounds_require_no_winner_proofs`, remove the `verify_winners` assertions and keep the position/`is_success` assertions (rename the second to `failed_and_empty_rounds_draw_nothing`). Keep the `Fixture`, `fixture`, `fixture_with_accumulator` items: Task 5's tests use them. Remove now-unused imports (`imt`, `mmr`, `smt`, `nonce_key`) from the deleted method.
 
-- [ ] **Step 3: Green, commit**
+- [x] **Step 3: Green, commit**
 
 ```bash
 cargo test -p daowow-core --lib computed_draw && cargo clippy -p daowow-core --lib -- -D warnings
@@ -381,7 +381,7 @@ git add crates/daowow-core/src/computed_draw.rs && git commit -m "feat(core): Co
 **Interfaces:**
 - Produces: `EntitlementWitness::decode(&[u8])` accepting `[2] ‖ u32 schedule_len ‖ schedule ‖ u32 n ‖ n × (EntryDataV1 ‖ u64 capacity)`; `EntitlementWitness::encode(schedule, entries, capacities) -> Result<Vec<u8>, CoreError>`; `schedule()`, `entries()`, `capacities()`. `winner_proofs()` and `MAX_WINNER_PROOF_BYTES` are removed.
 
-- [ ] **Step 1: Update tests first**
+- [x] **Step 1: Update tests first**
 
 In the tests module: remove winner tuples from every `encode` call (`EntitlementWitness::encode(&s, &[e], &[500])`), delete `winner_proofs()` assertions, change the version-byte assertions from `1` to `2`, and drop `whole_payload_limit_accepts_exact_boundary_and_rejects_valid_oversize` (its subject was the winners section). Replace it with:
 
@@ -404,11 +404,11 @@ In the tests module: remove winner tuples from every `encode` call (`Entitlement
 
 `decoded_evidence_derives_entitlements_and_rejects_altered_capacity` loses its `winners` plumbing; its `EntitlementInput` literal drops the `winners` field (Task 5 changes the struct; this test compiles only after Task 5, which is fine since both land before the next full run).
 
-- [ ] **Step 2: Implement**
+- [x] **Step 2: Implement**
 
 In `decode`: expect `[2]`; delete the winners loop, the `winners`/`proofs` fields and `MAX_WINNER_PROOF_BYTES`. In `encode`: signature `(schedule, entries, capacities)`, size = `1 + 4 + schedule.len() + 4 + entries.len() * (ENTRY_DATA_SIZE + 8)`, push `2`. Delete `winner_proofs`. Update the module doc.
 
-- [ ] **Step 3: Commit (compilation completes in Task 5)**
+- [x] **Step 3: Commit (compilation completes in Task 5)**
 
 ```bash
 git add crates/daowow-core/src/entitlement_witness.rs && git commit -m "feat(core): entitlement witness v2 without winner proofs"
@@ -424,7 +424,7 @@ git add crates/daowow-core/src/entitlement_witness.rs && git commit -m "feat(cor
 **Interfaces:**
 - Produces: `pub struct PrizeEntitlement { pub ticket: Hash32, pub amount: u64 }`; `InitialEntitlements::prizes(&self) -> &[PrizeEntitlement]` (sorted by ticket ascending); `EntitlementInput` without `winners`.
 
-- [ ] **Step 1: Failing tests**
+- [x] **Step 1: Failing tests**
 
 Rewrite `independent_batches_pay_the_same_global_winners_and_full_capacity` in `entitlements/tests.rs`:
 
@@ -512,9 +512,9 @@ fn prize_domain_conserves_and_is_sorted_and_unique() {
 }
 ```
 
-- [ ] **Step 2: Run, expect compile errors on `winners` and `prizes`**
+- [x] **Step 2: Run, expect compile errors on `winners` and `prizes`**
 
-- [ ] **Step 3: Implement `derive`**
+- [x] **Step 3: Implement `derive`**
 
 In `entitlements.rs`: remove `winners` from `EntitlementInput` and the `computed_draw::WinnerProof` import; add
 
@@ -616,11 +616,11 @@ and a `prizes: Vec<PrizeEntitlement>` field on `InitialEntitlements` with `pub f
 
 On a successful round `prize_total == prize_pool` because `allocate_prizes_complete` sums exactly to the pool; the conservation check enforces it.
 
-- [ ] **Step 4: Contracts-common and fixtures**
+- [x] **Step 4: Contracts-common and fixtures**
 
 `crates/daowow-contracts-common/src/entitlements.rs`: delete `let winners = evidence.winner_proofs();` and the `winners: &winners,` field. `proto3_dao_lifecycle.rs`: in `phase2_fixture_history` delete the `winners`/`views` construction (lines ~617-632), drop `winners` from `EntitlementInput`, call `EntitlementWitness::encode(&schedule, &entries[predecessor_entries..], &capacities)`; in `drain_created_funding` delete `let winners = ...`, the `winners:` field, and change the entry lookup to `evidence.entries().iter().find(...)` (winners no longer contribute entries; the 64-liability assertion is on principal-only items now, so the `assert_eq!(items.len(), 64)` stays valid only if all 64 owners have principal in this batch: check the fixture's `distinct_owners`/`predecessor_entries` and, if the count drops, assert the new count and print it). `devnet_round.rs`: remove the `winners` array and field, call `encode(&schedule, &[entry], &[400 * 100_000_000])`, and add to the settlement JSON `"prizes": derived.prizes().iter().map(|p| json!({"ticket": hex(&p.ticket), "amount": p.amount})).collect::<Vec<_>>()`.
 
-- [ ] **Step 5: Full run**
+- [x] **Step 5: Full run**
 
 ```bash
 cargo test -p daowow-core --lib && cargo check -p daowow-core --no-default-features && cargo clippy -p daowow-core --lib -- -D warnings && cargo test -p daowow-core --test gen_vectors
@@ -630,7 +630,7 @@ cd tests/integration && cargo test 2>&1 | grep -E "^test result|FAILED"
 
 Expected: green apart from the two pre-existing `smoke` failures. `proto3` tests that asserted prize amounts on participant payouts (`phase2_failed_round_returns_deposits_and_all_yield` stays valid; success-round tests that asserted `prize > 0` on liabilities must now assert `prize == 0` and inspect `prizes()`).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add -A crates tests && git commit -m "feat: ticket-indexed prize domain in initial entitlements"
@@ -653,7 +653,7 @@ git add -A crates tests && git commit -m "feat: ticket-indexed prize domain in i
   - `pub fn decode_redemption_witness(data: &[u8]) -> Result<Vec<RedemptionItem<'_>>, CoreError>`
   - `pub fn is_redemption_witness(data: &[u8]) -> bool` (`data.first() == Some(&0xFF)`)
 
-- [ ] **Step 1: Failing tests**
+- [x] **Step 1: Failing tests**
 
 ```rust
     #[test]
@@ -689,7 +689,7 @@ git add -A crates tests && git commit -m "feat: ticket-indexed prize domain in i
 
 (`RedemptionItem` derives `Clone, Copy, Debug, PartialEq, Eq`.)
 
-- [ ] **Step 2: Implement**
+- [x] **Step 2: Implement**
 
 ```rust
 pub const REDEMPTION_WITNESS_TAG: u8 = 0xFF;
@@ -770,7 +770,7 @@ pub fn decode_redemption_witness(data: &[u8]) -> Result<Vec<RedemptionItem<'_>>,
 
 (`read_bytes(data, &mut off, len)` is the existing helper in `witness.rs`; `write_u32` there appends to a `Vec`.)
 
-- [ ] **Step 3: Green, commit**
+- [x] **Step 3: Green, commit**
 
 ```bash
 cargo test -p daowow-core --lib witness && cargo clippy -p daowow-core --lib -- -D warnings
@@ -787,7 +787,7 @@ git add crates/daowow-core/src/witness.rs && git commit -m "feat(core): redempti
 **Interfaces:**
 - Consumes: `decode_redemption_witness`, `is_redemption_witness`, `prize_leaf`, `mmr::verify_membership`, `daowow_core::claim::{ClaimArgs, CLAIM_ARGS_SIZE, CLAIM_TAG}`, `config_by_commitment`, `script_matches`.
 
-- [ ] **Step 1: Dispatch on the witness**
+- [x] **Step 1: Dispatch on the witness**
 
 After `before` is decoded and the immutable-field comparison passes (extend that comparison with `prize_count`, `prize_root`), load the witness and branch:
 
@@ -803,7 +803,7 @@ After `before` is decoded and the immutable-field comparison passes (extend that
 
 where `after_opt` is `Some(&after)` unless `is_final`. In the payout path add, alongside the existing `is_final && cursor != before.liability_count` check: `if is_final && before.prize_count != 0 && before.prize_paid != before.prize_pool { return err(SETTLE_ERROR_REDEEM); }` and in the non-final case `if after.prize_paid != before.prize_paid { return err(SETTLE_ERROR_ROUND_MISMATCH); }`.
 
-- [ ] **Step 2: Write `redeem`**
+- [x] **Step 2: Write `redeem`**
 
 ```rust
 fn redeem(
@@ -973,11 +973,11 @@ fn redeem(
 
 Update the module doc comment with the redemption mode summary.
 
-- [ ] **Step 3: Build**
+- [x] **Step 3: Build**
 
 `cargo build --target riscv64imac-unknown-none-elf --release -p settlement-type` clean. Run `cd tests/integration && cargo test --test proto4_settlement --test proto3_dao_lifecycle` to confirm the payout path is unchanged (green).
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add contracts/settlement-type/src/main.rs && git commit -m "feat(contract): settlement redemption mode and final completeness"
@@ -993,7 +993,7 @@ git add contracts/settlement-type/src/main.rs && git commit -m "feat(contract): 
 **Interfaces:**
 - Consumes: `prize_source`, `PrizeRedemptionState`, `decode_redemption_witness`, `SettlementFundingDataV3`, `config_by_commitment`, `script_matches`.
 
-- [ ] **Step 1: Implement**
+- [x] **Step 1: Implement**
 
 Replace the `(true, Some(data))` arm:
 
@@ -1105,7 +1105,7 @@ fn redeem(script: &Script, args: &ClaimArgs, input: &[u8], output: &[u8]) -> Res
 
 `err` in this file returns `Result<i8, i8>`, so `.map_err(|_| CODE)?` and `err(CODE)` compose. Import `Script` is already there.
 
-- [ ] **Step 2: Build, run existing claim suites (still green), commit**
+- [x] **Step 2: Build, run existing claim suites (still green), commit**
 
 ```bash
 cargo build --target riscv64imac-unknown-none-elf --release -p entry-shard-type
@@ -1128,7 +1128,7 @@ The `transfer_to_a_paid_looking_state_is_rejected_as_transition` test now expect
 - `pub fn seed_claim(world: &mut World, lock: &Script, shard_id: u32, position: u64) -> (OutPoint, ClaimArgs)` creates a live claim cell with initial state.
 - `pub fn redemption_witness(items: &[RedemptionItem<'_>]) -> ckb_testtool::ckb_types::packed::Bytes`.
 
-- [ ] **Step 1: Fixture (seeded funding, no DAO)**
+- [x] **Step 1: Fixture (seeded funding, no DAO)**
 
 `claim_redemption.rs`:
 
@@ -1270,15 +1270,15 @@ After a successful `expect_ok`, the caller chains: `chain_cell(&mut fx.w, &fx.fu
 
 Accepted tests: `one_claim_redeems_its_prize`, `two_claims_redeem_in_one_transaction`, `transferred_claim_redeems_into_new_holder_lock` (transfer via the Task-5 pattern from sub-project 1, then redeem with `pay_to: None` so payment goes to the new lock), `principal_payout_then_redemptions_then_final_drain` (fixture with `cursor_open: true`: first a payout tx built like `proto4`'s `partial_payout` paying `100 * SHANNONS` to `fx.depositor` with `fx.liabilities.membership_proof(0)`, cursor 0 to 1, funding successor keeps the prize pool; then redemptions; the last one with `final_drain: true`), and `max_items_redemption_fits_cycle_budget` (32 claims, print cycles).
 
-- [ ] **Step 2: Rejected tests (`security_redemption.rs`, same fixture copied)**
+- [x] **Step 2: Rejected tests (`security_redemption.rs`, same fixture copied)**
 
 Each builds `redeem_tx` then mutates: duplicate redemption (run once, chain, run the same claim again: `-94`/`-97` from the claim script since the absence proof fails, and `SETTLE_ERROR_PROOF` is not reached); payment to a stranger lock (`pay_to: Some(stranger)` → `-77`); wrong amount (edit witness amount and payment capacity → `-73`); wrong prize index (`-73`); forged mmr proof (`-73`); stale absence proof (reuse a pre-payment proof after chaining → `-97`); claim successor missing (drop the claim output → claim `-96`); claim data updated without the funding input (build a tx with only the claim in/out and the new data → `-97`); funding `prize_paid` advanced with no items (payout-shaped witness but `prize_paid` bumped → `-76`); two items sharing one payment output (`-77`); lock change inside redemption (claim output lock differs → `-95`); final drain with prizes unpaid (`final_drain: true` with one of two claims → `-77`); payout final with prizes unpaid (`cursor_open` fixture, payout tx consuming the cell → `-77`). Assert exact codes with the `code_of` helper from `security_claims.rs`.
 
-- [ ] **Step 3: End-to-end in `proto3`**
+- [x] **Step 3: End-to-end in `proto3`**
 
 Add `phase2_prizes_redeem_by_claim_then_final_drain`: use `phase2_fixture()` (one entry, one ticket), `expect_ok` the creation tx, decode the created funding's `prizes()` via `InitialEntitlements::derive` as `drain_created_funding` does, seed a claim cell for `(shard 0, position 0)` under the fixture participant lock (`seed_claim`), pay the principal liability with a non-final payout (cursor 0 → 1), then redeem the single prize with `final_drain: true`. Assert the funding cell is consumed and the payment equals the prize amount.
 
-- [ ] **Step 4: Run all three, record cycles, commit**
+- [x] **Step 4: Run all three, record cycles, commit**
 
 ```bash
 cd tests/integration && cargo test --test claim_redemption --test security_redemption --test proto3_dao_lifecycle -- --nocapture 2>&1 | grep -E "cycles|test result|FAILED"
@@ -1292,11 +1292,11 @@ git add tests/integration && git commit -m "test: claim redemption lifecycle and
 **Files:**
 - Modify: `tests/integration/examples/devnet_round.rs` (settlement JSON), `tests/devnet/test_round_creation.py:755-800`, `tests/devnet/settlement_reorg.py` if it asserts the payout consumed the funding cell.
 
-- [ ] **Step 1: Example emits the redemption**
+- [x] **Step 1: Example emits the redemption**
 
 In the settlement branch: after computing `derived`, build the claim's expected redemption for position 0 of shard 0 (the fixture's single ticket): `prize_source(commitment, batch_id, receipt.digest)`, an `SmtHost` absence proof for `prize_obligation_key(ticket, source)`, the successor state via `record_verified_prize`, the MMR membership proof at the prize's index (find it in `derived.prizes()`), and `encode_redemption_witness(&[RedemptionItem { claim_input_index: 1, payment_output_index: 1, prize_index, amount, mmr_proof, absence_proof }])`. Emit `"redemption": {"witness": hex, "claim_data_after": hex, "amount": amount, "prize_index": prize_index}`; the redemption is the final drain, so it has no funding output. `"payout_witness"` now pays principal only (`item.prize == 0`) and the payout is no longer final: emit `"funding_data_after_payout": hex(funding with payout_cursor 1)` and `"principal": item.principal`.
 
-- [ ] **Step 2: Python**
+- [x] **Step 2: Python**
 
 Replace the final payout with two transactions:
 
@@ -1305,7 +1305,7 @@ Replace the final payout with two transactions:
 
 Update the `assertEqual(int(live...capacity), 400 * CKB + settlement["prize"])` in the partial branch to check the two cells separately, and pass both transactions to `recover_settlement_history` if it replays the payout after a reorg (read `settlement_reorg.py:47-80`; if it asserts the funding cell is dead after the payout, assert it after the redeem instead).
 
-- [ ] **Step 3: Run**
+- [x] **Step 3: Run**
 
 ```bash
 cargo build -p daowow-integration-tests --examples
@@ -1319,7 +1319,47 @@ Expected: 15 tests OK. Do not rebuild any contract binary while this runs.
 
 ### Task 11: Review and results
 
-- [ ] **Step 1:** Full verification (core tests, no-std, clippy, all contract builds, integration suite, devnet).
-- [ ] **Step 2:** Read-only `rust-reviewer` on the settlement redemption mode, the claim redemption mode, `derive`, the witness codec and both new suites. Ask specifically: can a claim be paid twice across two transactions; can a claim redeem a prize belonging to another ticket; can payment go anywhere but the claim's lock; can `prize_paid` move without a claim or a claim's paid set move without funding; can a funding cell be drained with prizes unpaid; does any test assert less than its name claims (name each).
-- [ ] **Step 3:** Mutation probes: remove each guard listed in Task 7's `redeem` and Task 8's `redeem` one at a time; the named security test must fail.
-- [ ] **Step 4:** Append `## Results` here (counts, cycles for 1/2/32-item redemptions, codes observed, review verdict, what remains: retirement, memento, unclaimed handling, web model) and one status line in `docs/testnet-beta-plan.md`. Commit.
+- [x] **Step 1:** Full verification (core tests, no-std, clippy, all contract builds, integration suite, devnet).
+- [x] **Step 2:** Read-only `rust-reviewer` on the settlement redemption mode, the claim redemption mode, `derive`, the witness codec and both new suites. Ask specifically: can a claim be paid twice across two transactions; can a claim redeem a prize belonging to another ticket; can payment go anywhere but the claim's lock; can `prize_paid` move without a claim or a claim's paid set move without funding; can a funding cell be drained with prizes unpaid; does any test assert less than its name claims (name each).
+- [x] **Step 3:** Mutation probes: remove each guard listed in Task 7's `redeem` and Task 8's `redeem` one at a time; the named security test must fail.
+- [x] **Step 4:** Append `## Results` here (counts, cycles for 1/2/32-item redemptions, codes observed, review verdict, what remains: retirement, memento, unclaimed handling, web model) and one status line in `docs/testnet-beta-plan.md`. Commit.
+
+---
+
+## Results (2026-09-16, executed inline on branch `feat/prize-redemption`)
+
+**Suites**
+
+| Suite | Result |
+| --- | --- |
+| `cargo test -p daowow-core --lib` | 124 passed (prize leaf/source, V3 codec, `locate`, witness v2, prize domain, redemption witness incl. heap bound) |
+| no-std check, clippy `-D warnings`, rustfmt | clean |
+| `claim_redemption` | 5 passed |
+| `security_redemption` | 22 passed |
+| `proto3_dao_lifecycle` | 30 passed (incl. end-to-end: two derived prizes redeemed by seeded claims, then final principal drain) |
+| every other integration suite | green; `smoke` keeps its 2 pre-existing failures |
+| isolated Docker devnet (`DAOWOW_RUN_ISOLATED_NODE=1`) | 15 passed in 1238s: four claim redemptions committed on the node (prize 0.70 CKB topped up to a 61 CKB payment cell), principal payout as the final drain, orphaned funding and orphaned redemption recovered after a reorg, replay of a committed redemption rejected, unchanged-successor redemption rejected |
+
+**Measurements** (ckb-testtool)
+
+| Shape | Cycles |
+| --- | --- |
+| phase-two funding creation, 32 entries (evidence 4,750 bytes, was 32 winner proofs larger) | 13.9M to 14.1M |
+| one-claim redemption | 1,273,014 |
+| two-claim redemption | 2,414,096 |
+| final-drain redemption of two claims | 2,388,145 |
+| 32-claim redemption (final) | 49,301,152 of 70M |
+| final principal payout after prizes complete | 136,249 |
+
+**Protocol properties surfaced by the tests, now documented**
+
+- A funding successor must keep at least its own occupied capacity (about 307 CKB); when the unpaid remainder would drop below it, the remaining items must go in one final transaction. For a small prize pool the viable order is redemption first (the cell keeps principal), then the principal payout as the final drain; both orders are accepted by the contracts.
+- A payment cell must cover its own occupied capacity (47 to 61 CKB), so a prize smaller than that is topped up by the sponsor; the settlement counts only the authenticated amount.
+- The settlement now requires the claim successor's paid counters to advance by exactly the item and its root to change. Without this, an unchanged successor passed the claim script as a transfer while the settlement paid the prize, letting one ticket drain other winners' prizes. Found while writing the duplicate-redemption test; pinned by `unchanged_claim_successor_cannot_collect_a_prize`.
+- CKB executes script groups in script-hash order, so when both scripts reject, the reported code is not determined by input order. Tests that pin a settlement-only guard keep the claim side consistent (`wrong_amount_is_rejected`, `items_out_of_prize_order_are_rejected_by_the_settlement_only`, no-claim-input case) and vice versa (`forged_paid_root_in_the_successor_is_rejected_by_the_claim_only`).
+
+**Review** (read-only rust-reviewer): no CRITICAL/HIGH. MEDIUM: 32 items at the 8192-byte per-proof cap encode to 525,317 bytes, above the 512 KiB never-freed heap that every claim script loads the witness into; fixed with a 128 KiB whole-witness bound (7 maximal items, or 32 realistic ones). MEDIUM: `wrapping_add` in the settlement counter check, replaced with `checked_add`. LOW: two `unwrap` calls replaced; three guards without isolating tests now have them. Double-pay, cross-ticket, payee redirection, one-sided updates, premature drain and panics on attacker data: none found.
+
+**Mutation probes** (guard removed, named test fails, restored): settlement successor counters/root (`unchanged_claim_successor_cannot_collect_a_prize`), payment lock (`payment_to_a_stranger_is_rejected`), prize ordering (`items_out_of_prize_order_are_rejected_by_the_settlement_only`), prize membership (`wrong_amount_is_rejected`); claim lock unchanged (`lock_change_inside_a_redemption_is_rejected`), claim successor byte-exact (`forged_paid_root_in_the_successor_is_rejected_by_the_claim_only`). Defence-in-depth guards that are shadowed by design: the final-drain completeness gate in redemption mode (conservation fails first), `amount == 0` and duplicate claim index (both scripts reject).
+
+**Not implemented**: retirement, memento, non-winner claim recovery, unclaimed-prize expiry, artwork, wallet display, the web entry quote and the local UI model (`apps/web/engine.js` still pays prizes to participants in its simulation). Follow-ups: single-pass output scans in both contracts (successor search is O(items x outputs)); the entry UI quote for claim capacity.
