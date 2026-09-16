@@ -202,3 +202,36 @@ into the wrong commit. Reviews overlap; implementers are serial.
 Cost if wrong: slower wall-clock than the theoretical maximum under quota
 pressure. Accepted deliberately — a cross-contaminated commit would cost far
 more to untangle than the parallelism saves.
+
+## STOPPED: weekly quota exhausted 2026-09-16 23:05 ACST (resets 05:30 ACST)
+
+Task 3 (derivation refuses zero): its implementer was terminated by the rate
+limit after confirming the baseline (130 passed) and BEFORE writing any code.
+It committed nothing and left no edits. Task 3 is NOT started.
+
+### Resume here
+
+Branch feat/claim-retirement-memento, working tree clean, core suite 130 passing.
+Completed: Task 1 (commits f80e559, 6223a19), Task 2 (commit 8c170a8).
+Next: Task 3, brief already extracted at
+.superpowers/sdd/2026-09-16-claim-retirement-memento/task-3-brief.md, BASE 8c170a8.
+
+To resume, re-enter superpowers:subagent-driven-development against
+docs/superpowers/plans/2026-09-16-claim-retirement-memento.md. This ledger is the
+recovery map; every task with a `complete` line is done.
+
+Carry these into Task 3's dispatch (they are not in the brief):
+- The change is entitlements.rs:79, `if amount == 0 { continue; }` inside the
+  `if draw.is_success()` branch only; the failed-round branch must not change.
+- Keep the guard even though Task 2's MAX_POOL_BAR gate makes it unreachable for
+  newly drawn rounds: pre-gate configs exist, and it is the invariant the
+  retirement count argument rests on.
+- Baseline is 130, not the plan's 124.
+- Do not touch computed_draw.rs or schedule.rs.
+- `gen_vectors` REWRITES crates/daowow-core/tests/vectors/daowow_core_vectors.json,
+  a pinned oracle. Diff it and report what moved; do not commit a silent change.
+
+Standing process rulings for the rest of the run: implementers serial, reviews
+may overlap; reviews on the cheapest model that can judge the diff; ledger
+force-added and committed after every step; a subagent's narrated NUMBERS are
+not evidence (a re-review already mis-quoted an allocation by exactly the dust).
