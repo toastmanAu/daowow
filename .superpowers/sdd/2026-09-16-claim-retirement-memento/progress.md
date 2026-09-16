@@ -346,3 +346,23 @@ Task 5 (memento codec): dispatched (sonnet), BASE 9112849, new files
 memento.rs + memento/tests.rs plus one line in lib.rs. Told to verify the 193
 CKB capacity arithmetic independently and STOP rather than adjust the test if it
 disagrees, and not to "correct" the committed sha256 template constant.
+Task 4: review spec MET, quality approved, one Minor. The reviewer verified the
+fixture rather than trusting it: traced that `accept` is called once per entry
+so shards genuinely accumulate 3 and 5 batches (sum 9, which an occupancy-count
+bug would report as 3), checked the decode guard's zero-ness invariant holds at
+both ends, and checked `close()`'s deadline selection accepts the empty shard.
+
+Task 4: minor (deferred): the doc comment on total_accepted_batches asserts
+"every batch of every shard owes every winner a positive amount" as if it were a
+property of the seal. It is not — it holds only because entitlements.rs refuses
+a zero allocation (Task 3). The comment states a CROSS-MODULE invariant as
+intrinsic.
+Ruling: defer rather than spend a fix round, but carry the substance forward —
+Tasks 6 and 7 build the retirement count argument directly on this function, so
+their dispatches will state explicitly that the premise lives in entitlements.rs.
+Flagged for the final whole-branch review to decide if it must be fixed before
+merge. Cost if wrong: if someone later relaxes the entitlements guard, this
+comment still claims the property holds. Real but slow-acting, and the final
+review sees it.
+
+Task 4: complete (commits 71ff552..9112849, review clean, 0 fix rounds)
