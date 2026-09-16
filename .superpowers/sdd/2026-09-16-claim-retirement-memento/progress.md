@@ -499,3 +499,24 @@ the retirement policy.
 Task 7 concern 1: main.rs still has no tag-6 dispatch, so only the NON-WINNER
 retirement path is provably spendable today. Winner retirement mints a memento
 and cannot pass end-to-end until Task 8. Correctly deferred, explicitly flagged.
+Task 7: review dispatched (sonnet) over fc5c6b5..4461d8b. Told to check six
+things specifically: the 7..39 round-id offset derived from the encodings rather
+than trusted; dep authentication being own-code_hash + exact args + data tag 4
+and nothing weaker; that it CALLS retire_decision/total_accepted_batches instead
+of reimplementing them; that StateTransition maps to CLAIM_ERROR_INCOMPLETE
+without other core errors collapsing into it; whether the two rewritten
+adversarial tests still prove a claim cannot be burned without proof or now
+merely prove evidence-gathering fails; and whether the accepted test
+authenticates against a REAL sealed round rather than a stub. Told explicitly
+NOT to flag the missing tag-6 dispatch or the pre-existing main failure.
+
+Task 8 (memento mode + dispatch, CONTRACT): dispatched (sonnet), BASE 6c553e7.
+Closes the winner path. Carried forward: the two script groups really are
+separate even in one binary (CKB groups by whole type script), so both
+directions of the check run; the dispatch must branch on TAG not length because
+memento args are also 45 bytes; MementoData::decode already enforces six
+conditions so do not duplicate them; the three integration failures to ignore
+(2 smoke + the pre-existing main one). Instructed to STOP and report rather than
+work around if making the winner path pass requires touching claim.rs or
+daowow-core — that would mean Task 7's claim-side memento checks are wrong,
+which is a finding, not something to patch from the memento side.
