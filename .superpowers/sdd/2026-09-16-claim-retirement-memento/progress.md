@@ -168,3 +168,15 @@ would close it.
 
 Deferred minor: the implementer observed the core fixture's numbers are
 rounding-dominated (66/33 for a true 50/50). Not touched, not needed now.
+Task 2 (viability gate, re-scoped): implementer DONE — commit 8c170a8,
+computed_draw.rs only (+144/-1). Core 128 -> 130, no pre-existing test changed,
+no_std + clippy clean, ticket_price untouched. Review dispatched (sonnet) over
+aff95e6..8c170a8, told specifically to check the void test is not passing via
+the minimum_tickets path or a schedule-commitment mismatch instead of the gate.
+Self-reported concerns carried to the reviewer: `record_for` derives acceptance
+from the record rather than a stored flag; `fixture_unviable` unused and marked
+#[allow(dead_code)] (a later task is specified to call it).
+
+Task 3 (derivation refuses zero): dispatched (sonnet) in parallel — touches
+entitlements.rs, disjoint from the file under review. BASE 8c170a8. Told to
+report any regenerated-vector change rather than commit it silently.
