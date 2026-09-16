@@ -89,6 +89,20 @@ impl PrizeSchedule {
     pub fn allocate(&self, tickets: u64, batch_yield: u64) -> Result<Vec<u64>, CoreError> {
         crate::accounting::allocate_prizes_complete(self.weights_for(tickets)?, batch_yield)
     }
+
+    /// Smallest batch prize pool for which no drawn position allocates zero.
+    ///
+    /// `allocate_prizes` gives position `i` exactly `floor(pool * w_i / W)`, so
+    /// that value is positive iff `pool * w_i >= W`. The binding position is the
+    /// smallest weight, giving `ceil(W / w_min)`. Index zero also receives the
+    /// dust, so it is never the binding case.
+    pub fn min_viable_pool(&self, tickets: u64) -> Result<u64, CoreError> {
+        let weights = self.weights_for(tickets)?;
+        let sum = crate::accounting::checked_sum(weights)?;
+        // validate_weights rejects zero weights, so min is positive.
+        let min = *weights.iter().min().ok_or(CoreError::InvalidArgument)?;
+        Ok(sum.div_ceil(min))
+    }
 }
 
 fn validate_weights(weights: &[u64]) -> Result<(), CoreError> {
@@ -208,5 +222,38 @@ mod tests {
         assert_eq!(s.allocate(5, 1), Ok(vec![1, 0, 0, 0, 0]));
         assert_eq!(s.allocate(5, 0), Ok(vec![0; 5]));
         assert_eq!(s.allocate(0, 100), Err(CoreError::InvalidArgument));
+    }
+
+    #[test]
+    fn min_viable_pool_is_ceil_sum_over_min_weight() {
+        // [40,25,20,10,5]: sum 100, min 5 -> 20
+        let s = PrizeSchedule::new(&[40, 25, 20, 10, 5]).unwrap();
+        assert_eq!(s.min_viable_pool(100), Ok(20));
+        // [1,1,1000]: sum 1002, min 1 -> 1002
+        let wide = PrizeSchedule::new(&[1, 1, 1000]).unwrap();
+        assert_eq!(wide.min_viable_pool(100), Ok(1002));
+        // exact division does not round up
+        let flat = PrizeSchedule::new(&[2, 2]).unwrap();
+        assert_eq!(flat.min_viable_pool(100), Ok(2));
+    }
+
+    #[test]
+    fn min_viable_pool_follows_the_weights_for_truncation() {
+        // fewer tickets than prizes truncates the weight list, so the bar moves
+        let s = PrizeSchedule::new(&[1, 1, 1000]).unwrap();
+        assert_eq!(s.min_viable_pool(2), Ok(2)); // weights [1,1]: sum 2, min 1
+        assert_eq!(s.min_viable_pool(1), Ok(1)); // weights [1]:   sum 1, min 1
+        assert_eq!(s.min_viable_pool(0), Err(CoreError::InvalidArgument));
+    }
+
+    #[test]
+    fn the_bar_is_exactly_the_zero_free_threshold() {
+        // At the bar no position is zero; one shannon below it, one is.
+        let s = PrizeSchedule::new(&[1, 1, 1000]).unwrap();
+        let bar = s.min_viable_pool(100).unwrap();
+        let at = crate::accounting::allocate_prizes_complete(&[1, 1, 1000], bar).unwrap();
+        assert!(at.iter().all(|a| *a > 0), "{at:?}");
+        let below = crate::accounting::allocate_prizes_complete(&[1, 1, 1000], bar - 1).unwrap();
+        assert!(below.iter().any(|a| *a == 0), "{below:?}");
     }
 }
