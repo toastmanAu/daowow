@@ -710,3 +710,35 @@ Task 10 probe rows, no action taken on any:
 Standing method note reinforced four times now: verify a scanner finding against
 `git show HEAD:<file>`, never the working tree, and read the actual `git diff`
 rather than the scanner's rendering of it.
+
+Task 10: probes complete, commit 82d8161; fix round 1 commit 94c04fc. Of 13 rows:
+9 cleanly PINNED, 2 pinned-but-masked (they DO go red on deletion, but via a
+neighbouring guard's error code because those fixtures contain no claim cell),
+2 unpinnable-by-design. ZERO remain NOT PINNED. Core 148.
+
+My own verification of the probe run, not taken on report: tree clean, all four
+scanner-flagged guards byte-identical to HEAD, and the redundancy claim checked
+against computed_draw.rs — `ComputedDraw::new` really does re-check
+`schedule.commitment() != cfg.prize_schedule_hash`, so the contract's
+decode_committed is genuinely untestable at that call site.
+
+Ruling recap: Finding A (over-paid winner, != vs <) FIXED with a new core test
+plus its own round trip. Finding B (redundant schedule commitment check) KEPT
+and documented rather than removed — deleting it would make the contract's
+authentication depend on the draw module's internal ordering, and the schedule
+is the one input the retiring holder supplies.
+
+CORRECTION to the agent's closing concern: it reported 10 `clippy --tests` lints
+in entitlements/tests.rs and schedule.rs as "pre-existing, not in files this
+round touched". Checked with git blame: schedule.rs:265 and :281 are OURS, from
+Task 1 (commits f80e559 and 6223a19) — `manual-contains` on
+`below.iter().any(|a| *a == 0)`. The entitlements/tests.rs ones (lines 57, 234)
+are outside our additions and do appear pre-existing.
+Ruling: defer both as minors rather than open a fix round. The repo's own gate is
+`cargo clippy -p daowow-core --lib -- -D warnings`, which EXCLUDES tests, so
+--tests lints are enforced nowhere and pre-existing violations remain either way;
+fixing only ours would not make any gate green. But the record must say they are
+ours, not that they are out of scope. Flagged for the final whole-branch review.
+Cost if wrong: two cosmetic style lints in test code.
+GATE GAP worth noting for the results doc: test-code clippy is ungated in this
+project, which is why these were never caught.
