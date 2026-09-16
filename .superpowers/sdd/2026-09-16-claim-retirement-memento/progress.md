@@ -180,3 +180,25 @@ from the record rather than a stored flag; `fixture_unviable` unused and marked
 Task 3 (derivation refuses zero): dispatched (sonnet) in parallel — touches
 entitlements.rs, disjoint from the file under review. BASE 8c170a8. Told to
 report any regenerated-vector change rather than commit it silently.
+Task 2: review spec MET, quality approved, no Critical/Important. The reviewer
+independently verified the crux rather than trusting the report: it hand-computed
+min_viable_pool for the TRUNCATED wide schedule and confirmed the void test
+reaches the gate (commitment binding passes because record_for reseals against
+wide_cfg, and minimum_tickets is satisfied), so the test is not green via an
+unrelated error path. Also grep-confirmed ticket_price is unread in the diff.
+
+Task 2: minor (deferred): note beside #[allow(dead_code)] on `fixture_unviable`
+saying which later task consumes it, so it does not read as orphaned.
+Task 2: minor (deferred): `record_for` duplicates ~25 lines of fixture()'s shard
+construction; extract only if a third caller appears.
+
+Task 2: complete (commits aff95e6..8c170a8, review clean, 0 fix rounds)
+
+Ruling: do NOT run two implementer subagents concurrently even when their files
+are disjoint. Reviews may overlap an implementer because they do not write, but
+two implementers would race on the cargo build lock and, worse, on the git index
+— concurrent `git add`/`git commit` can interleave and sweep the other's files
+into the wrong commit. Reviews overlap; implementers are serial.
+Cost if wrong: slower wall-clock than the theoretical maximum under quota
+pressure. Accepted deliberately — a cross-contaminated commit would cost far
+more to untangle than the parallelism saves.
