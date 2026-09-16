@@ -119,3 +119,8 @@ can never be the binding position. The formula is therefore conservative, never
 permissive — it may void a round that would in fact have paid every prize, but
 it cannot admit one that would not. Safe direction. Document it rather than
 complicate the formula.
+Task 1: fix round 1/5 (1 addressed, 0 open — ceil-vs-floor test with weights
+[7,3] plus the conservatism note on the doc comment; commits f80e559..6223a19).
+Implementer ran the disable/re-enable round trip itself: reverting to floor
+division made the new test fail left=Ok(3) right=Ok(4), then restored. Scoped
+re-review dispatched (haiku).
