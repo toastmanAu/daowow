@@ -258,6 +258,23 @@ fn a_winner_retires_only_when_every_batch_is_discharged() {
 }
 
 #[test]
+fn a_claim_sharing_a_winners_shard_but_not_its_position_is_a_non_winner() {
+    // `non_winning_claim_args` only ever varies shard_id (a shard past the
+    // last real one), so it cannot pin the `position != args.position` half
+    // of retire_decision's membership test. This identity reuses a real
+    // winner's shard_id and varies only the position, so the shard half
+    // alone cannot make it match.
+    let f = fixture(1, true);
+    let draw = ComputedDraw::new(&f.cfg, &f.record, &f.schedule).unwrap();
+    let args = f.same_shard_wrong_position_claim_args(&draw);
+    let state = PrizeRedemptionState::new(args.ticket_id());
+    assert_eq!(
+        retire_decision(&args, &state, &draw, 7),
+        Ok(RetireDecision::NonWinner)
+    );
+}
+
+#[test]
 fn a_non_winner_carrying_payments_is_refused() {
     // Only a drawn ticket can ever have redeemed; anything else is forged.
     let f = fixture(1, true);

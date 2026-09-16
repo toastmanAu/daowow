@@ -377,6 +377,34 @@ pub(crate) mod tests {
             }
         }
 
+        /// A claim identity that shares a real winner's shard but not its
+        /// position: `shard_id` is read off an actual drawn identity (via
+        /// `draw.positions()`/`draw.locate()`, as in `winning_claim_args`),
+        /// while `position` is a value far outside the fixture's small
+        /// accepted-position range. Pins the position half of
+        /// `retire_decision`'s membership test independently of the shard
+        /// half: `non_winning_claim_args` only ever varies `shard_id`, so it
+        /// cannot catch a broken `position` comparison. The `debug_assert`
+        /// checks the constructed identity against every one of this draw's
+        /// own `locate` outputs, not just by construction.
+        pub(crate) fn same_shard_wrong_position_claim_args(
+            &self,
+            draw: &ComputedDraw<'_>,
+        ) -> crate::claim::ClaimArgs {
+            let (_, global_position) = draw.positions()[0];
+            let (shard_id, _) = draw.locate(global_position).unwrap();
+            let position = u64::MAX / 2;
+            debug_assert!(draw
+                .positions()
+                .iter()
+                .all(|(_, gp)| draw.locate(*gp).unwrap() != (shard_id, position)));
+            crate::claim::ClaimArgs {
+                commitment: self.cfg.commitment(),
+                shard_id,
+                position,
+            }
+        }
+
         /// Any structurally valid claim identity, for a voided round where
         /// every claim is a non-winner regardless of shard/position.
         pub(crate) fn any_claim_args(&self) -> crate::claim::ClaimArgs {
