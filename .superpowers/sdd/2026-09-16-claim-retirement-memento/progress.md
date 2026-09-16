@@ -124,3 +124,14 @@ Task 1: fix round 1/5 (1 addressed, 0 open — ceil-vs-floor test with weights
 Implementer ran the disable/re-enable round trip itself: reverting to floor
 division made the new test fail left=Ok(3) right=Ok(4), then restored. Scoped
 re-review dispatched (haiku).
+Task 1: re-review ADDRESSED, no new breakage.
+
+Controller check before accepting: the re-review's prose quoted allocations
+[2,1] and [2,0], but the production path `allocate_prizes_complete` gives [3,1]
+and [3,0] — the quoted figures are the PRE-dust values from the legacy
+`allocate_prizes`. Read the test directly: it calls `allocate_prizes_complete`,
+the approved rule, so the verdict stands and the reviewer simply mis-stated the
+numbers in prose. Lesson for the rest of this run: a subagent's narrated numbers
+are not evidence; check the code when a number looks off by exactly the dust.
+
+Task 1: complete (commits 9d132bb..6223a19, review clean after 1 fix round)
