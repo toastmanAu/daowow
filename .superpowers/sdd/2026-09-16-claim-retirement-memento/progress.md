@@ -235,3 +235,28 @@ Standing process rulings for the rest of the run: implementers serial, reviews
 may overlap; reviews on the cheapest model that can judge the diff; ledger
 force-added and committed after every step; a subagent's narrated NUMBERS are
 not evidence (a re-review already mis-quoted an allocation by exactly the dust).
+
+## Resumed 2026-09-17 05:30 ACST
+
+CORRECTION to the stop entry above: it claimed Task 3's killed implementer
+"committed nothing and left no edits". The first half is right, the second is
+WRONG — it had written the RED step: two tests plus a CoreError import in
+entitlements/tests.rs, uncommitted. I wrote that line from the agent's own
+last message without checking `git status`, and the very next command's output
+contradicted it. Same lesson this run already recorded once: a subagent's
+narration is not evidence.
+
+Verified the inherited state before building on it rather than reverting:
+`a_batch_allocating_zero_to_a_drawn_position_is_refused` fails Ok(...) vs
+Err(Conservation), and the returned value shows prize_count: 1 with a single
+2-shannon prize — three of four drawn positions allocated zero and were skipped
+by the `continue`. That is the exact defect, so the RED is real and not an
+artifact. Kept the work; dispatched Task 3 to do steps 3 onward only.
+
+Ruling: keep a killed agent's uncommitted work only after confirming the failure
+it leaves behind is red for the RIGHT reason. Reverting would have been safe but
+wasteful; accepting it unverified would have risked building the implementation
+on a test that passes for an unrelated reason.
+Cost if wrong: if those two tests are subtly wrong, the guard gets built against
+them. Mitigated — the task review sees them in the diff, since they are
+uncommitted and land in Task 3's commit.
