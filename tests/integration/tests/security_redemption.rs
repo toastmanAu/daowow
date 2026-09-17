@@ -52,21 +52,28 @@ fn fixture(amounts: &[u64], cursor_open: bool) -> Fx {
     let cfg = default_config([0x51; 32], ACC_SMT);
     let round = w.create_round(&cfg);
     let cfg = full_config(&cfg, &w.deps);
-    let mut items: Vec<(daowow_core::claim::ClaimArgs, u64)> = amounts
-        .iter()
-        .enumerate()
-        .map(|(i, a)| {
-            (
-                daowow_core::claim::ClaimArgs {
-                    commitment: cfg.commitment(),
-                    shard_id: 0,
-                    position: i as u64,
-                },
-                *a,
-            )
+    // Sort the identities by ticket id FIRST, then pair the amounts onto the
+    // sorted order. The MMR must be ticket-sorted to match what production
+    // derives, but pairing before the sort makes `claims[i].amount` depend on
+    // the sort permutation — and ticket ids derive from `cfg.commitment()`,
+    // which embeds each deployed binary's data hash. That made every
+    // amount-dependent assertion in this file a function of the contract
+    // binaries: `redeeming_the_same_source_twice_is_rejected_by_the_claim`
+    // spends claims[0]'s prize twice against a cell holding `prize_pool`, so
+    // whenever the permutation happened to put the largest prize on claims[0]
+    // the test underflowed in its own setup, far from the guard it checks.
+    // Pairing after the sort makes claims[i].amount == amounts[i] for every
+    // binary, while leaving the MMR ticket-sorted exactly as before.
+    let mut args_list: Vec<daowow_core::claim::ClaimArgs> = (0..amounts.len())
+        .map(|i| daowow_core::claim::ClaimArgs {
+            commitment: cfg.commitment(),
+            shard_id: 0,
+            position: i as u64,
         })
         .collect();
-    items.sort_by_key(|(args, _)| args.ticket_id());
+    args_list.sort_by_key(|args| args.ticket_id());
+    let items: Vec<(daowow_core::claim::ClaimArgs, u64)> =
+        args_list.into_iter().zip(amounts.iter().copied()).collect();
     let mut prizes = MmrHost::new();
     for (args, amount) in &items {
         prizes
