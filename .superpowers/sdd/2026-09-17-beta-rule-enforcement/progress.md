@@ -122,3 +122,19 @@ REPORT that rather than set entry_start back to 0, which would make the check
 vacuous again and the run would prove nothing while passing. Also told to assert
 the deposit spread and a COMMON maturity boundary, since a round that merely
 completes proves neither half of the user's requirement.
+Task 2: review spec MET, quality approved, no Critical/Important. The reviewer
+traced test independence through sample_config() rather than assuming it: in
+`a_capped_round_must_be_single_shard`, minimum_tickets stays at 10 against a cap
+of 200 so the min-guard can never fire, and in
+`a_round_cannot_require_more_tickets_than_it_allows`, entry_shard_count is pinned
+to 1 so the shard-guard can never fire. Neither guard can satisfy the other's
+assertion — non-overlapping by construction, which is what makes two
+same-variant guards in one commit individually meaningful. It also grepped the
+whole of shard.rs to confirm no other fixture pairs a cap with multiple shards,
+and confirmed `cap_enforced` still asserts 11 rejected / 10 accepted rather than
+having been defanged.
+
+Task 2: minor (deferred): the two guards repeat the `maximum_tickets != 0`
+condition rather than nesting one `if`. Trivial.
+
+Task 2: complete (commits fba6e3a..1a0794b, review clean, 0 fix rounds)
