@@ -233,3 +233,37 @@ test suite currently reports: this branch carries the TWO known `smoke`
 failures, and no third. Do not read the Task 1 CORRECTION entry above as
 describing this branch's current state; it describes a binary this branch no
 longer has.
+
+Final whole-branch review (opus): APPROVE WITH CONDITIONS, no Critical. It
+proved the cap guard is STRONGER than the docs claimed — validate() is not a
+creation-time gate but sits on the hot path of every ticket (round-type creation,
+config_by_commitment, and apply_entry_batch on every append), so a violating
+config cannot be resolved at all and fails closed with SHARD_ERROR_CONFIG_DEP,
+even on a round created before the guard existed.
+
+Its sharpest finding: the guard prevents a WRONG cap, not an ABSENT one.
+maximum_tickets = 0 validates and enforces nothing, and the beta's numbers
+existed only in prose.
+
+Fix wave commit 449f418, all five conditions applied; scoped re-review confirms
+all ADDRESSED with no new breakage. Core 148 -> 152. contracts/ diff is +7/-0,
+comments only, corroborated by a byte-identical rebuild at 229,384.
+
+Ruling: DECLINE two review minors and record why at the code sites rather than
+in a doc only — (i) no shared check_epoch_since(deadline, code) helper, because
+the two arms return different error codes and a parameterised helper in a
+consensus path is a worse trade than eight duplicated lines; (ii) do not collapse
+the two `maximum_tickets != 0` conditions into one nested if, because keeping
+them independent is what makes each individually mutation-testable and nesting
+reintroduces exactly the guard-masking this project's own discipline warns about.
+Cost if wrong: eight duplicated lines and one repeated condition persist.
+
+Ruling: my ledger entry recording security_redemption as a third known failure on
+this branch was WRONG and is corrected rather than deleted. I observed it failing
+against the Task-1-only binary (229,208); Task 2 moved the binary to 229,384 and
+the permutation flipped back to passing. Verified 22/22 myself before accepting
+the reviewer's correction. The wrong entry stays in the ledger beneath its
+correction so the record shows what was believed and when.
+Cost if wrong: none — verified twice, by the reviewer and by me.
+
+Gate 1: COMPLETE. Four tasks, zero fix rounds during tasks, one final fix wave.
