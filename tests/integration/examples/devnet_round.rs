@@ -372,7 +372,16 @@ fn main() {
                 "payment_output_index": 2,
             },
             "retirement": {
-                "schedule_raw": hex(&schedule.encode()),
+                // The schedule rides in WitnessArgs.input_type, with a 65-byte lock
+                // placeholder alongside it, exactly as a signature-locked retire
+                // would carry its signature. A single-input retire is buildable.
+                "schedule_witness": hex(
+                    &WitnessArgs::new_builder()
+                        .lock(Some(Bytes::from(vec![0u8; 65])).pack())
+                        .input_type(Some(Bytes::from(schedule.encode())).pack())
+                        .build()
+                        .as_bytes(),
+                ),
                 "memento": {
                     "type": script(cfg.entry_shard_type, &memento_args.encode()),
                     "data": hex(&memento_data.encode()),

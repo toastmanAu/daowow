@@ -24,8 +24,8 @@ def retire_sealed_round(
     redeem,
 ):
     """`retirement` is `funding_export["retirement"]` from the Rust exporter:
-    the raw committed prize-schedule bytes `retire()` expects as the group
-    input's own witness, plus the winning ticket's fully authenticated
+    the WitnessArgs (schedule in input_type, 65-byte lock placeholder) that
+    `retire()` reads at the claim's group input, plus the winning ticket's
     memento content. `nonwinner_index` is the never-drawn claim's output
     index in `entry_tx` (shard 0, position 1 in the partial fixture)."""
     retire_deps = protocol_deps + [
@@ -42,20 +42,14 @@ def retire_sealed_round(
     # has no fee-rate policy) does not surface.
     nonwinner_claim = entry_tx["outputs"][nonwinner_index]
     nonwinner_payout = hex(int(nonwinner_claim["capacity"], 16) - 100_000)
-    # NOTE: witnesses[0] here is `retirement["schedule_raw"]` -- the raw
-    # PrizeSchedule bytes retire() expects at load_witness(0, GroupInput),
-    # NOT a WitnessArgs. This single-input shape only works because the
-    # devnet participant lock is a smoke-minimal fixture lock that ignores
-    # witness 0 entirely. A real secp256k1_blake160_sighash_all lock needs
-    # witness 0 of its own group to decode as a WitnessArgs carrying its
-    # 65-byte signature, which collides with the raw schedule bytes at byte
-    # 0 (PrizeSchedule::decode requires data[0] == 1; WitnessArgs starts with
-    # a 4-byte LE size) -- a signature-locked retire is unbuildable as a
-    # single input and needs a second cell under the same lock at a LOWER
-    # input index to carry the signature, leaving this slot free for the raw
-    # schedule. See docs/superpowers/specs/2026-09-16-claim-retirement-memento-design.md
-    # ("Open constraint: the schedule witness slot is unbuildable under a
-    # signature lock") and docs/HANDOFF-2026-09-16.md.
+    # witnesses[0] is a WitnessArgs: its input_type carries the committed
+    # prize schedule that retire() reads, and its lock field carries a 65-byte
+    # placeholder standing in for a signature. That is exactly the shape a
+    # real secp256k1_blake160_sighash_all retire has, so this single-input
+    # transaction is buildable under a signature lock rather than only under
+    # the devnet's fixture lock. An earlier revision read the schedule as the
+    # raw witness body, which made that impossible -- one witness cannot be
+    # both a WitnessArgs and bare PrizeSchedule bytes.
     nonwinner_retire = {
         "version": "0x0",
         "cell_deps": retire_deps,
@@ -69,7 +63,7 @@ def retire_sealed_round(
             }
         ],
         "outputs_data": ["0x"],
-        "witnesses": [retirement["schedule_raw"]],
+        "witnesses": [retirement["schedule_witness"]],
     }
     missing_entropy_dep = copy.deepcopy(nonwinner_retire)
     missing_entropy_dep["cell_deps"] = protocol_deps
@@ -105,8 +99,8 @@ def retire_sealed_round(
     winner_claim = redeem["outputs"][1]
     memento_mint_capacity = hex(int(memento["capacity"], 16) + 100_000)
     # Same single-input-under-a-fixture-lock caveat as nonwinner_retire above:
-    # witnesses[0] is the raw schedule, not a WitnessArgs, and this shape is
-    # only buildable because the fixture lock ignores witness 0.
+    # witnesses[0] is a WitnessArgs carrying the schedule in input_type,
+    # alongside a 65-byte lock placeholder — the signature-lock shape.
     winner_retire = {
         "version": "0x0",
         "cell_deps": retire_deps,
@@ -120,7 +114,7 @@ def retire_sealed_round(
             }
         ],
         "outputs_data": [memento["data"]],
-        "witnesses": [retirement["schedule_raw"]],
+        "witnesses": [retirement["schedule_witness"]],
     }
     wrong_memento_lock = copy.deepcopy(winner_retire)
     wrong_memento_lock["outputs"][0]["lock"] = {

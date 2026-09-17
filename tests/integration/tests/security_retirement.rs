@@ -431,6 +431,38 @@ fn a_claim_cannot_carry_memento_data() {
     expect_code(&mut w.context, &tx, CLAIM_ERROR_DATA);
 }
 
+#[test]
+fn a_bare_schedule_witness_without_witness_args_is_refused() {
+    // The schedule lives in `WitnessArgs.input_type`, never as the raw witness
+    // body. This pins that: an earlier revision read the body directly, which
+    // made a single-input retire unbuildable under any signature lock, because
+    // one witness cannot be both a `WitnessArgs` and bare `PrizeSchedule`
+    // bytes. Handing the contract the bare bytes must now be refused.
+    let mut w = World::new(ACC_MMR);
+    let round = sealed_round_with_entropy(&mut w, 4, 8);
+    let lock = w.always_success().1;
+    let (claim_op, _) = seed_claim(
+        &mut w,
+        &lock,
+        round.non_winning_shard,
+        round.non_winning_position,
+    );
+    let out = CellOutputBuilder::default()
+        .capacity(pack_u64(claim_cell_capacity(&lock)))
+        .lock(lock.clone())
+        .build();
+
+    let tx = TransactionBuilder::default()
+        .input(CellInput::new_builder().previous_output(claim_op).build())
+        .output(out)
+        .output_data(Bytes::new().pack())
+        .cell_dep(round.config_dep.clone())
+        .cell_dep(round.entropy_dep.clone())
+        .witness(pack_pbytes(&round.schedule.encode()))
+        .build();
+    expect_code(&mut w.context, &tx, CLAIM_ERROR_UNIVERSE);
+}
+
 /// Isolated to the claim group: a structurally valid `PrizeSchedule` whose
 /// commitment does not match `cfg.prize_schedule_hash` fails
 /// `decode_committed` inside `retire()`, before the winner/non-winner
@@ -454,7 +486,13 @@ fn a_forged_schedule_witness_is_refused() {
         .cell_dep(round.entropy_dep.clone())
         .witness(schedule_witness(&forged_schedule))
         .build();
-    expect_code(&mut w.context, &tx, CLAIM_ERROR_UNIVERSE);
+    // CLAIM_ERROR_DATA, not CLAIM_ERROR_UNIVERSE: the contract's own
+    // `decode_committed` refuses the mismatch first, and its code is
+    // deliberately distinct from the one `ComputedDraw::new` returns for the
+    // same condition. That is what makes this assertion pin the contract's
+    // guard rather than its neighbour's — swap `decode_committed` for a plain
+    // `decode` and this test goes red instead of passing on the re-check.
+    expect_code(&mut w.context, &tx, CLAIM_ERROR_DATA);
 }
 
 /// Isolated to the claim group: a genuine `EntropyRecord`, sealed under a

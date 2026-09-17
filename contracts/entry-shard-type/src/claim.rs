@@ -11,7 +11,7 @@
 use alloc::vec::Vec;
 
 use ckb_std::ckb_constants::Source;
-use ckb_std::ckb_types::packed::Script;
+use ckb_std::ckb_types::packed::{Script, WitnessArgsReader};
 use ckb_std::ckb_types::prelude::*;
 use ckb_std::high_level::{load_cell, load_cell_data};
 use daowow_core::claim::{initial_state_bytes, validate_transfer, ClaimArgs};
@@ -233,20 +233,40 @@ fn retire(script: &Script, args: &ClaimArgs, input: &[u8]) -> Result<i8, i8> {
             .ok_or(CLAIM_ERROR_UNIVERSE)?;
     let record = daowow_core::seal::EntropyRecord::decode(&record_bytes, &cfg)
         .map_err(|_| CLAIM_ERROR_UNIVERSE)?;
-    let witness = ckb_std::high_level::load_witness(0, Source::GroupInput)
+    // The schedule rides in `WitnessArgs.input_type` of the retiring claim's
+    // own input, not as the raw witness body. That slot is the idiomatic home
+    // for type-script data precisely because it coexists with a lock
+    // signature: under `secp256k1_blake160_sighash_all` the lock field carries
+    // the 65-byte signature, so a single-input retire is buildable. Reading
+    // the raw body, as an earlier revision did, made that shape impossible —
+    // one witness cannot be both a `WitnessArgs` and bare `PrizeSchedule`
+    // bytes, and the obvious production transaction failed closed.
+    let raw = ckb_std::high_level::load_witness(0, Source::GroupInput)
         .map_err(|_| CLAIM_ERROR_UNIVERSE)?;
+    let witness = WitnessArgsReader::from_slice(&raw).map_err(|_| CLAIM_ERROR_UNIVERSE)?;
+    let schedule_bytes = witness
+        .input_type()
+        .to_opt()
+        .ok_or(CLAIM_ERROR_UNIVERSE)?
+        .raw_data();
     // Deliberately redundant with `ComputedDraw::new`'s own
     // `schedule.commitment() != cfg.prize_schedule_hash` check a few lines
     // below: the schedule is the one input the retiring holder supplies
-    // directly (via this witness), so this call asserts the contract's own
-    // precondition on it rather than depending on `ComputedDraw::new`
-    // continuing to re-derive and check that same commitment internally. No
-    // test can distinguish this call from a plain `decode` at this call
-    // site, because `ComputedDraw::new` already refuses a mismatched
-    // schedule on its own — that is expected, not a gap.
-    let schedule =
-        daowow_core::schedule::PrizeSchedule::decode_committed(&witness, &cfg.prize_schedule_hash)
-            .map_err(|_| CLAIM_ERROR_UNIVERSE)?;
+    // directly, so this call asserts the contract's own precondition on it
+    // rather than depending on `ComputedDraw::new` continuing to re-derive and
+    // check that same commitment internally.
+    //
+    // The commitment mismatch returns CLAIM_ERROR_DATA, deliberately distinct
+    // from the CLAIM_ERROR_UNIVERSE that `ComputedDraw::new` returns for the
+    // same condition. That distinction is what makes this guard testable:
+    // swapping `decode_committed` for a plain `decode` changes the observed
+    // code, so the forged-schedule test goes red instead of passing on the
+    // neighbour's rejection.
+    let schedule = daowow_core::schedule::PrizeSchedule::decode_committed(
+        schedule_bytes,
+        &cfg.prize_schedule_hash,
+    )
+    .map_err(|_| CLAIM_ERROR_DATA)?;
     let draw = daowow_core::computed_draw::ComputedDraw::new(&cfg, &record, &schedule)
         .map_err(|_| CLAIM_ERROR_UNIVERSE)?;
     let universe = record

@@ -191,55 +191,39 @@ commitment. No separate seal check is required. A claim therefore cannot retire
 before the draw is recorded, which is correct — before then, nobody knows
 whether it won.
 
-### Open constraint: the schedule witness slot is unbuildable under a signature lock
+### The schedule witness slot
 
-The witness row above reads `PrizeSchedule` bytes as the **raw** contents of
-`load_witness(0, Source::GroupInput)` (`contracts/entry-shard-type/src/claim.rs:236`)
-— not a `WitnessArgs`-wrapped payload. This is fine for a lock that never
-looks at its own witness (the devnet fixture lock), but it is not buildable
-for the obvious real-world case: a single-input retire transaction whose
-claim cell sits under a standard `secp256k1_blake160_sighash_all` lock.
+The committed `PrizeSchedule` rides in `WitnessArgs.input_type` of the retiring
+claim's own group input, read at `contracts/entry-shard-type/src/claim.rs`.
+That is the idiomatic slot for type-script-owned witness data, and this codebase
+already uses it — see `validate_initial_funding` in
+`crates/daowow-contracts-common/src/entitlements.rs`, which reads its own
+type-script payload out of `input_type` the same way.
 
-That lock requires witness slot 0 of its own lock group to decode as a
-`WitnessArgs` carrying a 65-byte signature in `lock`. A one-input retire has
-exactly one witness slot (index 0), and it must simultaneously be:
+The slot matters because it is what makes a single-input retire buildable under
+a real lock. A `secp256k1_blake160_sighash_all` claim requires witness slot 0 of
+its lock group to decode as a `WitnessArgs` carrying a 65-byte signature in
+`lock`. With the schedule in `input_type` of that same `WitnessArgs`, both fit:
+signature in `lock`, schedule in `input_type`, one input, one witness.
 
-- a `WitnessArgs` (for the secp256k1 lock to find its signature), and
-- the raw `PrizeSchedule` bytes (for the claim's `retire()` to decode).
+An earlier revision of this design read the schedule as the **raw** contents of
+`load_witness(0, Source::GroupInput)`. That was structurally unbuildable under
+any signature lock, because a single witness cannot be both a `WitnessArgs` and
+bare `PrizeSchedule` bytes — `PrizeSchedule::decode` requires `data[0] == 1`
+while a molecule `WitnessArgs` begins with a 4-byte little-endian size. It
+failed closed rather than dangerously, but the obvious production transaction
+could not be constructed at all, and the devnet proof did not catch it because
+the devnet participant lock ignores witness 0. Recorded here because "the test
+lock does not exercise the production lock" is the shape of gap worth naming.
 
-It cannot be both: `PrizeSchedule::decode` requires `data[0] == 1` as its
-first byte, while a molecule-encoded `WitnessArgs` begins with a 4-byte
-little-endian total size. The two encodings collide at byte 0 in general and
-`decode` fails closed — a single-input retire under a signature lock is
-structurally unbuildable, not merely awkward.
+A commitment mismatch on the schedule returns `CLAIM_ERROR_DATA`, deliberately
+distinct from the `CLAIM_ERROR_UNIVERSE` that `ComputedDraw::new` returns for
+the same condition. The contract's own `decode_committed` call is redundant with
+that later re-check, and the distinct code is what makes it testable: swapping
+`decode_committed` for a plain `decode` changes the observed code, so
+`a_forged_schedule_witness_is_refused` goes red rather than passing on the
+neighbour's rejection.
 
-**Workaround (sound, not yet exercised on devnet):** place a second cell
-under the same lock at a **lower** input index in the same transaction, so
-that cell's witness slot carries the `WitnessArgs`/signature and the retiring
-claim's own (higher-index) witness slot is free to carry the raw schedule
-bytes unwrapped. `secp256k1_blake160_sighash_all`'s `sighash_all` digest
-treats every witness beyond the first in its lock group as opaque bytes it
-simply hashes — it does not require them to be `WitnessArgs` — so the
-schedule stays fully committed by the signature even though the lock never
-parses it. This shape has not been built or run; see the devnet-proof caveat
-below and `docs/HANDOFF-2026-09-16.md`.
-
-**Preferred long-term fix:** move the committed schedule out of the bare
-witness slot and into `WitnessArgs.input_type` — the idiomatic slot this
-codebase already uses for type-script-owned witness data. See
-`validate_initial_funding` in `crates/daowow-contracts-common/src/entitlements.rs`
-(around line 159, `witness.input_type().to_opt()`), which reads its own
-type-script payload out of `input_type` rather than the bare witness. Doing
-the same for the schedule would make a one-input, signature-locked retire
-buildable directly (the lock's own signature lives in `lock`, the schedule
-lives in `input_type`, both coexist in one `WitnessArgs`), eliminating the
-need for the two-input workaround entirely. Not done in this branch —
-recorded as a follow-up.
-
-**Devnet proof caveat:** `tests/devnet/retirement_history.py` builds the
-single-input shape only, and it works only because the devnet participant
-lock is a smoke-minimal fixture lock that ignores witness 0 entirely. It does
-not exercise, and cannot exercise, the signature-lock case above.
 
 ## Claim script: retire mode
 

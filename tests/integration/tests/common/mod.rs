@@ -617,13 +617,25 @@ pub struct SealedRound {
     pub batches: Vec<(u64, Hash32)>,
 }
 
-/// Raw witness carrying the committed prize schedule, as `retire()` expects
-/// it at `witnesses[0]` of the retiring claim's group input (not wrapped in
-/// a `WitnessArgs`).
+/// Witness carrying the committed prize schedule in `WitnessArgs.input_type`
+/// at the retiring claim's group input, which is where `retire()` reads it.
+///
+/// The `lock` field carries a 65-byte placeholder so this mirrors the shape a
+/// real `secp256k1_blake160_sighash_all` retire transaction has: the signature
+/// occupies `lock`, the schedule occupies `input_type`, and a single-input
+/// retire is buildable. Reading the schedule as the raw witness body, as an
+/// earlier revision did, made that shape impossible — the same witness cannot
+/// be both a `WitnessArgs` and bare `PrizeSchedule` bytes.
 pub fn schedule_witness(
     schedule: &daowow_core::schedule::PrizeSchedule,
 ) -> ckb_testtool::ckb_types::packed::Bytes {
-    pack_pbytes(&schedule.encode())
+    pack_pbytes(
+        &WitnessArgs::new_builder()
+            .lock(Some(Bytes::from(vec![0u8; 65])).pack())
+            .input_type(Some(Bytes::from(schedule.encode())).pack())
+            .build()
+            .as_bytes(),
+    )
 }
 
 /// Build a sealed round with `shards` entry shards sharing `total_tickets`
