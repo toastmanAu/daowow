@@ -273,3 +273,262 @@ permanent source comment (above the `decode_committed` call in
 `contracts/entry-shard-type/src/claim.rs`); both are committed, not
 transient probe scaffolding. The working tree is clean at the end of this
 task.
+
+## Task 12: full gate and devnet proof
+
+Contracts were built one package at a time (never rebuilt while the devnet
+suite was running), then the full gate ran in order: core unit tests,
+`no_std` check, clippy, the `tests/integration` suite, the example build, and
+finally the isolated-node devnet suite. Actual counts observed on this run,
+not numbers predicted ahead of time:
+
+- `cargo build --target riscv64imac-unknown-none-elf --release -p <name>` for
+  all eight packages: clean, no rebuild needed for most (already current from
+  Task 10; `round-type`, `entry-lock`, `dao-lock`, `settlement-type`,
+  `accumulator-bench`, `smoke-alloc` recompiled trivially, `entry-shard-type`
+  and `smoke-minimal` were already up to date).
+- `cargo test -p daowow-core --lib`: **148 passed, 0 failed**.
+- `cargo check -p daowow-core --no-default-features`: clean.
+- `cargo clippy -p daowow-core --lib -- -D warnings`: clean, 0 warnings.
+- `cd tests/integration && cargo test --no-fail-fast`: **168 passed, 2
+  failed** across 20 test binaries. Per-file counts: `accumulator_bakeoff` 1,
+  `claim_lifecycle` 6, `claim_redemption` 5, `claim_retirement` 3,
+  `host_repro` 1, `proto1_entry_shard` 5, `proto2_membership` 3,
+  `proto3_dao_lifecycle` 30, `proto4_settlement` 16, `round_validation` 8,
+  `security_claims` 17, `security_config` 2, `security_entitlements` 1,
+  `security_freeze` 1, `security_ledger` 8, `security_redemption` 22,
+  `security_refunds` 7, `security_retirement` 16, `security_seal` 2,
+  `security_shard_lock` 11, `smoke` 3 passed / 2 failed.
+  The 2 failures are exactly the pre-existing `smoke` suite failures named in
+  the task brief (`template_contract_runs`, `round_type_binary_as_lock`,
+  both a missing-fixture-binary / stale-hash class of failure unrelated to
+  this branch) — unchanged.
+- **Correction to the brief, verified rather than assumed**:
+  `security_redemption.rs::redeeming_the_same_source_twice_is_rejected_by_the_claim`
+  was listed as a third known failure (a host-side `in_cap - amount`
+  underflow in the test's own setup). On this run it **passed**, both inside
+  the full 22-test file run and in isolation (`cargo test --test
+  security_redemption redeeming_the_same_source_twice_is_rejected_by_the_claim`),
+  reproduced three times, deterministically. `git log` shows the file itself
+  has not changed since the referenced commit
+  (`4461d8b feat: authenticate claim retirement against the sealed round`);
+  no fix to this test or its fixture was made in this task. Recorded as
+  observed, not silently corrected and not silently accepted: the "known
+  failures" list in the brief and in `docs/HANDOFF-2026-09-16.md` should
+  read two pre-existing failures (both in `smoke`), not three, as of this
+  commit. Nothing here should be read as this task having fixed it — the
+  file was not touched.
+- `cargo build -p daowow-integration-tests --examples`: clean, includes the
+  new retirement/memento fixture fields on `devnet_round`.
+- `DAOWOW_RUN_ISOLATED_NODE=1 python3 -m unittest discover -s tests/devnet -v`:
+  see "Devnet proof" below.
+
+### `entry-shard-type` binary size and code-cell cost
+
+228,096 bytes, unchanged by this task (grew from 209,360 bytes to 228,096
+bytes across sub-project 3's earlier tasks, confirmed via `wc -c` against the
+freshly built binary). A CKB code cell's occupied capacity is 1 CKB per byte
+of data plus the 8 CKB capacity field and its lock's own cost; holding
+lock/overhead constant, the byte growth alone is **+18,736 CKB** to deploy
+this binary versus the pre-sub-project-3 baseline (18,736 additional bytes x
+1 CKB/byte). This is a one-time deployment cost, not a per-transaction cost;
+it does not affect the mint/transfer/redeem/retire cycle costs below.
+
+### Measured cycles (ckb-testtool, not devnet)
+
+The isolated node does not report CKB-VM cycle counts over RPC, so these were
+measured the same way the repo's own benchmarking convention does: via
+`ckb_testtool::context::Context::verify_tx`'s `Ok(cycles)` return, already
+computed by every existing `expect_ok` call in `tests/integration/tests/`.
+`expect_ok` (common/mod.rs) normally discards this value, so it was
+temporarily instrumented with an `eprintln!` for one measurement pass against
+`claim_retirement.rs`, then reverted with `git checkout --` (confirmed clean,
+`git diff` empty) before the devnet run started — no contract or host test
+file was left changed by this measurement. `MAX_CYCLES` for this suite is
+70,000,000.
+
+| Transaction | Cycles |
+| --- | --- |
+| Non-winner claim retirement (no memento) | 685,539 |
+| Winner claim retirement + memento mint | 759,601 |
+| Memento transfer | 58,576 |
+| Memento burn | 55,441 |
+
+All four are well under the suite's cycle ceiling; the retire paths cost
+roughly an order of magnitude more than a bare memento transfer/burn because
+they authenticate the sealed round from cell deps (config + entropy record)
+and re-derive the computed draw, whereas transfer/burn only check the
+memento's own group.
+
+### Devnet proof
+
+Extended `tests/devnet/test_round_creation.py` with a new test method,
+`test_sealed_round_retires_to_completion`, calling the existing
+`run_history(reorg=False, partial=True, partial_full=True, retire=True)` —
+a new `retire` keyword, default `False`, added to `run_history`'s signature
+so none of the other seven existing test methods change behavior. The new
+`retire=True` path only runs inside the block already gated on `partial and
+partial_full` (the only existing branch that reaches a completed redemption
+and payout with two live claims), so no other test's code path is touched.
+
+The scenario needed a genuine non-winner claim living alongside a genuine
+winner in one sealed round to prove both `retire_decision` branches on a
+real node. The existing `partial` fixture already provides this for free:
+its excluded entry (shard 0, position 1) is refunded on its own principal
+cell but its separately-minted claim NFT (entry_tx output index 5) is never
+touched again by any existing step — it is a real, live, never-redeemed
+claim once the round is sealed, exactly the non-winner case. The accepted
+entry's claim (index 4, later index 1 of `redeem_hash`) is the schedule's
+sole winner (a one-weight schedule over a one-ticket accepted universe draws
+that ticket unconditionally) and had already redeemed the round's one and
+only batch via the pre-existing `redeem` step.
+
+New Rust exporter fields, added to `tests/integration/examples/devnet_round.rs`
+inside the existing `settlement` (10-arg) branch — no new invocation, no
+new fixture stage, since every value needed was already in scope where the
+redemption fixture is built:
+
+- `settlement.retirement.schedule_raw`: the committed prize schedule's raw
+  canonical bytes (`schedule.encode()`), exactly as `retire()` expects them
+  at the retiring claim's own group-input witness (not wrapped in a
+  `WitnessArgs`, unlike the round-creation witness).
+- `settlement.retirement.memento`: the winning ticket's fully authenticated
+  memento identity, data, and occupied capacity — `type` from
+  `MementoArgs{commitment, shard_id: 0, position: 0}`, `data` from
+  `MementoData{renderer_version: MEMENTO_RENDERER_V1, prize_index, paid_count,
+  paid_total}` using the real `ComputedDraw` rank and the post-redemption
+  `PrizeRedemptionState`, and `capacity` from
+  `memento_occupied_capacity(lock_size)`.
+
+New `tests/devnet/retirement_history.py` module (mirrors the existing
+per-stage modules `refund_history.py`, `reorg_history.py`,
+`settlement_reorg.py` rather than growing `run_history` further) drives three
+transactions:
+
+1. **Non-winner retirement** — input the excluded entry's claim, output a
+   plain cell (no type) at the claim's own full occupied capacity, cell deps
+   = protocol deps + the entropy record cell, witness = the raw schedule
+   bytes. A negative case (same tx minus the entropy-record cell dep) is
+   checked first and must fail `ValidationFailure`.
+2. **Winner retirement with memento** — input the redeemed winning claim,
+   output the memento cell (its exported type/data/capacity) under the same
+   holder lock, same cell deps and witness. A negative case (memento minted
+   under a different holder lock) is checked first and must fail
+   `ValidationFailure`.
+3. **Memento transfer** — input the just-minted memento, output the same
+   memento under a different lock, byte-identical data, no authenticating
+   witness needed (the memento's own transfer mode only checks data
+   equality) — but it does still need `protocol_deps` as a cell dep, for the
+   input's own holder LOCK script to be loadable, exactly like every other
+   transaction in this file that spends a fixture-locked cell.
+
+### Devnet outcome: real bugs found and fixed, then a clean pass
+
+**First full-gate run** (`unittest discover`, 16 tests across
+`test_native_dao.py`, `test_node_harness.py`, `test_round_creation.py`, 1452s):
+15 of 16 passed — every pre-existing test unaffected by this task's changes,
+first try. The 16th, the new `test_sealed_round_retires_to_completion`, got
+through the entire pre-existing round lifecycle (creation, entry, freeze,
+aggregation, partial refund, seal, entropy, DAO withdrawal and payout, prize
+redemption) and into the new retirement code before failing on the very
+first new transaction:
+
+```
+RuntimeError: send_transaction: {'code': -1104, 'message':
+'PoolRejectedTransactionByMinFeeRate: The min fee rate is 1000 shannons/KW,
+requiring a transaction fee of at least 499 shannons, but the fee provided
+is only 0', ...}
+```
+
+Root cause: the non-winner retirement transaction (and, latently, the
+memento transfer transaction) set the output capacity exactly equal to the
+input capacity — a real fee of zero. `ckb-testtool`'s mock verifier has no
+fee-rate policy and would have accepted this without complaint; the real
+node's transaction pool rejects it before any script runs at all, so the
+`assertRaisesRegex(RuntimeError, "ValidationFailure")` negative check
+(expecting the *script* to reject a missing cell dep) instead saw a
+different `RuntimeError` about pool fee policy and failed the test. This is
+a devnet-only class of bug: nothing in the entire mutation-probe pass or the
+`tests/integration` suite could have caught it, because neither exercises
+real fee-rate policy.
+
+Every other value-preserving step in `test_round_creation.py` already
+avoids this by deducting a 100,000-shannon fee reserve from a change or
+output cell; the fix applies the same convention to the new transactions.
+For the memento (minted at its bare minimum occupied capacity, with no
+slack), deducting a fee from the *transfer* step would have dropped it
+below its own minimum required capacity — a different, system-level
+rejection. Fix: mint the memento with a 100,000-shannon buffer above its
+bare minimum, and let the transfer consume exactly that buffer as its fee,
+landing back at exactly the bare minimum with no capacity double-charge.
+
+**First targeted re-run** (`unittest test_round_creation.RoundCreationTests.test_sealed_round_retires_to_completion`
+only, no contract rebuild, 214.5s): both retirement transactions succeeded
+end to end (non-winner retired, winner retired with memento minted) and
+failed on the memento transfer:
+
+```
+RuntimeError: send_transaction: {'code': -302, 'message':
+'TransactionFailedToVerify: Verification failed Script(TransactionScriptError
+{ source: Inputs[0].Lock, cause: ScriptNotFound: code_hash: ... })', ...}
+```
+
+Root cause: the transfer transaction was built with `cell_deps: []`. On
+`ckb-testtool`, a deployed cell's code is available to any transaction in
+the same `Context` with no cell dep bookkeeping; on a real node, the
+input's own holder lock script (the fixture's `smoke-minimal` code) must be
+named as a cell dep regardless of whether any type script is involved — a
+plain lock-only transfer is not exempt. Every other transaction in this
+file that spends a fixture-locked cell already includes `protocol_deps` for
+exactly this reason (e.g. the `payout` transaction); the new transfer
+transaction had simply been written on the (wrong) assumption that a
+content-only transfer needs no deps at all. Fix: `cell_deps: protocol_deps`.
+
+**Second targeted re-run** (same single test, no contract rebuild, 215.0s):
+**clean pass.** All three new transactions committed on the isolated node:
+
+- Non-winner claim retirement: `0x3f26a166e15bab0d959da5cb151a8fe875db6636fe4b8238293cc3170d4b5029`,
+  recovered capacity `0x4fb888f60` = 21,399,900,000 shannons (213.999 CKB —
+  the claim's full 214 CKB occupied capacity minus the 100,000-shannon fee).
+- Winner claim retirement with memento mint: `0xe639f2f44803feeb6b4fbb87f50a28b7acd282d48c9c0439931b2e71acdcdfb9`.
+- Memento transfer: `0x745d7241ea514812c37215e59830f7ac280059343a37ff67c4d670a487e79300`.
+
+Both negative cases (missing entropy-record cell dep on the non-winner
+retirement; memento minted under the wrong holder lock) were confirmed to
+reject with `ValidationFailure` before each corresponding positive
+transaction was committed.
+
+**Scope of what was and was not re-verified after the fix**: the two
+targeted re-runs exercised only `test_sealed_round_retires_to_completion`,
+not the full `unittest discover` a third time. The other 15 tests (all of
+`test_native_dao.py`, `test_node_harness.py`, and the other 7
+`test_round_creation.py` methods) were confirmed passing in the first
+full-gate run and were not touched by either fix — both fixes are confined
+to the new `retirement_history.py` module and change nothing any other test
+exercises. Per the task's own guidance not to burn devnet runs chasing
+problems once one clean run of the new scenario is achieved, a third full
+discovery run was not performed. No contract binary was rebuilt at any
+point across the initial run or either retry.
+
+**Two new traps for `~/.claude/rules/ckb-transactions.feedback.md`**, both
+from this devnet session, both invisible to `ckb-testtool`:
+
+- A `ckb-testtool` mock transaction with input capacity exactly equal to
+  output capacity (zero real fee) passes the mock verifier fine; a real
+  node's transaction pool rejects it with `PoolRejectedTransactionByMinFeeRate`
+  before any script runs. Any devnet-bound transaction that intentionally
+  preserves capacity across a spend (a retirement, a plain transfer) needs
+  an explicit fee deducted from *somewhere* — this codebase's convention is
+  a flat 100,000-shannon reserve taken from a change or output cell. When
+  the spent output is already at its bare minimum occupied capacity (no
+  slack to deduct from without going under), the fee buffer has to be added
+  one step earlier, at mint time, and consumed at spend time — not
+  invented out of nowhere at the spend itself.
+- `ckb-testtool`'s `Context` makes every deployed cell's code available to
+  every transaction with no cell-dep bookkeeping at all; a real node
+  requires the INPUT'S OWN LOCK script's code cell as an explicit cell dep
+  on every spend, independent of whether any type script is present or
+  cares. A lock-only, content-only transfer transaction is not exempt from
+  this — omitting cell deps because "nothing but the lock runs" produces
+  `ScriptNotFound` on `Inputs[0].Lock` on a real node while working
+  perfectly in every mock-based unit and integration test.
