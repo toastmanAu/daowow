@@ -106,3 +106,19 @@ Task 1: minor (deferred): the report says "only one script group runs" where
 "only one group can reject" is accurate.
 
 Task 1: complete (commits 20708e0..e17d780, review clean, 0 fix rounds)
+Task 2: implementer DONE — commit 1a0794b, encoding.rs (+53) and shard.rs (+3/-1).
+148 -> 151, no_std + clippy + fmt clean. Both mutation round trips performed
+individually, per guard, with output recorded. Review dispatched over
+fba6e3a..1a0794b, told to verify the round-trip evidence is shown rather than
+asserted, that the uncapped path still shards freely, that minimum == maximum is
+accepted, and that the shard.rs cap tests still genuinely set a cap rather than
+having been defanged.
+
+Task 3 (devnet lock window): dispatched (sonnet), BASE 1a0794b. Carries the F2
+ruling: entry_start need only be non-zero, not large — the devnet mines from
+genesis, so entry_start = 1 keeps the mining profile while making Task 1's check
+execute on a real node. Told explicitly that if it cannot reach epoch 1 it must
+REPORT that rather than set entry_start back to 0, which would make the check
+vacuous again and the run would prove nothing while passing. Also told to assert
+the deposit spread and a COMMON maturity boundary, since a round that merely
+completes proves neither half of the user's requirement.
