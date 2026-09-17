@@ -917,6 +917,56 @@ class RoundCreationTests(unittest.TestCase):
             unchanged_claim["outputs_data"][1] = entry_tx["outputs_data"][claim_index]
             with self.assertRaisesRegex(RuntimeError, "ValidationFailure"):
                 node.rpc("send_transaction", [unchanged_claim, "passthrough"])
+            # A winner that still owes redemptions cannot retire, and this is
+            # the only point in the round where that is constructible on a live
+            # chain: the winning claim is drawn, live, and has redeemed
+            # nothing, so its paid_count (0) sits below the obligation universe
+            # (the sealed round's accepted-batch count). One transaction later
+            # the cell is spent, and the successor's paid_count has caught up,
+            # so the refusal can never be reached again from here.
+            #
+            # Guarded on the retirement fixture because only the retiring
+            # histories export the schedule witness that retire() reads.
+            if "retirement" in settlement:
+                premature_retire = {
+                    "version": "0x0",
+                    "cell_deps": protocol_deps
+                    + [
+                        {
+                            "out_point": {"tx_hash": entropy_hash, "index": "0x0"},
+                            "dep_type": "code",
+                        }
+                    ],
+                    "header_deps": [],
+                    "inputs": [input_cell(entry_hash, claim_index)],
+                    "outputs": [
+                        {
+                            "capacity": hex(
+                                int(claim_output["capacity"], 16) - 100_000
+                            ),
+                            "lock": claim_output["lock"],
+                            "type": None,
+                        }
+                    ],
+                    "outputs_data": ["0x"],
+                    "witnesses": [settlement["retirement"]["schedule_witness"]],
+                }
+                with self.assertRaises(RuntimeError) as caught:
+                    node.rpc("send_transaction", [premature_retire, "passthrough"])
+                message = str(caught.exception)
+                print(
+                    "DAOWOW premature winner retire refused:",
+                    message,
+                    flush=True,
+                )
+                self.assertIn("ValidationFailure", message)
+                # CLAIM_ERROR_INCOMPLETE. Asserted exactly rather than as a
+                # bare ValidationFailure: a malformed fixture would also be
+                # refused, and would prove nothing. -99 says a genuine winner
+                # was told to come back once it has collected everything,
+                # which is distinct from CLAIM_ERROR_IMPOSSIBLE (-104), the
+                # non-winner-carrying-payments case.
+                self.assertIn("error code -99", message)
             redeem_hash, _ = commit(node, redeem)
             for i in (0, 1):
                 live = node.rpc(
