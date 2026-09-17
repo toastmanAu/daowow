@@ -755,3 +755,51 @@ Task 11 (devnet + results + handoff) is the last. Checking prerequisites before
 dispatch — it needs Docker and takes ~21 minutes, and the hard constraint is
 that NO contract rebuild may happen while it runs, since each test deploys the
 binaries fresh.
+
+Task 11: DONE — commit b5f7a17. Devnet CLEAN PASS on the real isolated node:
+non-winner retired, winner retired minting a memento, memento transferred, all
+committed on chain. Reached only after finding two devnet-only bugs that
+ckb-testtool cannot surface: (1) a zero-fee retirement/transfer was
+pool-rejected BEFORE scripts ran — fixed with the codebase's standard
+100,000-shannon reserve, added at mint time for the memento since it has no
+capacity slack; (2) a lock-only transfer needed its lock's code cell as an
+explicit dep, which ckb-testtool does not require but a real node does. Full
+gate: core 148/148, integration 168/170 (2 pre-existing smoke), no rebuild
+during any devnet run.
+
+MAJOR CORRECTION — I WAS WRONG, and this overturns my earlier ruling.
+
+Earlier I ruled that `security_redemption::redeeming_the_same_source_twice_is_rejected_by_the_claim`
+was "broken on main, pre-existing, out of scope". Task 11 reported it now passes
+deterministically. Both observations are real; my CONCLUSION was wrong.
+
+Mechanism, read from source then proven by experiment: `common/mod.rs`'s
+`script_ref_of` builds each ScriptRef with `code_hash` = the deployed binary's
+DATA hash. Those ScriptRefs are fields of RoundConfigV1, so `cfg.commitment()`
+hashes the contract binaries. The draw seed is
+H("DAOWOW_AUTHENTICATED_DRAW_V1" || commitment || record). THEREFORE THE CONTRACT
+BINARIES DETERMINE WHO WINS THE DRAW in every test fixture.
+
+Proof: identical host code and test file, only the binary swapped —
+  225,008-byte binary (Task 7 source) -> FAILS, in_cap - amount underflow
+  228,096-byte binary (Task 8 source) -> PASSES
+Tree and binary restored afterwards; test green at HEAD.
+
+Where my earlier check went wrong: I reverted `crates/daowow-core` and
+`tests/integration` to main's versions but left OUR COMPILED BINARY in target/.
+That is not main's state — it is main's host code against our contract. The
+conclusion "it fails on main too" was therefore unfounded.
+
+This is a bigger trap than the script-hash-ordering one already recorded, and a
+different mechanism: script-hash order affects WHICH REJECTION IS REPORTED;
+this affects WHICH TICKETS WIN. Every amount-dependent assertion in the
+integration suite is a function of the contract binaries, and any contract change
+silently reshuffles the draw in every fixture. The observed symptom is not a
+clear failure but a host-side arithmetic underflow in test setup, far from the
+cause.
+Ruling: the test is NOT broken and NOT out of scope — it is binary-hash-fragile,
+as is any fixture asserting on prize amounts. Do not "fix" the test. Record the
+fragility, and note that a fixture wanting stability must pin its ScriptRefs to
+fixed code_hash values rather than deploying real binaries, at the cost of no
+longer exercising the real scripts. Surfacing to the user; not fixing here.
+Cost if wrong: none — the mechanism is proven by direct experiment, twice.
