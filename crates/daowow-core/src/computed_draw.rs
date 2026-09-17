@@ -366,7 +366,7 @@ pub(crate) mod tests {
         ) -> crate::claim::ClaimArgs {
             let shard_id = self.cfg.entry_shard_count;
             let position = 0;
-            debug_assert!(draw
+            assert!(draw
                 .positions()
                 .iter()
                 .all(|(_, gp)| draw.locate(*gp).unwrap() != (shard_id, position)));
@@ -394,7 +394,7 @@ pub(crate) mod tests {
             let (_, global_position) = draw.positions()[0];
             let (shard_id, _) = draw.locate(global_position).unwrap();
             let position = u64::MAX / 2;
-            debug_assert!(draw
+            assert!(draw
                 .positions()
                 .iter()
                 .all(|(_, gp)| draw.locate(*gp).unwrap() != (shard_id, position)));

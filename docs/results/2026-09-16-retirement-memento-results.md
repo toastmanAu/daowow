@@ -29,6 +29,23 @@ different treatments per the coordinator's decision:
   intentional. Row #13 is now **unpinnable-by-design (redundant with
   `ComputedDraw::new`)**, alongside row #7.
 
+**Fix wave** (final whole-branch review, before merge): two more corrections,
+both verified by a break/confirm-red/restore/confirm-green round trip before
+being written down, neither changing any contract or script behavior:
+
+- **#7**'s rationale was wrong. It is not unpinnable because of a
+  CKB script-hash race against row #6's guard; it is unpinnable because the
+  `found > 1` early return is redundant with the sibling `found != 1` check
+  in the very same function. See the corrected "Rows #7 and #13" section
+  below for the verification transcript. The guard was not removed.
+- **#12** was re-verdicted from "pinned but masked" to cleanly **PINNED at
+  the core level** — the original probe never ran
+  `crates/daowow-core/src/memento/tests.rs`'s
+  `data_rejects_a_substituted_template_or_renderer`, which has no shard
+  binary and no mint-count check to mask it. See the corrected "#12" section
+  below for the verification transcript. The "masked" caveat now applies only
+  to the integration fixture.
+
 ## Results table
 
 | # | Guard | Broken by | Named test | Verdict |
@@ -39,19 +56,33 @@ different treatments per the coordinator's decision:
 | 4 | Zero-allocation refusal | `crates/daowow-core/src/entitlements.rs`: `return Err(Conservation)` → `continue` | `a_batch_allocating_zero_to_a_drawn_position_is_refused` (core unit) | PINNED |
 | 5 | Memento count for a winner | `contracts/entry-shard-type/src/claim.rs`: dropped `expected_index.is_some() && found != 1` check | `a_winner_retiring_with_no_memento_is_refused` (integration) | PINNED |
 | 6 | Memento group-size guard | `contracts/entry-shard-type/src/memento.rs`: dropped `load_cell(1, Group*)` check | `two_mementos_of_one_identity_are_refused` (integration) | **PINNED, but masked** |
-| 7 | Claim-side memento duplicate (`found > 1`) | — | — | **UNPINNABLE by design** (per brief; see note below) |
+| 7 | Claim-side memento duplicate (`found > 1`) | `contracts/entry-shard-type/src/claim.rs`: deleted the `found > 1` early return | — | **unpinnable-by-design (redundant with the sibling `found != 1` check, same function)** |
 | 8 | Memento lock equality | `contracts/entry-shard-type/src/claim.rs`: dropped the lock comparison | `a_memento_locked_to_a_stranger_is_refused` (integration) | PINNED |
 | 9 | Memento data equality | `contracts/entry-shard-type/src/claim.rs`: dropped `data != expected` branch | `a_memento_with_the_wrong_winnings_is_refused` (integration) | PINNED |
 | 10 | Memento mint claim-input count | `contracts/entry-shard-type/src/memento.rs`: dropped the `Input` count check | `a_memento_minted_with_no_retiring_claim_is_refused` (integration) | PINNED |
 | 11 | Memento mint claim-output count | `contracts/entry-shard-type/src/memento.rs`: dropped the `Output` count check | `a_memento_minted_beside_a_transferring_claim_is_refused` (integration) | PINNED |
-| 12 | `MementoData::decode` template | `crates/daowow-core/src/memento.rs`: dropped `data[2..34] != WINNER_TEMPLATE_SHA256` | `a_memento_with_a_substituted_template_is_refused` (integration) | **PINNED, but masked** |
+| 12 | `MementoData::decode` template | `crates/daowow-core/src/memento.rs`: dropped `data[2..34] != WINNER_TEMPLATE_SHA256` | `data_rejects_a_substituted_template_or_renderer` (core unit) | **PINNED (core unit)** — the integration fixture (`a_memento_with_a_substituted_template_is_refused`) remains masked, see below |
 | 13 | Schedule commitment check | `contracts/entry-shard-type/src/claim.rs`: `decode_committed` → `decode` | `a_forged_schedule_witness_is_refused` (integration) | **unpinnable-by-design (redundant with `ComputedDraw::new`)** |
 
-13 of 13 rows have a recorded verdict. Row 7 was deliberately not probed per
-the brief (unpinnable by design). Of the remaining 12 probed rows: **9
-cleanly pinned** (including #1 after fix round 1), **2 pinned-but-masked**,
-and **1 unpinnable-by-design** (#13, after fix round 1 — kept as deliberate
-defense in depth rather than removed).
+13 of 13 rows have a recorded verdict. **Fix wave (post-review) update**: row
+7's rationale was wrong (it cited a script-hash race with row 6's guard) and
+has been corrected — it is unpinnable because the `found > 1` early return is
+locally redundant with the sibling `found != 1` check in the same function,
+verified directly (see "#7" detail below), not because of any cross-script
+timing. Row 12 was re-verdicted from "pinned but masked" to cleanly **PINNED
+at the core level**: `crates/daowow-core/src/memento/tests.rs`'s
+`data_rejects_a_substituted_template_or_renderer` was not run during the
+original probe; running it against the same mutation flips it red on its
+first assertion with no masking. The "masked" caveat now applies only to the
+integration fixture, which still has no claim cell in the transaction and so
+still falls through to `MEMENTO_ERROR_MINT` first (see "#12" detail below).
+
+Of the 13 rows: **10 cleanly pinned** (the original 9 — including #1 after
+fix round 1 — plus #12, now pinned at the core level), **1 pinned but masked
+at the integration level only** (#6, which has no core-level backstop), and
+**2 unpinnable-by-design** (#7, redundant within the same function; #13,
+redundant across `daowow-core` modules — both kept as deliberate defense in
+depth rather than removed).
 
 ## Detail on every non-clean result
 
@@ -132,19 +163,28 @@ happens to reject the same fixture for a different reason.
 This means the test does not, on its own, prove the group-size guard is
 load-bearing against a duplicate-memento mint that *does* have a genuine
 retiring claim present (count == 1) — which is exactly the scenario the
-suite's own file-level `NOTE` says is structurally unisolatable (a hash-order
-race against the claim's own `found > 1` check, i.e. row #7). So the
-group-size guard's unique contribution is only exercised in a scenario this
-suite explicitly cannot build. Recording as pinned (the assertion does fire
-and does distinguish behavior from baseline) but flagging the masking so it
-is not read as full confidence in the specific mechanism.
+suite's own file-level `NOTE` says is structurally unisolatable, because two
+memento outputs with identical args are one script group by construction, and
+adding a retiring claim of that identity pulls in a second, independently
+rejecting group (the claim's own `found > 1` check, row #7 — see the fix-wave
+correction to row #7's rationale below: the two checks are not in a
+timing race, but constructing the scenario at all still requires this
+group-size guard to already be intact, so it cannot be exercised in
+isolation from it). So the group-size guard's unique contribution is only
+exercised in a scenario this suite explicitly cannot build. Recording as
+pinned (the assertion does fire and does distinguish behavior from baseline)
+but flagging the masking so it is not read as full confidence in the specific
+mechanism. Unlike row #12, no core-level test backstops this guard — it only
+exists in the CKB script.
 
-### #12 — `MementoData::decode` template: PINNED, but masked
+### #12 — `MementoData::decode` template: PINNED at the core level (fix wave re-verdict)
 
-Same masking pattern as #6, on the decode side. Breaking
-`data[2..34] != WINNER_TEMPLATE_SHA256` inside `MementoData::decode` flips
-`a_memento_with_a_substituted_template_is_refused` from green to red, but via
-`MEMENTO_ERROR_MINT` (-103), not the expected `MEMENTO_ERROR_DATA` (-101):
+**Original finding (integration fixture only), unchanged below**: the
+integration-level masking pattern is identical to #6, on the decode side.
+Breaking `data[2..34] != WINNER_TEMPLATE_SHA256` inside `MementoData::decode`
+flips the integration test `a_memento_with_a_substituted_template_is_refused`
+from green to red, but via `MEMENTO_ERROR_MINT` (-103), not the expected
+`MEMENTO_ERROR_DATA` (-101):
 
 ```
 assertion `left == right` failed: unexpected failure: ...
@@ -160,15 +200,57 @@ ever reached. With the template check removed, `decode` succeeds, execution
 falls through to the mint branch, and `count_with_args(claim, Input) != 1`
 (0 claims present) rejects independently with `MEMENTO_ERROR_MINT`.
 
-Broader implication: **every** "memento-only mint" test in this suite
-(funding cell as the only input, no claim) will *always* also fail the
+Broader implication, unchanged: **every** "memento-only mint" test in this
+suite (funding cell as the only input, no claim) will *always* also fail the
 mint-count check regardless of what else is wrong with the memento's content,
 because minting with zero claims present is itself always rejected. Any test
 targeting a check that lives inside `MementoData::decode` is therefore only
-provably independent of the mint-count check as long as `decode` itself is
-the thing that fails first — which is true at HEAD, but is not verified by
-this test once decode's own check is the thing under mutation. Recording as
-pinned (test flips red) with the same caveat as #6.
+provably independent of the mint-count check *at the integration level* as
+long as `decode` itself is the thing that fails first.
+
+**Fix-wave correction: the original pass never ran the core-level test.**
+`crates/daowow-core/src/memento/tests.rs::data_rejects_a_substituted_template_or_renderer`
+calls `MementoData::decode` directly, with no shard binary, no claim cell, and
+no mint-count check anywhere in the picture — there is nothing to mask it
+with. Re-run against the identical mutation:
+
+```
+$ sed -n '92,96p' crates/daowow-core/src/memento.rs   # before
+        if data.len() != MEMENTO_DATA_SIZE
+            || data[0] != 1
+            || data[1] != MEMENTO_RENDERER_V1
+            || data[2..34] != WINNER_TEMPLATE_SHA256
+        {
+
+# removed the `data[2..34] != WINNER_TEMPLATE_SHA256` arm, leaving:
+#   if data.len() != MEMENTO_DATA_SIZE || data[0] != 1 || data[1] != MEMENTO_RENDERER_V1 {
+
+$ cargo test -p daowow-core --lib memento::tests::data_rejects_a_substituted_template_or_renderer -- --nocapture
+running 1 test
+thread 'memento::tests::data_rejects_a_substituted_template_or_renderer' panicked at crates/daowow-core/src/memento/tests.rs:64:5:
+assertion `left == right` failed
+  left: Ok(MementoData { renderer_version: 1, prize_index: 3, paid_count: 4, paid_total: 4000 })
+ right: Err(Encoding)
+test memento::tests::data_rejects_a_substituted_template_or_renderer ... FAILED
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 147 filtered out; finished in 0.00s
+
+# restored crates/daowow-core/src/memento.rs (byte-identical to HEAD, `git diff` empty)
+
+$ cargo test -p daowow-core --lib memento::tests::data_rejects_a_substituted_template_or_renderer -- --nocapture
+running 1 test
+test memento::tests::data_rejects_a_substituted_template_or_renderer ... ok
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 147 filtered out; finished in 0.00s
+```
+
+Red on line 64 — the wire's first assertion, `MementoData::decode(&wire) ==
+Err(CoreError::Encoding)` — with no masking error code substitution of any
+kind: `decode` simply returns `Ok(...)` instead of erring, and the test
+compares that directly. Restored and confirmed green. **Row #12 is PINNED**
+at the core level. The "masked" verdict now applies only to the integration
+fixture named above, which still has the structural limitation described
+above (no claim cell present, so `MEMENTO_ERROR_MINT` still fires first
+there) — that scoped caveat is unchanged and stays open, it is simply no
+longer the last word on whether the template check itself is tested.
 
 ### #13 — Schedule commitment check: unpinnable-by-design (kept, documented, not removed)
 
@@ -218,16 +300,50 @@ be built to chase.
 
 ## Rows #7 and #13 — unpinnable by design
 
-**Row #7 — claim-side memento duplicate (`found > 1`)**: not probed, per the
-brief's explicit instruction. Two memento outputs with byte-identical args
-are, by construction, the same type script and therefore one script group
-with two members — so the memento binary's own group-size guard (row #6)
-fires unconditionally on the same transaction shape, and which of the two
-independent guards CKB reports depends on script-hash sort order (a function
-of the deployed binary's own code hash). The suite's own file-level `NOTE` in
-`tests/integration/tests/security_retirement.rs` documents this in detail
-and deliberately does not ship a test for `CLAIM_ERROR_RETIRE`'s `found > 1`
-branch in isolation.
+**Row #7 — claim-side memento duplicate (`found > 1`): rationale corrected in
+the fix wave.** The original writeup here (and the suite's own file-level
+`NOTE`) attributed this row's unpinnability to a CKB script-hash-order race
+against the memento binary's own group-size guard (row #6). That reasoning
+was wrong — or at least not the operative one. The actual reason is local and
+does not involve any other script: `found > 1` at
+`contracts/entry-shard-type/src/claim.rs:295-297` is a cheap early exit that
+is fully redundant with the sibling `found != 1` check at the end of the same
+function (`check_memento_outputs`, ~line 319). Deleting the early return and
+re-running the full `security_retirement` suite (rebuilding the
+`entry-shard-type` RISC-V binary first) leaves **all 16 tests passing**,
+including the ones this early return exists to guard:
+
+```
+$ sed -n '292,300p' contracts/entry-shard-type/src/claim.rs   # before
+                found += 1;
+                if found > 1 {
+                    return err(CLAIM_ERROR_RETIRE);
+                }
+                let Some(prize_index) = expected_index else {
+                    return err(CLAIM_ERROR_RETIRE);
+                };
+
+# removed the `if found > 1 { return err(CLAIM_ERROR_RETIRE); }` block
+$ cargo build --target riscv64imac-unknown-none-elf --release -p entry-shard-type
+$ cargo test -p daowow-integration-tests --test security_retirement
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+
+# restored (git diff empty), rebuilt again — unchanged 16/16
+```
+
+This confirms the brief's own reasoning directly: a winner with two mementos
+still falls through to `expected_index.is_some() && found != 1` after the
+loop (`found == 2 != 1`) and gets `CLAIM_ERROR_RETIRE`; a non-winner with two
+mementos rejects even earlier, on the loop's first matching iteration, via
+`let Some(prize_index) = expected_index else { return err(...) }` (taken
+immediately because `expected_index` is `None`). No cross-script argument, no
+hash-order dependency, and no scenario the memento's own group-size guard
+needs to be involved in at all — the sibling check inside the SAME function
+already covers every case `found > 1` would. It remains
+**unpinnable-by-design**, but as a same-function, always-shadowed early exit,
+not an independent defense-in-depth layer racing another script. **The guard
+itself was not removed** — this was a documentation-only correction, verified
+by a temporary mutation that was fully reverted.
 
 **Row #13 — schedule commitment check**: probed in the original pass (see
 above), confirmed fully redundant with `ComputedDraw::new`'s own re-check.

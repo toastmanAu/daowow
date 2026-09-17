@@ -576,11 +576,24 @@ fn two_mementos_of_one_identity_are_refused() {
 // that IS isolatable: the memento binary's own group-size guard, tested with
 // no claim in the transaction at all, so there is no second group to race
 // against. The claim-side `found > 1` duplicate check remains permanently
-// unpinnable by an adversarial test in isolation — not a gap to fix, but
-// deliberate defence in depth (the retiring claim's own count check backs up
-// the memento's group-size guard, and vice versa, exactly so that either one
-// alone is sufficient). A mutation that disabled ONLY the claim's `found > 1`
-// branch would not be observable by any test that can be built here, because
-// the memento group's unconditional guard fires first whenever both are
-// present — that mutation is only observable by disabling the memento guard
-// too, which is a different, larger mutation.
+// unpinnable by an adversarial test in isolation, but NOT because it is an
+// independent defence-in-depth layer racing the memento group's guard (an
+// earlier version of this note claimed that; it was wrong). The real reason
+// is local to `check_memento_outputs` and does not involve the memento
+// script at all: `found > 1` is a redundant early exit for a case the same
+// function's own `expected_index.is_some() && found != 1` check (after the
+// loop) already covers — a winner with two matching mementos still ends the
+// loop with `found == 2`, which fails that check regardless of whether the
+// `found > 1` early return ever fired, and a non-winner with two matching
+// mementos rejects even earlier, on the loop's very first match, via
+// `let Some(prize_index) = expected_index else { ... }` (`expected_index` is
+// `None`). Deleting the `found > 1` branch and rebuilding leaves this
+// suite's full 16/16 unchanged — confirmed directly (see
+// `docs/results/2026-09-16-retirement-memento-results.md`, "Rows #7 and #13"
+// section, for the verification transcript). So there is nothing this
+// branch alone guards that the sibling check does not already guard in the
+// same function; a mutation that disabled only `found > 1` is unobservable
+// here not because a race with the memento's guard hides it, but because it
+// changes nothing that any test — this suite's or otherwise — could ever
+// see. It remains deliberately in place as a cheap, harmless early exit, not
+// as a load-bearing independent guard.

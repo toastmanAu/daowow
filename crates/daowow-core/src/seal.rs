@@ -134,8 +134,14 @@ impl RoundSeal {
     }
 
     /// The complete prize-obligation universe for any winning ticket of this
-    /// round: every batch of every shard owes every winner a positive amount,
-    /// so a winner's discharged-source count equals this when nothing is left.
+    /// round, i.e. a winner's discharged-source count equals this when
+    /// nothing is left — but only because every batch of every shard is
+    /// guaranteed to owe every winner a positive amount, and that guarantee
+    /// is not a property of `RoundSeal` itself. It is enforced in
+    /// `entitlements.rs` (the `amount == 0` rejection around line 94), which
+    /// refuses to accept a batch that allocates any drawn position zero. If
+    /// that rejection were ever weakened, this count would stop being a
+    /// sound universe without anything here changing.
     /// Only meaningful for a sealed round; `RoundSeal::new` guarantees closure.
     pub fn total_accepted_batches(&self) -> Result<u64, CoreError> {
         let mut total = 0u64;

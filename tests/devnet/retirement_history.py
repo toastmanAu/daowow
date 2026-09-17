@@ -42,6 +42,20 @@ def retire_sealed_round(
     # has no fee-rate policy) does not surface.
     nonwinner_claim = entry_tx["outputs"][nonwinner_index]
     nonwinner_payout = hex(int(nonwinner_claim["capacity"], 16) - 100_000)
+    # NOTE: witnesses[0] here is `retirement["schedule_raw"]` -- the raw
+    # PrizeSchedule bytes retire() expects at load_witness(0, GroupInput),
+    # NOT a WitnessArgs. This single-input shape only works because the
+    # devnet participant lock is a smoke-minimal fixture lock that ignores
+    # witness 0 entirely. A real secp256k1_blake160_sighash_all lock needs
+    # witness 0 of its own group to decode as a WitnessArgs carrying its
+    # 65-byte signature, which collides with the raw schedule bytes at byte
+    # 0 (PrizeSchedule::decode requires data[0] == 1; WitnessArgs starts with
+    # a 4-byte LE size) -- a signature-locked retire is unbuildable as a
+    # single input and needs a second cell under the same lock at a LOWER
+    # input index to carry the signature, leaving this slot free for the raw
+    # schedule. See docs/superpowers/specs/2026-09-16-claim-retirement-memento-design.md
+    # ("Open constraint: the schedule witness slot is unbuildable under a
+    # signature lock") and docs/HANDOFF-2026-09-16.md.
     nonwinner_retire = {
         "version": "0x0",
         "cell_deps": retire_deps,
@@ -90,6 +104,9 @@ def retire_sealed_round(
     memento = retirement["memento"]
     winner_claim = redeem["outputs"][1]
     memento_mint_capacity = hex(int(memento["capacity"], 16) + 100_000)
+    # Same single-input-under-a-fixture-lock caveat as nonwinner_retire above:
+    # witnesses[0] is the raw schedule, not a WitnessArgs, and this shape is
+    # only buildable because the fixture lock ignores witness 0.
     winner_retire = {
         "version": "0x0",
         "cell_deps": retire_deps,
