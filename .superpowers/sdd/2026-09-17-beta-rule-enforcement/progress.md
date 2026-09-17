@@ -46,3 +46,37 @@ would silently make the check vacuous again and prove nothing.
 Ruling: work on feat/beta-rule-enforcement rather than main, matching the
 pattern the user chose for the previous sub-project. Cost if wrong: none; a
 branch is merged the same way.
+
+Task 1: implementer DONE_WITH_CONCERNS — commit e17d780. Core 148/148,
+integration 174 passing, mutation round trip confirmed (guard removed -> both
+rejection tests RED; restored byte-identically -> GREEN). Binary 229128 ->
+229208 (+80). Review dispatched over 20708e0..e17d780.
+
+CORRECTION TO MY OWN EARLIER WORK, and my verification method was the fault.
+Earlier today I "fixed" the binary-hash fragility in
+security_redemption.rs::redeeming_the_same_source_twice_is_rejected_by_the_claim
+by pairing prize amounts AFTER the ticket-id sort instead of before, and
+reported it "fixed and proven" on the strength of ONE binary perturbation that
+gave 22/22. Task 1's contract change moves the binary again and the test fails
+again — now -77 (settlement refuses) rather than the original underflow panic.
+The implementer proved it is not their change by perturbing the binary inertly
+and reproducing the same failure. I re-ran it myself and confirm it fails on
+this branch.
+
+What I got wrong: the property is permutation-independence, and a single
+perturbation is a single SAMPLE of that permutation. Passing once says the
+permutation happened to be favourable, not that the fixture is independent of
+it. Verifying a permutation-dependent property needs many samples, or better,
+removing the dependence structurally. My fix removed the `amount` coupling and
+left another one.
+
+Ruling: do NOT fix it inside gate 1. It is pre-existing, out of this plan's
+scope, and a proper fix is a fixture redesign rather than another one-line
+pairing change — the second time a "one line" attempt has moved the failure
+rather than removed it. Main is currently green on it only because main's
+binary happens to produce a favourable permutation; any contract change flips
+it, and gate 1 changes the contract. Record it as a known failure for this
+branch, tell the user my earlier claim was wrong, and leave the redesign as its
+own piece of work.
+Cost if wrong: this branch carries a third known-failing integration test, and
+anyone reading a green-except-three suite must be told which three and why.
