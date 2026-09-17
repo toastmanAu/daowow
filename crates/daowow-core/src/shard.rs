@@ -174,7 +174,7 @@ mod tests {
             round_id: [1; 32],
             ticket_price: 100,
             minimum_tickets: 1,
-            maximum_tickets: 1000,
+            maximum_tickets: 0,
             entry_start: 0,
             entry_end: 10,
             aggregation_deadline: 20,
@@ -270,6 +270,7 @@ mod tests {
     #[test]
     fn cap_enforced() {
         let mut c = config();
+        c.entry_shard_count = 1;
         c.maximum_tickets = 10;
         let e = entry(0, 0, 11);
         assert!(apply_entry_batch(None, &c, &[e]).is_err());

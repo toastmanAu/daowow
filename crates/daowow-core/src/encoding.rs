@@ -199,6 +199,22 @@ impl RoundConfigV1 {
         if self.entry_shard_count == 0 || self.entry_shard_count > 256 {
             return Err(CoreError::InvalidArgument);
         }
+        // A cap is only round-wide at one shard: shard.rs compares a single
+        // shard's ticket count against maximum_tickets, so a multi-shard round
+        // would accept up to entry_shard_count times the advertised cap.
+        // Refuse the configuration rather than let the advertised number be
+        // wrong. Uncapped rounds (maximum_tickets == 0) may shard freely.
+        if self.maximum_tickets != 0 && self.entry_shard_count > 1 {
+            return Err(CoreError::InvalidArgument);
+        }
+        // A round that cannot reach its own minimum is unsatisfiable.
+        // Deliberately not merged with the `maximum_tickets != 0` guard above
+        // into one nested `if`: keeping the two conditions independent is
+        // what makes each individually mutation-testable. Declined by
+        // review ruling; do not tidy this up.
+        if self.maximum_tickets != 0 && self.minimum_tickets > self.maximum_tickets {
+            return Err(CoreError::InvalidArgument);
+        }
         if self.entry_start > self.entry_end || self.entry_end > self.aggregation_deadline {
             return Err(CoreError::InvalidArgument);
         }
@@ -719,5 +735,68 @@ mod tests {
         let mut c = sample_config();
         c.accumulator_id = 9;
         assert!(c.validate().is_err());
+    }
+
+    #[test]
+    fn a_capped_round_must_be_single_shard() {
+        // The cap check in shard.rs compares ONE shard's ticket count against
+        // maximum_tickets. That is an exact round-wide cap at one shard and a
+        // per-shard cap above it, so a multi-shard round would silently accept
+        // up to shard_count times the advertised number. Refuse the config
+        // rather than let the advertised cap become wrong.
+        let mut cfg = sample_config();
+        cfg.maximum_tickets = 200;
+        cfg.entry_shard_count = 1;
+        assert!(cfg.validate().is_ok());
+        cfg.entry_shard_count = 2;
+        assert_eq!(cfg.validate(), Err(CoreError::InvalidArgument));
+    }
+
+    #[test]
+    fn an_uncapped_round_may_have_many_shards() {
+        // maximum_tickets == 0 is the uncapped path; there is no advertised
+        // number to get wrong, so sharding stays available.
+        let mut cfg = sample_config();
+        cfg.maximum_tickets = 0;
+        cfg.entry_shard_count = 4;
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn a_round_cannot_require_more_tickets_than_it_allows() {
+        // A round whose minimum exceeds its cap can never succeed and would
+        // strand every entrant's principal until the failed-round path runs.
+        let mut cfg = sample_config();
+        cfg.entry_shard_count = 1;
+        cfg.maximum_tickets = 200;
+        cfg.minimum_tickets = 50;
+        assert!(cfg.validate().is_ok());
+        cfg.minimum_tickets = 201;
+        assert_eq!(cfg.validate(), Err(CoreError::InvalidArgument));
+        // exactly equal is legal: a must-fill round is a valid configuration
+        cfg.minimum_tickets = 200;
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn the_beta_configuration_validates_and_an_absent_cap_is_not_refused() {
+        // Canonical beta round from docs/beta-rule-enforcement-audit.md's
+        // "Gate 1 closure" section: ticket_price 1000 CKB, maximum_tickets
+        // 200, minimum_tickets 50, single shard. Machine-checked so the
+        // beta's advertised numbers are no longer prose-only.
+        let mut cfg = sample_config();
+        cfg.ticket_price = 1000 * 100_000_000; // 1000 CKB in shannons
+        cfg.maximum_tickets = 200;
+        cfg.minimum_tickets = 50;
+        cfg.entry_shard_count = 1;
+        assert!(cfg.validate().is_ok());
+
+        // Residual risk this closes nothing about: validate() refuses a
+        // WRONG cap (a nonzero cap paired with more than one shard) but not
+        // an ABSENT one. The same config with maximum_tickets == 0 still
+        // validates — an operator could create the round uncapped while a
+        // landing page advertises 200, and no guard here would catch it.
+        cfg.maximum_tickets = 0;
+        assert!(cfg.validate().is_ok());
     }
 }
