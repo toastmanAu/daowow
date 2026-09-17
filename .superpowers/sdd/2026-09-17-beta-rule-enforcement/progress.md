@@ -168,3 +168,34 @@ Second note from the run: maturity mining now travels ~360 epochs instead of
 ~180 for five histories, roughly doubling that portion of wall-clock. Total
 stayed ~24 min only because devnet epoch length is 10 blocks. A larger epoch
 length would make this suite materially slower.
+Task 3: review spec MET, quality approved, no Critical/Important. Confirmed both
+properties are genuine assertions rather than logged values
+(test_round_creation.py:209-210 per-batch window, :275-280 maturity_delta == 360,
+plus fleet-wide checks in tearDownClass), that entry_start: 1 is the only devnet
+config source so Task 1's check really executed, that phase one targets D+181
+strictly inside the interval, and that NOTHING pre-existing was weakened — the
+RFC 0023 maturity arithmetic is untouched rather than adjusted to fit an
+observed value.
+
+Useful answer to the question I asked about multi-batch reuse: the assertions
+GENERALISE without restructuring. Per-batch invariants are asserted individually
+at the point of observation and only then appended to a class-level list;
+tearDownClass computes spread and set-equality over the union. Any subset's
+spread is bounded by the union's, and maturity is exact-set-equality, so a
+violation inside a single multi-batch round would still surface. Only the
+run_history harness needs to loop per batch — which is the separately tracked
+rehearsal work, not a defect here.
+
+⚠️ resolved by me, as required before completing: the reviewer could not verify
+from the diff that contracts were built before the devnet ran — the stale-binary
+trap, where a green run tests the OLD binary and proves nothing about the new
+check. Checked decisively: rebuilding entry-shard-type from current source
+yields a byte-identical binary (662b2b9b5822ad62), so the run used source
+carrying Tasks 1 and 2. Not a gap.
+
+Task 3: minor (deferred): the report does not confirm `cargo fmt --all` was run;
+the Rust change is a small json! addition that looks formatted.
+Task 3: minor (deferred): window_width is reassigned identically on every
+invocation rather than set once. Cosmetic.
+
+Task 3: complete (commits 1a0794b..5371b49, review clean, 0 fix rounds)
