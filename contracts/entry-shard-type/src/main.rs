@@ -228,7 +228,27 @@ fn main() -> i8 {
     };
 
     match (before.state, after.state) {
-        (SHARD_STATE_OPEN, SHARD_STATE_OPEN) => append(&cfg, &before, &after, &claims),
+        (SHARD_STATE_OPEN, SHARD_STATE_OPEN) => {
+            // Opening enforcement. `since` is a lower bound, so "not before
+            // entry_start" is exactly the shape it can express — unlike the
+            // closing side, which cannot be a check at all and is enforced by
+            // the freeze transition instead.
+            //
+            // When entry_start is 0 the constraint is vacuous: the round opens
+            // at epoch 0 and every epoch is at or after that. Skipping the
+            // check there keeps every transaction that does not need an epoch
+            // `since` from being forced to carry one.
+            if cfg.entry_start != 0 {
+                let since = match ckb_std::high_level::load_input_since(0, Source::GroupInput) {
+                    Ok(s) => s,
+                    Err(_) => return err(SHARD_ERROR_NOT_OPEN),
+                };
+                if daowow_core::epoch::absolute_epoch_at_least(since, cfg.entry_start).is_err() {
+                    return err(SHARD_ERROR_NOT_OPEN);
+                }
+            }
+            append(&cfg, &before, &after, &claims)
+        }
         (SHARD_STATE_OPEN, SHARD_STATE_FROZEN) => {
             if !claims.is_empty() {
                 return err(SHARD_ERROR_CLAIM_CELL);

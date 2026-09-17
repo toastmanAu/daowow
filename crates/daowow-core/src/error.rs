@@ -64,6 +64,9 @@ pub mod codes {
     pub const SHARD_ERROR_CREATE: i8 = -36;
     pub const SHARD_ERROR_CONFIG_DEP: i8 = -37;
     pub const SHARD_ERROR_CLAIM_CELL: i8 = -38;
+    /// An append landed before the round's `entry_start`. Distinct from
+    /// SHARD_ERROR_FROZEN, which is the closing side of the same window.
+    pub const SHARD_ERROR_NOT_OPEN: i8 = -39;
 
     // entry-lock
     pub const ENTRY_ERROR_DATA: i8 = -42;
