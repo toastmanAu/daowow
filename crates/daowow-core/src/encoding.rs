@@ -208,6 +208,10 @@ impl RoundConfigV1 {
             return Err(CoreError::InvalidArgument);
         }
         // A round that cannot reach its own minimum is unsatisfiable.
+        // Deliberately not merged with the `maximum_tickets != 0` guard above
+        // into one nested `if`: keeping the two conditions independent is
+        // what makes each individually mutation-testable. Declined by
+        // review ruling; do not tidy this up.
         if self.maximum_tickets != 0 && self.minimum_tickets > self.maximum_tickets {
             return Err(CoreError::InvalidArgument);
         }
@@ -771,6 +775,28 @@ mod tests {
         assert_eq!(cfg.validate(), Err(CoreError::InvalidArgument));
         // exactly equal is legal: a must-fill round is a valid configuration
         cfg.minimum_tickets = 200;
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn the_beta_configuration_validates_and_an_absent_cap_is_not_refused() {
+        // Canonical beta round from docs/beta-rule-enforcement-audit.md's
+        // "Gate 1 closure" section: ticket_price 1000 CKB, maximum_tickets
+        // 200, minimum_tickets 50, single shard. Machine-checked so the
+        // beta's advertised numbers are no longer prose-only.
+        let mut cfg = sample_config();
+        cfg.ticket_price = 1000 * 100_000_000; // 1000 CKB in shannons
+        cfg.maximum_tickets = 200;
+        cfg.minimum_tickets = 50;
+        cfg.entry_shard_count = 1;
+        assert!(cfg.validate().is_ok());
+
+        // Residual risk this closes nothing about: validate() refuses a
+        // WRONG cap (a nonzero cap paired with more than one shard) but not
+        // an ABSENT one. The same config with maximum_tickets == 0 still
+        // validates — an operator could create the round uncapped while a
+        // landing page advertises 200, and no guard here would catch it.
+        cfg.maximum_tickets = 0;
         assert!(cfg.validate().is_ok());
     }
 }

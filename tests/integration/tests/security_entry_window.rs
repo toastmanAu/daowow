@@ -10,9 +10,13 @@
 //! which is why only opening is tested here.
 //!
 //! Each test below is a single-input, zero-entry (identity) append
-//! transaction: the shard cell's own type script is the only script group
-//! that runs, so the asserted exact `i8` identifies the opening guard with
-//! no ambiguity from CKB's script-hash execution order.
+//! transaction. Two script groups actually execute — the shard cell's type
+//! script AND its lock, which is the same `entry-shard-type` binary running
+//! in public-lock mode (see `public_lock` in
+//! contracts/entry-shard-type/src/main.rs) — but only one group can reject:
+//! `public_lock` returns 0 for this single-input, well-formed shape, so the
+//! asserted exact `i8` identifies the opening guard with no ambiguity from
+//! CKB's script-hash execution order.
 
 mod common;
 
@@ -36,9 +40,10 @@ fn code_of(err: &ckb_testtool::ckb_error::Error) -> i8 {
 }
 
 /// Assert the transaction fails with exactly `expected` — never a broad
-/// match. Every call site in this file spends only the shard cell (one
-/// script group can possibly reject), so the exact code identifies the
-/// opening guard under test rather than an artifact of execution order.
+/// match. Every call site in this file spends only the shard cell; only one
+/// group can reject, because the lock group always succeeds for this shape
+/// (see the module doc comment), so the exact code identifies the opening
+/// guard under test rather than an artifact of execution order.
 fn expect_code(context: &mut Context, tx: &TransactionView, expected: i8) {
     let err = expect_fail(context, tx);
     let code = code_of(&err);
@@ -126,5 +131,19 @@ fn a_block_number_since_is_refused() {
     let mut w = World::new(ACC_MMR);
     let (round_op, shard_op, cfg) = open_round_with_entry_start(&mut w, 100, 200, 300);
     let tx = append_with_since(&mut w, &round_op, &shard_op, &cfg, 100);
+    expect_code(&mut w.context, &tx, SHARD_ERROR_NOT_OPEN);
+}
+
+/// A relative `since` must not be read as an absolute epoch either:
+/// `absolute_epoch_number` requires the top byte to be exactly `0x20`, and a
+/// relative-epoch flag (`0xa0`, per RFC-0017) fails that same `since >> 56 !=
+/// 0x20` test. Coverage bookkeeping — the spec asked for this case
+/// explicitly, distinct from the bare block-number case above even though
+/// both are rejected by the same guard.
+#[test]
+fn a_relative_since_is_refused() {
+    let mut w = World::new(ACC_MMR);
+    let (round_op, shard_op, cfg) = open_round_with_entry_start(&mut w, 100, 200, 300);
+    let tx = append_with_since(&mut w, &round_op, &shard_op, &cfg, 0xa000_0000_0000_00c8);
     expect_code(&mut w.context, &tx, SHARD_ERROR_NOT_OPEN);
 }

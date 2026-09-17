@@ -214,3 +214,22 @@ Task 4: complete (commits d43d45d..d306cc1, review clean, 0 fix rounds)
 
 All four tasks complete, zero fix rounds across the whole plan. Final
 whole-branch review dispatched on opus.
+
+CORRECTION, filed against my own "third known failure" claim above (the Task 1
+CORRECTION entry recording `security_redemption::redeeming_the_same_source_twice_is_rejected_by_the_claim`
+failing with -77 at binary 229,208). That observation was made against the
+Task-1-only binary. It does not describe this branch. Re-verified directly
+against the current branch tip: binary 229,384
+(`target/riscv64imac-unknown-none-elf/release/entry-shard-type`,
+sha256 662b2b9b5822ad62...), the test passes, 22/22 in the file and in
+isolation. A later change (Task 2's `shard.rs` edit, or Task 3, moved the
+binary again from 229,208 to 229,384) shifted the sort permutation this
+fixture depends on back to favourable.
+
+The underlying property this test's fixture depends on — permutation
+independence — is still not actually fixed; see the corresponding correction
+in `docs/HANDOFF-2026-09-16.md`. This entry is only about what this branch's
+test suite currently reports: this branch carries the TWO known `smoke`
+failures, and no third. Do not read the Task 1 CORRECTION entry above as
+describing this branch's current state; it describes a binary this branch no
+longer has.

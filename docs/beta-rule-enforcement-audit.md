@@ -134,7 +134,27 @@ implemented** (out of scope, present nowhere).
   now unconstructible — not because a round-wide accounting mechanism across
   shards was built. A future multi-shard beta still needs the cross-shard cap
   design this audit's "Required engineering follow-up" calls for; that work
-  was not done.
+  was not done. The evidence for this closure is host tests (`shard.rs`'s cap
+  tests) plus the config guard proven by
+  `encoding.rs::the_beta_configuration_validates_and_an_absent_cap_is_not_refused`
+  — narrow that claim explicitly: **no on-chain test yet exercises a capped
+  single-shard round.** Every integration and devnet round in this repository
+  configures multiple shards with `maximum_tickets = 0` (uncapped); none pairs
+  a cap with `entry_shard_count = 1`. An on-chain cap test — the 200th ticket
+  accepted, the 201st refused, against a single-shard capped config — is
+  required before a funded round.
+- **The cap bounds SUBMITTED tickets; success and prizes are decided by
+  ACCEPTED tickets — a different quantity.** `shard.rs::apply_entry_batch`
+  compares the shard's `ticket_count`, which counts every appended entry,
+  against `maximum_tickets`. But `computed_draw.rs` gates the draw on
+  **accepted** tickets, and `lifecycle.rs::close` excludes an unaggregated
+  suffix at the aggregation deadline. The direction is safe (accepted <=
+  submitted <= cap), so this is disclosure, not a breach — but a round can
+  read "200/200 sold" while fewer than 200 tickets are ever accepted, and
+  nobody can top the round back up, because exclusion only happens after the
+  freeze and a frozen shard refuses further appends. A UI that shows one
+  number for both quantities would advertise something the protocol does not
+  mean.
 - **Minimum vs. maximum — now ENFORCED.** The same `validate` gained a second
   guard: when `maximum_tickets != 0`, `minimum_tickets > maximum_tickets` is
   refused. A round that could never reach its own success threshold can no
@@ -161,6 +181,27 @@ implemented** (out of scope, present nowhere).
   inferred from the opening check above — opening and closing are not
   symmetric: a lower bound can enforce "not yet" but nothing here can enforce
   "not anymore" without a design of its own (not built).
+- **The consequence of the unenforced close that matters most.** The bullet
+  above describes the gap in terms of odds — an entry landing after the
+  announced close still dilutes the draw. That is the smaller half. A late
+  entry landing between the announced close and the actual freeze can push
+  the accepted total across `minimum_tickets`, converting what would have
+  been a FAILED round — every participant refunded — into a SUCCESSFUL round
+  — every participant's principal locked into the native DAO for a full
+  term. That is an outcome-class change for everyone already in the round,
+  decided after the round's advertised close, by whoever happens to submit
+  the entry that crosses the line.
+- **The mitigation that makes the above defensible.** The freeze is
+  permissionless and cannot happen early. The shard cell sits under the
+  public lock (`is_public_lock`/`public_lock` in
+  `contracts/entry-shard-type/src/main.rs`), so the OPEN-to-FROZEN
+  transaction can be submitted by ANY participant, not only the keeper — and
+  the contract's `since >= entry_end` check refuses it for everyone equally
+  before `entry_end`. The gap described above is not keeper discretion; it is
+  a race that any honest party can win by closing the round themselves at
+  exactly `entry_end`. Read on its own, the bullet above could leave a reader
+  assuming the keeper decides when the doors shut; it does not — nobody can
+  shut them early, and anybody can shut them on time.
 - **Per-lock cap — remains NOT IMPLEMENTED, by decision, not oversight.**
   There is still no cumulative per-owner accounting field or check. This
   audit's original finding — a per-lock limit does not prevent multi-wallet
@@ -182,6 +223,23 @@ implemented** (out of scope, present nowhere).
   "Evidence required for each beta duration" list (multiple owners and
   batches) are unchanged by this work and remain open; do not read the
   16/16 result as covering them.
+- **A new obligation for gate 2's wallet flow.** With `entry_start != 0` (the
+  beta's actual value), every append transaction must set an absolute-epoch
+  `since` on the shard input — the canonical value is `ABSOLUTE_EPOCH_FLAG |
+  entry_start` — or the append is refused with `SHARD_ERROR_NOT_OPEN = -39`.
+  A wallet that omits `since` fails every single entry once the beta's real
+  `entry_start` goes live, not only in an adversarial case. Separately, at
+  `entry_shard_count = 1` every entry in the beta serialises through one live
+  shard cell: 200 tickets means 200 sequential spends of that one cell, and
+  an entrant whose transaction loses the race for the current shard cell must
+  detect the conflict and retry. Both are direct, mechanical consequences of
+  gate 1's own decisions, and the wallet flow gate 2 builds must be designed
+  for them from the start rather than discovered under load.
+- **What remains uncovered.** This audit's own follow-up list above asks for
+  adversarial cases covering early append, delayed freeze, append/freeze
+  contention and reorg recovery. This branch's evidence — the mutation round
+  trip and the devnet run — covers early-append only; append/freeze
+  contention, delayed freeze and reorg recovery are untested.
 
 ### The beta's approved values
 
