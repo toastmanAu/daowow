@@ -80,3 +80,29 @@ branch, tell the user my earlier claim was wrong, and leave the redesign as its
 own piece of work.
 Cost if wrong: this branch carries a third known-failing integration test, and
 anyone reading a green-except-three suite must be told which three and why.
+Task 1: review spec MET, quality approved, no Critical/Important. The reviewer
+verified the `entry_start != 0` skip against epoch.rs rather than accepting the
+rationale: with deadline 0, absolute_epoch_at_least is trivially Ok for any
+validly-flagged since but still rejects the bare `0` every existing append test
+uses — so the skip is correct AND the check is unconditional whenever
+entry_start > 0, with no evasion route. It also checked something not in the
+brief: whether cfg.entry_start could be spoofed. It cannot — cfg resolves via
+config_by_commitment keyed off the args commitment, the same trust path the
+pre-existing freeze check already uses for cfg.entry_end.
+
+⚠️ resolved by the reviewer itself, and I accept its resolution: the append
+fixture is NOT literally a single script group — the shard cell's lock is the
+same entry-shard-type binary in public-lock mode, so two groups execute. It read
+public_lock() and confirmed that for this single-input well-formed transaction
+it always returns 0, so only the TYPE group can produce a nonzero code. The
+exact-i8 assertions are therefore stable; only the report's wording ("only one
+group runs") was imprecise, not the test.
+
+Task 1: minor (deferred): the new append block duplicates the freeze arm's
+load_input_since + absolute_epoch_at_least + return shape almost verbatim. A
+shared `check_epoch_since(deadline, code)` helper would remove it. Pre-existing
+style — the freeze arm was already inline — so not new debt.
+Task 1: minor (deferred): the report says "only one script group runs" where
+"only one group can reject" is accurate.
+
+Task 1: complete (commits 20708e0..e17d780, review clean, 0 fix rounds)
