@@ -635,3 +635,38 @@ fn two_mementos_of_one_identity_are_refused() {
 // changes nothing that any test — this suite's or otherwise — could ever
 // see. It remains deliberately in place as a cheap, harmless early exit, not
 // as a load-bearing independent guard.
+
+#[test]
+fn a_non_winner_carrying_payments_is_reported_as_impossible() {
+    // A ticket the draw never selected cannot have discharged a prize source:
+    // only a drawn ticket is ever owed one. Reaching retire() with payments
+    // recorded against a non-winner therefore means something upstream is
+    // broken, not that the holder retired early — so it gets its own code.
+    // Without the distinction an operator sees CLAIM_ERROR_INCOMPLETE, which
+    // reads as "try again after collecting the rest", and never investigates.
+    let mut w = World::new(ACC_MMR);
+    let round = sealed_round_with_entropy(&mut w, 4, 8);
+    let lock = w.always_success().1;
+    let (claim_op, _) = seed_claim_with_paid_count_at(
+        &mut w,
+        &lock,
+        &round,
+        round.non_winning_shard,
+        round.non_winning_position,
+        1,
+    );
+    let out = CellOutputBuilder::default()
+        .capacity(pack_u64(claim_cell_capacity(&lock)))
+        .lock(lock.clone())
+        .build();
+
+    let tx = TransactionBuilder::default()
+        .input(CellInput::new_builder().previous_output(claim_op).build())
+        .output(out)
+        .output_data(Bytes::new().pack())
+        .cell_dep(round.config_dep.clone())
+        .cell_dep(round.entropy_dep.clone())
+        .witness(schedule_witness(&round.schedule))
+        .build();
+    expect_code(&mut w.context, &tx, CLAIM_ERROR_IMPOSSIBLE);
+}

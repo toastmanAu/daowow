@@ -87,8 +87,11 @@ batch a round can produce yields more than 0.01 CKB. The smallest batch is one
 ticket — `AggregationState::accept` rejects an empty batch and forces
 `principal == ticket_count * ticket_price` with `ticket_count >= 1` — and a
 realistic ticket funds at least its own 220 CKB claim cell, whose DAO
-compensation over a full term runs to tens of millions of shannons, roughly
-twenty times the bound. Every schedule in the repository today sits far below
+compensation over a full term runs to roughly 5.4e7 shannons, about fifty
+times the bound. The term cannot be short: `dao_term_periods` counts 180-epoch
+DAO cycles, `validate()` requires at least one, and dao-lock enforces
+`deposit + periods * 180` on chain — so the minimum enforceable term is a full
+cycle and this margin holds for every legal config. Every schedule in the repository today sits far below
 it: the core draw fixture's `[4, 3, 2, 1]` has bar 10 and the integration
 harness's `[1; 32]` has bar 32.
 
@@ -152,7 +155,8 @@ prevents. The residual risk is therefore a protocol-level anomaly, not an
 economic corner.
 
 Residual risk, now quantified: a batch strands only if actual DAO compensation
-over a full term fell below one part per million of principal, which would also
+over a full term fell below about forty-five parts per million of principal
+(1e6 shannons against a 220 CKB minimum ticket), which would also
 make the round economically pointless. The alternative of redistributing dust so
 every drawn position receives at least one shannon is recorded as a known option
 and not adopted; it changes sub-project 2's committed allocation vectors and is

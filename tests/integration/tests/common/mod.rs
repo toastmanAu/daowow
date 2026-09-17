@@ -828,10 +828,33 @@ pub fn seed_claim_with_paid_count(
     round: &SealedRound,
     count: u64,
 ) -> (OutPoint, daowow_core::claim::ClaimArgs) {
+    seed_claim_with_paid_count_at(
+        world,
+        lock,
+        round,
+        round.winning_shard,
+        round.winning_position,
+        count,
+    )
+}
+
+/// As `seed_claim_with_paid_count`, but for an arbitrary identity rather than
+/// the round's winner. Seeding a NON-winning identity with payments recorded
+/// builds a state correct operation cannot produce — only a drawn ticket can
+/// ever have discharged a source — which is what the retire path reports as
+/// CLAIM_ERROR_IMPOSSIBLE rather than as an ordinary early retire.
+pub fn seed_claim_with_paid_count_at(
+    world: &mut World,
+    lock: &Script,
+    round: &SealedRound,
+    shard_id: u32,
+    position: u64,
+    count: u64,
+) -> (OutPoint, daowow_core::claim::ClaimArgs) {
     let args = daowow_core::claim::ClaimArgs {
         commitment: world.config_hash,
-        shard_id: round.winning_shard,
-        position: round.winning_position,
+        shard_id,
+        position,
     };
     let ticket = args.ticket_id();
     let mut host = SmtHost::new();
@@ -850,7 +873,7 @@ pub fn seed_claim_with_paid_count(
         )
         .unwrap();
     }
-    let type_script = world.claim_type_script(round.winning_shard, round.winning_position);
+    let type_script = world.claim_type_script(shard_id, position);
     let cell = CellOutputBuilder::default()
         .capacity(pack_u64(claim_cell_capacity(lock)))
         .lock(lock.clone())

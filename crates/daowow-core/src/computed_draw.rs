@@ -12,7 +12,13 @@ use alloc::{vec, vec::Vec};
 /// 0.01 CKB. The smallest batch a round can produce is one ticket
 /// (`AggregationState::accept` rejects an empty batch), and a realistic ticket
 /// funds at least its own 220 CKB claim cell, whose DAO compensation over a full
-/// term runs to tens of millions of shannons — roughly twenty times this bound.
+/// term runs to roughly 5.4e7 shannons — about fifty times this bound.
+///
+/// The term cannot be short: `dao_term_periods` counts 180-epoch DAO cycles
+/// (`epoch.rs::absolute_epoch_after_dao_term` targets `deposit + periods * 180`,
+/// enforced on chain by dao-lock), and `validate()` requires it to be at least
+/// one. So the minimum enforceable term IS a full cycle, and the margin above
+/// holds for every legal config rather than only for long ones.
 ///
 /// Deliberately an absolute constant rather than a fraction of
 /// `cfg.ticket_price`: `ticket_price` sits at offset 36 of

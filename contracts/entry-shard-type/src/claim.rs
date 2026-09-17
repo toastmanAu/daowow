@@ -275,7 +275,12 @@ fn retire(script: &Script, args: &ClaimArgs, input: &[u8]) -> Result<i8, i8> {
         .map_err(|_| CLAIM_ERROR_UNIVERSE)?;
     let decision = match daowow_core::claim::retire_decision(args, &state, &draw, universe) {
         Ok(d) => d,
+        // A winner retiring before collecting everything: benign, retry later.
         Err(daowow_core::CoreError::StateTransition) => return err(CLAIM_ERROR_INCOMPLETE),
+        // A ticket the draw never selected, yet carrying discharged sources.
+        // Correct operation cannot produce this, so it is reported apart from
+        // the benign case rather than looking like an ordinary early retire.
+        Err(daowow_core::CoreError::Impossible) => return err(CLAIM_ERROR_IMPOSSIBLE),
         Err(_) => return err(CLAIM_ERROR_DATA),
     };
     let expected_index = match decision {

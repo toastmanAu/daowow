@@ -13,6 +13,11 @@ pub enum CoreError {
     AppendProof,
     StateTransition,
     Conservation,
+    /// A state that correct operation cannot produce — evidence of corruption
+    /// or of a broken invariant elsewhere, not of a caller retrying too early.
+    /// Distinct from `StateTransition` so a contract can report the two apart:
+    /// one is a user acting prematurely, the other is something to investigate.
+    Impossible,
     Unknown,
 }
 
@@ -105,6 +110,11 @@ pub mod codes {
     pub const MEMENTO_ERROR_DATA: i8 = -101;
     pub const MEMENTO_ERROR_GROUP: i8 = -102;
     pub const MEMENTO_ERROR_MINT: i8 = -103;
+    /// A claim whose recorded state correct operation cannot produce: a ticket
+    /// the draw never selected, yet carrying discharged prize sources. Distinct
+    /// from `CLAIM_ERROR_INCOMPLETE`, which means a genuine winner is simply
+    /// retiring before collecting everything and should try again later.
+    pub const CLAIM_ERROR_IMPOSSIBLE: i8 = -104;
 }
 
 impl CoreError {
@@ -118,6 +128,11 @@ impl CoreError {
             CoreError::AppendProof => ERROR_APPEND_PROOF,
             CoreError::StateTransition => ERROR_STATE_TRANSITION,
             CoreError::Conservation => ERROR_CONSERVATION,
+            // No generic code of its own: a caller that cares about the
+            // distinction maps it at its own layer (the claim script maps it to
+            // CLAIM_ERROR_IMPOSSIBLE). Falling back to the state-transition
+            // code keeps every existing caller's behaviour unchanged.
+            CoreError::Impossible => ERROR_STATE_TRANSITION,
             CoreError::Unknown => ERROR_UNKNOWN,
         }
     }

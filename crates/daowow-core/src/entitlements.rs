@@ -92,7 +92,18 @@ impl InitialEntitlements {
                 // (prize_pool == 0), and it still covers configs predating
                 // the gate.
                 if amount == 0 {
-                    return Err(CoreError::Conservation);
+                    // Split the two causes, because they need different
+                    // responses and both permanently strand the batch.
+                    // `prize_pool == 0` means the DAO returned exactly what
+                    // went in — an economically degenerate batch, reported as
+                    // InvalidArgument. A zero with a positive pool means the
+                    // schedule's weight spread is too wide for it, which is a
+                    // conservation failure of the allocation itself.
+                    return Err(if prize_pool == 0 {
+                        CoreError::InvalidArgument
+                    } else {
+                        CoreError::Conservation
+                    });
                 }
                 let (shard_id, local) = draw.locate(*position)?;
                 prizes.push(PrizeEntitlement {

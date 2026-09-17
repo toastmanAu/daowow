@@ -297,13 +297,19 @@ fn a_claim_sharing_a_winners_shard_but_not_its_position_is_a_non_winner() {
 #[test]
 fn a_non_winner_carrying_payments_is_refused() {
     // Only a drawn ticket can ever have redeemed; anything else is forged.
+    //
+    // `Impossible`, not `StateTransition`: a ticket the draw never selected
+    // cannot have discharged a prize source, so reaching this state means
+    // something upstream is broken rather than that the holder tried to retire
+    // early. The claim script maps the two to different codes precisely so an
+    // operator can tell "try again later" apart from "investigate this".
     let f = fixture(1, true);
     let draw = ComputedDraw::new(&f.cfg, &f.record, &f.schedule).unwrap();
     let args = f.non_winning_claim_args(&draw);
     let state = f.state_with_paid_count(&args, 1);
     assert_eq!(
         retire_decision(&args, &state, &draw, 3),
-        Err(CoreError::StateTransition)
+        Err(CoreError::Impossible)
     );
 }
 

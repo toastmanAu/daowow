@@ -182,9 +182,13 @@ pub fn retire_decision(
             prize_index: *prize_index as u32,
         });
     }
-    // Not drawn: only a drawn ticket can ever have redeemed.
+    // Not drawn: only a drawn ticket can ever have redeemed. Reaching this
+    // with payments recorded is not a caller mistake — it means a source was
+    // discharged against a ticket the draw never selected, so either the draw
+    // or the redemption path is broken. `Impossible`, not `StateTransition`,
+    // so the contract can report it apart from a winner retiring too early.
     if state.paid_count() != 0 {
-        return Err(CoreError::StateTransition);
+        return Err(CoreError::Impossible);
     }
     Ok(RetireDecision::NonWinner)
 }

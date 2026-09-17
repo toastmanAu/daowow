@@ -148,7 +148,11 @@ fn a_success_round_with_zero_realized_yield_is_refused() {
     };
     assert_eq!(
         InitialEntitlements::derive(&f.cfg, &f.record, &f.schedule, &input),
-        Err(CoreError::Conservation)
+        // InvalidArgument, not Conservation: prize_pool is exactly zero, so this
+        // is a degenerate batch rather than an allocation that failed to
+        // conserve. The two are reported apart because both permanently strand
+        // the batch and an operator needs to know which happened.
+        Err(CoreError::InvalidArgument)
     );
 }
 
