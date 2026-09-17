@@ -13,7 +13,8 @@ use daowow_core::accumulator::nonce_key;
 pub use daowow_core::accumulator::smt::host::SmtHost;
 pub use daowow_core::encoding::*;
 pub use daowow_core::hash::Hash32;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 pub const MAX_CYCLES: u64 = 70_000_000;
 pub const SHANNONS: u64 = 100_000_000;
@@ -42,9 +43,83 @@ pub fn bin_dir() -> PathBuf {
 }
 
 pub fn read_bin(name: &str) -> Bytes {
-    std::fs::read(bin_dir().join(name))
-        .expect("contract binary (build with: cargo build --target riscv64imac-unknown-none-elf --release -p <contract>)")
-        .into()
+    let path = bin_dir().join(name);
+    let bytes = std::fs::read(&path).unwrap_or_else(|e| {
+        panic!(
+            "contract binary {name} not readable ({e}); build with: \
+             cargo build --target riscv64imac-unknown-none-elf --release -p {name}"
+        )
+    });
+    assert_binary_is_fresh(name, &path);
+    bytes.into()
+}
+
+/// The newest modification time anywhere under `path`, or `None` if it does
+/// not exist. `target` directories are skipped: they hold build products, not
+/// sources, and recursing into them would be both slow and self-referential.
+fn newest_mtime(path: &Path) -> Option<SystemTime> {
+    let meta = std::fs::metadata(path).ok()?;
+    if meta.is_file() {
+        return meta.modified().ok();
+    }
+    let mut newest: Option<SystemTime> = None;
+    for entry in std::fs::read_dir(path).ok()?.flatten() {
+        if entry.file_name() == "target" {
+            continue;
+        }
+        if let Some(t) = newest_mtime(&entry.path()) {
+            newest = Some(newest.map_or(t, |n| n.max(t)));
+        }
+    }
+    newest
+}
+
+/// Refuse to run a test against a binary older than the sources that produce
+/// it.
+///
+/// `cargo test` in this crate does NOT rebuild the contracts. They are
+/// separate `no_std` crates compiled for riscv64, and this harness loads their
+/// finished ELFs straight off disk with `read_bin`. So editing a contract — or
+/// daowow-core, which links into every one of them — and re-running the suite
+/// silently exercises the PREVIOUS binary: every assertion still passes, and
+/// the green result says nothing whatsoever about the code just written.
+///
+/// That is most dangerous during a mutation round trip, whose whole purpose is
+/// to edit a guard and watch a named test go red. Forget the rebuild and the
+/// test stays green, which reads as "the guard is not pinned" — the safe-
+/// looking direction, and a conclusion drawn from a binary that never
+/// contained the mutation.
+///
+/// mtime rather than a content hash: cargo's own freshness tracking is
+/// mtime-based, and this only has to fail closed. A false positive costs one
+/// rebuild; a false negative costs a wrong verdict about a guard.
+fn assert_binary_is_fresh(name: &str, bin: &Path) {
+    let Ok(built) = std::fs::metadata(bin).and_then(|m| m.modified()) else {
+        return;
+    };
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    // The contract's own crate, plus the two workspace crates that link into
+    // every contract binary.
+    let sources = [
+        root.join("contracts").join(name),
+        root.join("crates/daowow-core/src"),
+        root.join("crates/daowow-contracts-common/src"),
+    ];
+    for src in &sources {
+        let Some(changed) = newest_mtime(src) else {
+            continue;
+        };
+        assert!(
+            changed <= built,
+            "stale contract binary: {name} was built before {} last changed.\n\
+             `cargo test` here does not rebuild contracts, so this run would \
+             exercise the previous binary and prove nothing about the current \
+             source.\n\
+             Rebuild with: cargo build --target riscv64imac-unknown-none-elf \
+             --release -p {name}",
+            src.display()
+        );
+    }
 }
 
 /// Script references recorded in the round config (hash_type = data = 0 for
