@@ -138,3 +138,33 @@ Task 2: minor (deferred): the two guards repeat the `maximum_tickets != 0`
 condition rather than nesting one `if`. Trivial.
 
 Task 2: complete (commits fba6e3a..1a0794b, review clean, 0 fix rounds)
+
+Task 3: implementer DONE — commit 5371b49. Devnet 16/16 in one clean run
+(1455.7s). entry_start 0 -> 1 (devnet epoch length measured at 10 blocks, so
+epoch 1 costs ~10 blocks — comfortably reachable, so Task 1's check now executes
+on a real node rather than being vacuous). Deposit epochs [3,3,3,3,3,3], spread
+0 inside the [2,4] window. Maturity deltas [360,360,360,360,360] — every batch
+at the same D+360 boundary, phase one targeted at D+181, knife edge avoided.
+
+Concern worth the record, raised by the implementer rather than found later: the
+fleet-wide property is asserted ACROSS the 8 run_history invocations, not WITHIN
+one round. The fixture produces a single DAO deposit per round (one non-empty
+shard), so no round with genuinely concurrent multi-batch deposits was
+exercised, and a spread of zero over a one-element set is trivially true.
+Ruling: accept as evidence for the single-batch case and record the limitation
+plainly — do NOT extend the fixture inside gate 1. Multi-batch matters for the
+beta (a single-shard round can still accept several batches, since the keeper
+aggregates in batches and accepted_batches counts per shard), but rehearsing it
+is ALREADY a documented requirement elsewhere: beta-rule-enforcement-audit.md
+line 57 ("Rehearse multi-owner/multi-batch rounds for both durations") and line
+103 ("Multiple owners and batches"). Adding it here would duplicate a later
+gate's evidence at the cost of another 25-minute run.
+Cost if wrong: gate 1's devnet evidence proves the window property for
+single-batch rounds only, and a multi-batch round could in principle spread its
+deposits wider. Bounded by the aggregation window being a config value either
+way, and surfaced to the user rather than buried.
+
+Second note from the run: maturity mining now travels ~360 epochs instead of
+~180 for five histories, roughly doubling that portion of wall-clock. Total
+stayed ~24 min only because devnet epoch length is 10 blocks. A larger epoch
+length would make this suite materially slower.
