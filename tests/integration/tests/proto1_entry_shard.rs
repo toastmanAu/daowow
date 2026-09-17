@@ -72,7 +72,10 @@ fn build_entry_tx(
     // cells
     let (shard_in, _) = world.cell(shard_op);
     let shard_type_script = shard_in.type_().to_opt().unwrap();
-    let (funding_op, _) = world.funding_cell(100_000 * SHANNONS);
+    // Sized to cover the beta's full round: 200 tickets at 1000 CKB is
+    // 200,000 CKB of principal, which the cap-boundary tests below append in a
+    // single batch. The old 100,000 CKB could not fund it.
+    let (funding_op, _) = world.funding_cell(1_000_000 * SHANNONS);
     let (_, participant_lock) = world.always_success();
     let entry_lock_script = world.entry_lock_script(participant_hash);
 
@@ -427,4 +430,70 @@ fn freeze_and_frozen_immutability() {
         .build();
     let err = expect_fail(&mut world.context, &tx_bad);
     println!("frozen mutation rejected: {:?}", err);
+}
+
+/// The beta's approved configuration, per
+/// `docs/superpowers/specs/2026-09-17-beta-rule-enforcement-design.md`:
+/// 1000 CKB a ticket, a 200-ticket round-wide cap, a 50-ticket minimum, and a
+/// single entry shard. The cap is round-wide ONLY at one shard — `shard.rs`
+/// compares one shard's count against `maximum_tickets` — which is why
+/// `RoundConfigV1::validate` refuses a cap with more than one shard.
+fn beta_config(round_id: [u8; 32]) -> RoundConfigV1 {
+    let mut cfg = default_config(round_id, ACC_SMT);
+    cfg.ticket_price = 1000 * SHANNONS;
+    cfg.maximum_tickets = 200;
+    cfg.minimum_tickets = 50;
+    cfg.entry_shard_count = 1;
+    cfg
+}
+
+/// A capped single-shard round can actually be created on chain, and accepts
+/// exactly its cap.
+///
+/// Every other integration and devnet round in this repository is multi-shard
+/// and uncapped, so before this test no on-chain evidence existed that the
+/// beta's own configuration works at all — the cap was proven only by host
+/// unit tests and by the config guard.
+#[test]
+fn the_beta_config_creates_a_round_and_accepts_exactly_its_cap() {
+    let mut world = World::new(ACC_SMT);
+    let cfg = beta_config([0xB7; 32]);
+    assert!(cfg.validate().is_ok(), "the beta config must be valid");
+    let round_op = world.create_round(&cfg);
+    let (shard_op, shard) = world.create_shard(&cfg, 0, 1);
+    let (_, lock) = world.always_success();
+    let ph = World::participant_hash(&lock);
+    let mut host = SmtHost::new();
+
+    // The cap is checked against the whole batch (`base + delta > cap`), so one
+    // entry of 200 tickets exercises the boundary exactly as 200 separate
+    // entries would, without 200 transactions.
+    let entries = [make_entry(&cfg, &shard, &ph, 200, &[0xE1; 32])];
+    let (tx, after) = build_entry_tx(
+        &mut world, &cfg, &round_op, &shard_op, &shard, &mut host, &entries, &ph, 0,
+    );
+    expect_ok(&mut world.context, &tx);
+    assert_eq!(after.ticket_count, 200, "the full cap must be accepted");
+}
+
+/// One ticket over the cap is refused on chain.
+///
+/// This is the assertion the beta's advertised "200 tickets" rests on. It had
+/// no on-chain coverage before: the cap logic was exercised only by a host unit
+/// test at a cap of 10.
+#[test]
+fn the_beta_config_refuses_one_ticket_over_its_cap() {
+    let mut world = World::new(ACC_SMT);
+    let cfg = beta_config([0xB8; 32]);
+    let round_op = world.create_round(&cfg);
+    let (shard_op, shard) = world.create_shard(&cfg, 0, 1);
+    let (_, lock) = world.always_success();
+    let ph = World::participant_hash(&lock);
+    let mut host = SmtHost::new();
+
+    let entries = [make_entry(&cfg, &shard, &ph, 201, &[0xE2; 32])];
+    let (tx, _) = build_entry_tx(
+        &mut world, &cfg, &round_op, &shard_op, &shard, &mut host, &entries, &ph, 0,
+    );
+    expect_fail(&mut world.context, &tx);
 }
