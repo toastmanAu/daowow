@@ -27,6 +27,7 @@ pub mod error;
 pub mod hash;
 pub mod leaf;
 pub mod lifecycle;
+pub mod memento;
 pub mod redemption;
 pub mod schedule;
 pub mod seal;

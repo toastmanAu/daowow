@@ -373,6 +373,18 @@ impl World {
         self.script_for(&r, Bytes::from(args.to_vec()))
     }
 
+    /// Winner memento type script for one ticket (after `create_round`).
+    pub fn memento_type_script(&mut self, shard_id: u32, position: u64) -> Script {
+        let r = self.deps.entry_shard_type;
+        let args = daowow_core::memento::MementoArgs {
+            commitment: self.config_hash,
+            shard_id,
+            position,
+        }
+        .encode();
+        self.script_for(&r, Bytes::from(args.to_vec()))
+    }
+
     pub fn dao_lock_script(&mut self, round_id: &Hash32, batch_id: u64) -> Script {
         self.dao_lock_script_with_digest(round_id, batch_id, &[0; 32])
     }
@@ -584,6 +596,345 @@ pub fn chain_cell(world: &mut World, op: &OutPoint, tx: &TransactionView, out_in
     world
         .context
         .create_cell_with_out_point(op.clone(), output, data);
+}
+
+/// A fully sealed round (every shard frozen, aggregated in a single batch
+/// and closed) plus a canonical entropy record cell dep, for retirement
+/// tests. `total_tickets` must divide evenly across `shards`.
+pub struct SealedRound {
+    pub config_dep: CellDep,
+    pub entropy_dep: CellDep,
+    pub schedule: daowow_core::schedule::PrizeSchedule,
+    pub non_winning_shard: u32,
+    pub non_winning_position: u64,
+    pub winning_shard: u32,
+    pub winning_position: u64,
+    pub prize_index: u32,
+    pub universe: u64,
+    /// `(batch_id, digest)` of every accepted batch across every shard, in the
+    /// exact identities `prize_source` uses — the real obligation universe a
+    /// winner must fully discharge before retiring.
+    pub batches: Vec<(u64, Hash32)>,
+}
+
+/// Raw witness carrying the committed prize schedule, as `retire()` expects
+/// it at `witnesses[0]` of the retiring claim's group input (not wrapped in
+/// a `WitnessArgs`).
+pub fn schedule_witness(
+    schedule: &daowow_core::schedule::PrizeSchedule,
+) -> ckb_testtool::ckb_types::packed::Bytes {
+    pack_pbytes(&schedule.encode())
+}
+
+/// Build a sealed round with `shards` entry shards sharing `total_tickets`
+/// evenly, seal it, and register the canonical entropy record as a cell dep.
+/// Identifies one non-winning and one winning `(shard_id, position)` from the
+/// real computed draw so retirement tests exercise both branches.
+pub fn sealed_round_with_entropy(
+    world: &mut World,
+    shards: u32,
+    total_tickets: u64,
+) -> SealedRound {
+    assert_eq!(
+        total_tickets % shards as u64,
+        0,
+        "sealed_round_with_entropy: total_tickets must divide evenly across shards"
+    );
+    let tickets_per_shard = total_tickets / shards as u64;
+    let schedule = default_prize_schedule();
+    let round_id = daowow_core::hash::ckb_hash256(&[
+        b"claim-retirement-fixture",
+        &shards.to_le_bytes(),
+        &total_tickets.to_le_bytes(),
+    ]);
+    let mut base_cfg = default_config(round_id, ACC_MMR);
+    base_cfg.entry_shard_count = shards;
+    base_cfg.minimum_tickets = 1;
+    base_cfg.prize_schedule_hash = schedule.commitment();
+    let round_op = world.create_round(&base_cfg);
+    let cfg = full_config(&base_cfg, &world.deps);
+
+    let mut ledgers = Vec::new();
+    let mut batches: Vec<(u64, Hash32)> = Vec::new();
+    for shard_id in 0..shards {
+        let entries: Vec<EntryDataV1> = (0..tickets_per_shard)
+            .map(|nonce| EntryDataV1 {
+                round_id: cfg.round_id,
+                shard_id,
+                participant_lock_hash: [0x11; 32],
+                ticket_count: 1,
+                principal: cfg.ticket_price,
+                position_base: nonce,
+                entry_nonce: nonce,
+                entropy_commitment: [nonce as u8; 32],
+            })
+            .collect();
+        let leaves: Vec<Hash32> = entries.iter().map(daowow_core::leaf::entry_leaf).collect();
+        let mut host = daowow_core::accumulator::mmr::host::MmrHost::new();
+        for leaf in &leaves {
+            host.append(leaf).unwrap();
+        }
+        let root = host.root().unwrap();
+        let proofs: Vec<Vec<u8>> = (0..tickets_per_shard)
+            .map(|i| host.membership_proof(i).unwrap())
+            .collect();
+        let proof_refs: Vec<&[u8]> = proofs.iter().map(Vec::as_slice).collect();
+        let frozen = EntryShardDataV1 {
+            round_id: cfg.round_id,
+            shard_id,
+            state: SHARD_STATE_FROZEN,
+            sequence: tickets_per_shard,
+            entry_count: tickets_per_shard,
+            ticket_count: tickets_per_shard,
+            principal_total: tickets_per_shard * cfg.ticket_price,
+            accumulator_root: root,
+        };
+        let capacities = vec![1000 * SHANNONS; tickets_per_shard as usize];
+        let state = daowow_core::lifecycle::AggregationState::new(&cfg, &frozen).unwrap();
+        let (accepted, receipt) = state
+            .accept(&cfg, &entries, &capacities, &proof_refs)
+            .unwrap();
+        batches.push((
+            daowow_core::lifecycle::batch_id(shard_id, 0).unwrap(),
+            receipt.digest,
+        ));
+        let closed = accepted
+            .close(&cfg, daowow_core::epoch::absolute_epoch_since(200).unwrap())
+            .unwrap();
+        ledgers.push(closed);
+    }
+
+    let seal = daowow_core::seal::RoundSeal::new(&cfg, &ledgers).unwrap();
+    let record =
+        daowow_core::seal::EntropyRecord::new(seal, 300, [1; 32], [[2; 32], [3; 32], [4; 32]])
+            .unwrap();
+    let universe = record.seal().total_accepted_batches().unwrap();
+
+    let draw = daowow_core::computed_draw::ComputedDraw::new(&cfg, &record, &schedule).unwrap();
+    let total = draw.total_tickets();
+    let drawn = draw.positions();
+    let (prize_index, winning_global) = drawn[0];
+    let (winning_shard, winning_position) = draw.locate(winning_global).unwrap();
+    let non_winning_global = (0..total)
+        .find(|p| !drawn.iter().any(|(_, g)| g == p))
+        .expect("sealed_round_with_entropy: no non-winning ticket in this fixture");
+    let (non_winning_shard, non_winning_position) = draw.locate(non_winning_global).unwrap();
+
+    let public_lock = world.shard_public_lock();
+    let shard_ref = world.deps.entry_shard_type;
+    let mut entropy_args = cfg.commitment().to_vec();
+    entropy_args.extend_from_slice(&0u32.to_le_bytes());
+    let entropy_type = world.script_for(&shard_ref, Bytes::from(entropy_args));
+    let entropy_op = world.context.create_cell(
+        CellOutputBuilder::default()
+            .capacity(pack_u64(60_000 * SHANNONS))
+            .lock(public_lock)
+            .type_(Some(entropy_type).pack())
+            .build(),
+        Bytes::from(record.encode()),
+    );
+    let entropy_dep = CellDepBuilder::default()
+        .out_point(entropy_op)
+        .dep_type(pack_byte(DepType::Code as u8))
+        .build();
+
+    SealedRound {
+        config_dep: world.round_config_dep(&round_op),
+        entropy_dep,
+        schedule,
+        non_winning_shard,
+        non_winning_position,
+        winning_shard,
+        winning_position,
+        prize_index: prize_index as u32,
+        universe,
+        batches,
+    }
+}
+
+/// Minimum capacity of a memento cell under `lock` (shannons). Mirrors
+/// `claim_cell_capacity`: CKB counts a script as code_hash + hash_type +
+/// args, not its molecule serialization.
+pub fn memento_cell_capacity(lock: &Script) -> u64 {
+    let lock_size = 32 + 1 + lock.args().raw_data().len() as u64;
+    daowow_core::memento::memento_occupied_capacity(lock_size)
+}
+
+/// A claim for `round`'s winning ticket, pre-loaded with a fully paid
+/// `PrizeRedemptionState`: one recorded source per accepted batch of the
+/// sealed round, using the round's real `prize_source` identities (mirrors
+/// the incremental-host pattern in `claim_redemption.rs`). `retire_decision`
+/// requires exactly `paid_count == universe` for a winner to retire.
+pub fn seed_paid_claim(
+    world: &mut World,
+    lock: &Script,
+    round: &SealedRound,
+) -> (OutPoint, daowow_core::claim::ClaimArgs) {
+    let args = daowow_core::claim::ClaimArgs {
+        commitment: world.config_hash,
+        shard_id: round.winning_shard,
+        position: round.winning_position,
+    };
+    let ticket = args.ticket_id();
+    let mut host = SmtHost::new();
+    let mut state = daowow_core::redemption::PrizeRedemptionState::new(ticket);
+    for (i, (batch_id, digest)) in round.batches.iter().enumerate() {
+        let source = daowow_core::redemption::prize_source(&world.config_hash, *batch_id, digest);
+        let key = daowow_core::redemption::prize_obligation_key(&ticket, &source);
+        let absence = host.absence_proof(&[key]).unwrap();
+        let amount = (i as u64 + 1) * SHANNONS;
+        state = state
+            .record_verified_prize(&source, amount, &absence)
+            .unwrap();
+        host.insert(
+            &key,
+            &daowow_core::redemption::prize_payment_leaf(&ticket, &source, amount),
+        )
+        .unwrap();
+    }
+    let type_script = world.claim_type_script(round.winning_shard, round.winning_position);
+    let cell = CellOutputBuilder::default()
+        .capacity(pack_u64(claim_cell_capacity(lock)))
+        .lock(lock.clone())
+        .type_(Some(type_script).pack())
+        .build();
+    let op = world
+        .context
+        .create_cell(cell, Bytes::from(state.encode().to_vec()));
+    (op, args)
+}
+
+/// A claim for `round.winning_shard/position`, pre-loaded with `count`
+/// recorded sources (out of the round's real obligation universe), using the
+/// round's real `prize_source` identities in order. `count < round.universe`
+/// leaves the claim owing the rest, so `retire_decision` refuses it as an
+/// incomplete winner (`CLAIM_ERROR_INCOMPLETE`); `count == round.universe`
+/// matches `seed_paid_claim`'s fully discharged winner.
+pub fn seed_claim_with_paid_count(
+    world: &mut World,
+    lock: &Script,
+    round: &SealedRound,
+    count: u64,
+) -> (OutPoint, daowow_core::claim::ClaimArgs) {
+    let args = daowow_core::claim::ClaimArgs {
+        commitment: world.config_hash,
+        shard_id: round.winning_shard,
+        position: round.winning_position,
+    };
+    let ticket = args.ticket_id();
+    let mut host = SmtHost::new();
+    let mut state = daowow_core::redemption::PrizeRedemptionState::new(ticket);
+    for (i, (batch_id, digest)) in round.batches.iter().take(count as usize).enumerate() {
+        let source = daowow_core::redemption::prize_source(&world.config_hash, *batch_id, digest);
+        let key = daowow_core::redemption::prize_obligation_key(&ticket, &source);
+        let absence = host.absence_proof(&[key]).unwrap();
+        let amount = (i as u64 + 1) * SHANNONS;
+        state = state
+            .record_verified_prize(&source, amount, &absence)
+            .unwrap();
+        host.insert(
+            &key,
+            &daowow_core::redemption::prize_payment_leaf(&ticket, &source, amount),
+        )
+        .unwrap();
+    }
+    let type_script = world.claim_type_script(round.winning_shard, round.winning_position);
+    let cell = CellOutputBuilder::default()
+        .capacity(pack_u64(claim_cell_capacity(lock)))
+        .lock(lock.clone())
+        .type_(Some(type_script).pack())
+        .build();
+    let op = world
+        .context
+        .create_cell(cell, Bytes::from(state.encode().to_vec()));
+    (op, args)
+}
+
+/// Retire `claim_op` (a fully paid winner) with no successor, minting its
+/// memento at `round.winning_shard/position` under `lock`. Mirrors the
+/// accepted non-winner retirement shape, adding the memento output the
+/// claim's own script requires of a winner.
+pub fn retire_with_memento(
+    world: &mut World,
+    round: &SealedRound,
+    lock: &Script,
+    claim_op: OutPoint,
+    args: &daowow_core::claim::ClaimArgs,
+) -> TransactionView {
+    let (_, claim_data) = world.cell(&claim_op);
+    let state = daowow_core::redemption::PrizeRedemptionState::decode(&claim_data).unwrap();
+    let memento_type = world.memento_type_script(args.shard_id, args.position);
+    let memento_data = daowow_core::memento::MementoData {
+        renderer_version: daowow_core::memento::MEMENTO_RENDERER_V1,
+        prize_index: round.prize_index,
+        paid_count: state.paid_count(),
+        paid_total: state.paid_total(),
+    }
+    .encode();
+    TransactionBuilder::default()
+        .input(CellInput::new_builder().previous_output(claim_op).build())
+        .output(
+            CellOutputBuilder::default()
+                .capacity(pack_u64(memento_cell_capacity(lock)))
+                .lock(lock.clone())
+                .type_(Some(memento_type).pack())
+                .build(),
+        )
+        .output_data(pack_pbytes(&memento_data))
+        .cell_dep(round.config_dep.clone())
+        .cell_dep(round.entropy_dep.clone())
+        .witness(schedule_witness(&round.schedule))
+        .build()
+}
+
+/// A live memento cell under `lock`, independent of any retiring claim.
+/// Transfer/burn exercise only the memento's own group (content correctness
+/// against a draw is the claim script's job, proven by `retire_with_memento`).
+pub fn seed_memento(world: &mut World, lock: &Script, round: &SealedRound) -> OutPoint {
+    let memento_type = world.memento_type_script(round.winning_shard, round.winning_position);
+    let data = daowow_core::memento::MementoData {
+        renderer_version: daowow_core::memento::MEMENTO_RENDERER_V1,
+        prize_index: round.prize_index,
+        paid_count: 1,
+        paid_total: SHANNONS,
+    }
+    .encode();
+    let cell = CellOutputBuilder::default()
+        .capacity(pack_u64(memento_cell_capacity(lock)))
+        .lock(lock.clone())
+        .type_(Some(memento_type).pack())
+        .build();
+    world.context.create_cell(cell, Bytes::from(data.to_vec()))
+}
+
+/// Transfer `memento_op` under `lock`, keeping its data byte-identical (the
+/// memento's only transfer requirement; ownership authorization is the
+/// cell's separate lock script, not this type script).
+pub fn transfer_memento(world: &mut World, lock: &Script, memento_op: OutPoint) -> TransactionView {
+    let (cell, data) = world.cell(&memento_op);
+    TransactionBuilder::default()
+        .input(CellInput::new_builder().previous_output(memento_op).build())
+        .output(cell.as_builder().lock(lock.clone()).build())
+        .output_data(data.pack())
+        .build()
+}
+
+/// Burn `memento_op`: consume with no successor, recovering its capacity to
+/// a plain cell. Free — a memento carries no rights to discharge.
+pub fn burn_memento(world: &mut World, memento_op: OutPoint) -> TransactionView {
+    let (cell, _) = world.cell(&memento_op);
+    let capacity: u64 = cell.capacity().unpack();
+    let (_, plain_lock) = world.always_success();
+    TransactionBuilder::default()
+        .input(CellInput::new_builder().previous_output(memento_op).build())
+        .output(
+            CellOutputBuilder::default()
+                .capacity(pack_u64(capacity))
+                .lock(plain_lock)
+                .build(),
+        )
+        .output_data(Bytes::new().pack())
+        .build()
 }
 
 pub fn expect_fail(context: &mut Context, tx: &TransactionView) -> ckb_testtool::ckb_error::Error {

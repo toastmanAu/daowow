@@ -40,25 +40,29 @@ content check to the claim.
 - CKB executes script groups in script-hash order, not input order. When two
   scripts would both reject, the reported code is hash luck. To pin a guard in
   script A, construct the transaction so script B is consistent.
-- `VIABILITY_RATIO = 1_000_000`. Pool bar allowance is `cfg.ticket_price / VIABILITY_RATIO`.
+- `MAX_POOL_BAR = 1_000_000` shannons (0.01 CKB). A round draws only if
+  `schedule.min_viable_pool(total) <= MAX_POOL_BAR`. The allowance is an absolute
+  constant and must NOT be derived from `cfg.ticket_price`: `ticket_price` is at
+  offset 36 of `RoundConfigV1::encode()`, so it is inside `commitment()` and
+  therefore inside the draw seed — changing it reshuffles which tickets win.
 - `MEMENTO_TAG = 6`, `MEMENTO_ARGS_SIZE = 45`, `MEMENTO_DATA_SIZE = 54`,
   `MEMENTO_RENDERER_V1 = 1`.
 - `WINNER_TEMPLATE_SHA256 = sha256(ticketWinner.png) =
   de98837659f7b6a7abc1125a12ec0dd64dc0cc053d93f48007b1459e6f5cb46d`.
 - Commit messages are `<type>: <description>` and end with
   `Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>`.
-- Existing fixtures use `ticket_price = 100 * SHANNONS = 10_000_000_000` and
-  schedules `[1; 32]` (bar 32) and `[4, 3, 2, 1]` (bar 10) against an allowance
-  of 10_000. All pass the viability gate — this was checked before writing this
-  plan. A test that needs an unviable round must construct a pathological
-  schedule on purpose.
+- Every existing fixture passes the gate unchanged, checked before dispatch:
+  the core `computed_draw` fixture's `[4, 3, 2, 1]` has bar 10, and the
+  integration harness's `[1; 32]` has bar 32 (bar 8 when truncated to 8 tickets),
+  all far below `MAX_POOL_BAR`. NO fixture needs editing. A test that needs an
+  unviable round must construct a pathological schedule on purpose.
 
 ## File structure
 
 | File | Responsibility |
 | --- | --- |
 | `crates/daowow-core/src/schedule.rs` | add `min_viable_pool` beside `allocate` |
-| `crates/daowow-core/src/computed_draw.rs` | add `VIABILITY_RATIO` and the success condition |
+| `crates/daowow-core/src/computed_draw.rs` | add `MAX_POOL_BAR` and the success condition |
 | `crates/daowow-core/src/seal.rs` | add `RoundSeal::total_accepted_batches` |
 | `crates/daowow-core/src/entitlements.rs` | reject a zero allocation |
 | `crates/daowow-core/src/memento.rs` (new) | `MementoArgs`, `MementoData`, capacity, template constant |
@@ -176,8 +180,8 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 - Test: `crates/daowow-core/src/computed_draw.rs` `mod tests`
 
 **Interfaces:**
-- Consumes: `PrizeSchedule::min_viable_pool` (Task 1), `RoundConfigV1::ticket_price`
-- Produces: `computed_draw::VIABILITY_RATIO: u64`; `ComputedDraw::is_success()` now
+- Consumes: `PrizeSchedule::min_viable_pool` (Task 1)
+- Produces: `computed_draw::MAX_POOL_BAR: u64`; `ComputedDraw::is_success()` now
   returns false for an unviable schedule
 
 - [ ] **Step 1: Write the failing test**
@@ -188,10 +192,11 @@ The fixture in `computed_draw.rs` `mod tests` builds `cfg`, `record` and a
 ```rust
     #[test]
     fn an_unyieldable_schedule_voids_the_round() {
-        let f = Fixture::build(4, 8);
-        // Sane schedule: bar 10 against allowance ticket_price / 1_000_000.
+        let f = fixture(1, true);
+        // Sane schedule: bar 10, far below MAX_POOL_BAR. This is the shipped
+        // fixture's own schedule, so the gate must leave it drawing.
         let sane = PrizeSchedule::new(&[4, 3, 2, 1]).unwrap();
-        assert!(sane.min_viable_pool(f.total_tickets()).unwrap() <= f.cfg.ticket_price / VIABILITY_RATIO);
+        assert!(sane.min_viable_pool(f.total_tickets()).unwrap() <= MAX_POOL_BAR);
 
         // Pathological spread: bar exceeds the allowance, so the round must fail.
         let mut wide_weights = [1u64; 32];
@@ -212,7 +217,7 @@ The fixture in `computed_draw.rs` `mod tests` builds `cfg`, `record` and a
     fn viability_is_round_level_and_not_per_batch() {
         // Same (cfg, record, schedule) must give the same verdict every call,
         // because settlement and retirement both re-derive it independently.
-        let f = Fixture::build(4, 8);
+        let f = fixture(1, true);
         let a = ComputedDraw::new(&f.cfg, &f.record, &f.schedule).unwrap();
         let b = ComputedDraw::new(&f.cfg, &f.record, &f.schedule).unwrap();
         assert_eq!(a.is_success(), b.is_success());
@@ -220,8 +225,11 @@ The fixture in `computed_draw.rs` `mod tests` builds `cfg`, `record` and a
     }
 ```
 
-If `Fixture` has no `record_for(&cfg)` or `total_tickets()` helper, add them to
-the fixture in the same module — `record_for` rebuilds the `EntropyRecord` for a
+The fixture is the free function `fixture(minimum: u64, accept: bool)` in
+`computed_draw::tests`, returning `Fixture { cfg, record, schedule, entries, proofs }`.
+Add `record_for(&self, cfg: &RoundConfigV1) -> EntropyRecord`,
+`total_tickets(&self) -> u64` and `fixture_unviable(minimum, accept)` to that
+module — `record_for` rebuilds the `EntropyRecord` for a
 config whose `prize_schedule_hash` differs, and `total_tickets` returns the sum
 of the fixture's accepted ticket counts. Do not change the existing fixture's
 default behaviour.
@@ -229,7 +237,7 @@ default behaviour.
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `cargo test -p daowow-core --lib computed_draw::tests -- --nocapture`
-Expected: FAIL, `cannot find value 'VIABILITY_RATIO'`, and after adding the
+Expected: FAIL, `cannot find value 'MAX_POOL_BAR'`, and after adding the
 constant, `unyieldable schedule must not draw`.
 
 - [ ] **Step 3: Write the implementation**
@@ -238,12 +246,21 @@ Add near the top of `computed_draw.rs`, below the imports:
 
 ```rust
 /// A round draws only if its committed schedule can pay every drawn position a
-/// positive amount from the smallest batch the round can produce. The smallest
-/// batch is one ticket (`AggregationState::accept` rejects an empty batch and
-/// forces `principal == ticket_count * ticket_price`), so the worst-case pool is
-/// the DAO yield on `ticket_price`. This ratio is the economic assumption: that
-/// a full term yields more than one part per million of principal.
-pub const VIABILITY_RATIO: u64 = 1_000_000;
+/// positive amount out of a pool this small. `min_viable_pool` is the exact
+/// zero-free threshold for a schedule, so capping it caps how wide the weight
+/// spread may be relative to what any batch will realistically yield.
+///
+/// 0.01 CKB. The smallest batch a round can produce is one ticket
+/// (`AggregationState::accept` rejects an empty batch), and a realistic ticket
+/// funds at least its own 220 CKB claim cell, whose DAO compensation over a full
+/// term runs to tens of millions of shannons — roughly twenty times this bound.
+///
+/// Deliberately an absolute constant rather than a fraction of
+/// `cfg.ticket_price`: `ticket_price` sits at offset 36 of
+/// `RoundConfigV1::encode()`, so it is inside `commitment()` and therefore inside
+/// the draw seed. Deriving the allowance from it would make the viability of a
+/// round depend on a value that also decides which tickets win.
+pub const MAX_POOL_BAR: u64 = 1_000_000;
 ```
 
 Then replace the success condition at line 57:
@@ -256,7 +273,7 @@ Then replace the success condition at line 57:
         // only, so every batch and retirement reach the same verdict.
         if total != 0
             && total >= cfg.minimum_tickets
-            && schedule.min_viable_pool(total)? <= cfg.ticket_price / VIABILITY_RATIO
+            && schedule.min_viable_pool(total)? <= MAX_POOL_BAR
         {
             positions = vec![(0, 0); schedule.weights_for(total)?.len()];
             crate::draw::draw_positions(&seed, total, positions.len() as u64, &mut positions)?;
@@ -266,10 +283,12 @@ Then replace the success condition at line 57:
 - [ ] **Step 4: Run the whole core suite**
 
 Run: `cargo test -p daowow-core --lib`
-Expected: PASS. If an existing draw or entitlement test now sees a failed round,
-check its schedule against `min_viable_pool` before assuming a regression —
-per Global Constraints the shipped fixtures all pass the bar, so a failure means
-that test introduced its own schedule.
+Expected: PASS, with the same test count as before your change plus your two new
+tests. NO existing test should change behaviour: every shipped fixture's bar
+(10 for the core fixture, 32 for the integration harness) is far below
+`MAX_POOL_BAR`, which was verified before this task was dispatched. If an
+existing test DOES flip to a failed round, stop and report it — that means a
+fixture's schedule is wider than believed, not that the test needs updating.
 
 - [ ] **Step 5: Check no_std and clippy**
 
@@ -344,9 +363,13 @@ In `entitlements.rs`, replace the skip at line 79:
                 // A zero here can never be discharged: record_verified_prize
                 // rejects amount == 0, and the only other evidence the batch
                 // owed this ticket nothing is a funding cell the final drain
-                // consumes. The viability gate in ComputedDraw makes this
-                // unreachable for a round drawn under it; configs predating
-                // that gate still exist, so refuse rather than skip.
+                // consumes. MAX_POOL_BAR removes the STRUCTURAL case at the
+                // draw -- a weight spread too wide for any realistic pool --
+                // but not this guard: yield is unknown at the draw, so a
+                // gate-passing round still trips it when prize_pool == 0, and
+                // pre-gate configs exist. The retirement universe counts such
+                // a batch either way, so tolerating a zero would leave every
+                // winner of that round unretirable.
                 if amount == 0 {
                     return Err(CoreError::Conservation);
                 }
@@ -716,7 +739,9 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 - Test: `crates/daowow-core/src/claim/tests.rs`
 
 **Interfaces:**
-- Consumes: `ComputedDraw::{positions, locate}` (Task 2), `RoundSeal::total_accepted_batches` (Task 4)
+- Consumes: `ComputedDraw::{positions, locate}` (Task 2). It does NOT call
+  `total_accepted_batches`: the universe arrives as the `universe: u64`
+  parameter, and Task 7's contract is what reads it off the seal.
 - Produces: `RetireDecision { NonWinner, Winner { prize_index: u32 } }` and
   `retire_decision(args: &ClaimArgs, state: &PrizeRedemptionState, draw: &ComputedDraw<'_>, universe: u64) -> Result<RetireDecision, CoreError>`
 
@@ -730,7 +755,7 @@ Add to `crates/daowow-core/src/claim/tests.rs`. Build the draw with the
 
     #[test]
     fn a_non_winner_retires_with_nothing_paid() {
-        let f = Fixture::build(4, 8);
+        let f = fixture(1, true);
         let draw = ComputedDraw::new(&f.cfg, &f.record, &f.schedule).unwrap();
         let args = f.non_winning_claim_args(&draw);
         let state = PrizeRedemptionState::new(args.ticket_id());
@@ -739,7 +764,7 @@ Add to `crates/daowow-core/src/claim/tests.rs`. Build the draw with the
 
     #[test]
     fn a_winner_retires_only_when_every_batch_is_discharged() {
-        let f = Fixture::build(4, 8);
+        let f = fixture(1, true);
         let draw = ComputedDraw::new(&f.cfg, &f.record, &f.schedule).unwrap();
         let (args, prize_index) = f.winning_claim_args(&draw);
         let state = f.state_with_paid_count(&args, 3);
@@ -757,7 +782,7 @@ Add to `crates/daowow-core/src/claim/tests.rs`. Build the draw with the
     #[test]
     fn a_non_winner_carrying_payments_is_refused() {
         // Only a drawn ticket can ever have redeemed; anything else is forged.
-        let f = Fixture::build(4, 8);
+        let f = fixture(1, true);
         let draw = ComputedDraw::new(&f.cfg, &f.record, &f.schedule).unwrap();
         let args = f.non_winning_claim_args(&draw);
         let state = f.state_with_paid_count(&args, 1);
@@ -766,7 +791,7 @@ Add to `crates/daowow-core/src/claim/tests.rs`. Build the draw with the
 
     #[test]
     fn state_belonging_to_another_ticket_is_refused() {
-        let f = Fixture::build(4, 8);
+        let f = fixture(1, true);
         let draw = ComputedDraw::new(&f.cfg, &f.record, &f.schedule).unwrap();
         let args = f.non_winning_claim_args(&draw);
         let state = PrizeRedemptionState::new([0xAB; 32]);
@@ -775,7 +800,7 @@ Add to `crates/daowow-core/src/claim/tests.rs`. Build the draw with the
 
     #[test]
     fn every_claim_of_a_voided_round_is_a_non_winner() {
-        let f = Fixture::build_unviable(4, 8);
+        let f = fixture_unviable(1, true);
         let draw = ComputedDraw::new(&f.cfg, &f.record, &f.schedule).unwrap();
         assert!(!draw.is_success());
         let args = f.any_claim_args();
@@ -784,9 +809,10 @@ Add to `crates/daowow-core/src/claim/tests.rs`. Build the draw with the
     }
 ```
 
-Add the fixture helpers `non_winning_claim_args`, `winning_claim_args`,
-`state_with_paid_count`, `any_claim_args` and `build_unviable` to
-`computed_draw::tests::Fixture`, making it `pub(crate)` where needed.
+Add `non_winning_claim_args`, `winning_claim_args`, `state_with_paid_count`,
+`any_claim_args` and `fixture_unviable` to `computed_draw::tests`, making each
+`pub(crate)`. The fixture is the free function `fixture(minimum, accept)`, not an
+associated constructor.
 `state_with_paid_count` builds a state by calling `record_verified_prize`
 `n` times with distinct synthetic sources and an SMT absence proof from the
 host accumulator, mirroring how `redemption/tests.rs` constructs paid states.
@@ -1412,7 +1438,8 @@ because they only went red together.
 | viability gate | drop the `min_viable_pool` term | `an_unyieldable_schedule_voids_the_round` |
 | zero-allocation refusal | restore `continue` | `a_batch_allocating_zero_to_a_drawn_position_is_refused` |
 | memento count for a winner | allow `found != 1` | `a_winner_retiring_with_no_memento_is_refused` |
-| memento duplicate check | drop the `found > 1` branch | `two_mementos_for_one_retiring_claim_are_refused` |
+| memento group-size guard | drop the `load_cell(1, Group*)` check | `two_mementos_of_one_identity_are_refused` |
+| claim-side memento duplicate (`found > 1`) | — | **UNPINNABLE, do not probe.** Two identical-args mementos are necessarily one script group, so the memento group-size guard fires too and the reported code is script-hash luck. Deliberate defence in depth; the design spec says so explicitly. Record it as unpinned rather than hunting for a test. |
 | memento lock equality | drop the lock comparison | `a_memento_locked_to_a_stranger_is_refused` |
 | memento data equality | drop the `data != expected` branch | `a_memento_with_the_wrong_winnings_is_refused` |
 | memento mint claim-input count | accept any count | `a_memento_minted_with_no_retiring_claim_is_refused` |

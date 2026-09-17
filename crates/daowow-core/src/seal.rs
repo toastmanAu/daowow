@@ -133,6 +133,26 @@ impl RoundSeal {
         self.ledgers.get(shard_id as usize)
     }
 
+    /// The complete prize-obligation universe for any winning ticket of this
+    /// round, i.e. a winner's discharged-source count equals this when
+    /// nothing is left — but only because every batch of every shard is
+    /// guaranteed to owe every winner a positive amount, and that guarantee
+    /// is not a property of `RoundSeal` itself. It is enforced in
+    /// `entitlements.rs` (the `amount == 0` rejection around line 94), which
+    /// refuses to accept a batch that allocates any drawn position zero. If
+    /// that rejection were ever weakened, this count would stop being a
+    /// sound universe without anything here changing.
+    /// Only meaningful for a sealed round; `RoundSeal::new` guarantees closure.
+    pub fn total_accepted_batches(&self) -> Result<u64, CoreError> {
+        let mut total = 0u64;
+        for ledger in &self.ledgers {
+            total = total
+                .checked_add(ledger.accepted_batches())
+                .ok_or(CoreError::Overflow)?;
+        }
+        Ok(total)
+    }
+
     /// Three entropy heights followed by earliest finalization height.
     /// The caller must authenticate actual seal inclusion and each header;
     /// arithmetic alone proves neither chain membership nor maturity.
@@ -144,5 +164,104 @@ impl RoundSeal {
                 .ok_or(CoreError::Overflow)?;
         }
         Ok(heights)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::accumulator::mmr::host::MmrHost;
+    use crate::encoding::{EntryDataV1, EntryShardDataV1, ScriptRef, ACC_MMR, SHARD_STATE_FROZEN};
+    use crate::epoch::ABSOLUTE_EPOCH_FLAG;
+    use crate::leaf::entry_leaf;
+
+    /// Build one closed `AggregationState` per entry of `counts`, each with
+    /// exactly that many accepted batches (one entry per batch, one ticket
+    /// per entry) against a frozen shard sized to match. A `0` entry yields a
+    /// closed, never-accepted shard rather than being skipped, matching
+    /// `AggregationState::decode`'s `(accepted_entries == 0) !=
+    /// (accepted_batches == 0)` invariant at both ends.
+    fn closed_ledgers_with_batches(counts: &[u64]) -> (RoundConfigV1, Vec<AggregationState>) {
+        let script = ScriptRef {
+            code_hash: [1; 32],
+            hash_type: 2,
+        };
+        let cfg = RoundConfigV1 {
+            version: 1,
+            round_id: [7; 32],
+            ticket_price: 100,
+            minimum_tickets: 1,
+            maximum_tickets: 0,
+            entry_start: 0,
+            entry_end: 10,
+            aggregation_deadline: 20,
+            dao_term_periods: 1,
+            entry_shard_count: counts.len() as u32,
+            prize_schedule_hash: [2; 32],
+            fee_policy_hash: [0; 32],
+            keeper_policy_hash: [0; 32],
+            flags: 0,
+            accumulator_id: ACC_MMR,
+            entry_lock: script,
+            dao_lock: script,
+            settlement_type: script,
+            entry_shard_type: script,
+            dao_type: script,
+        };
+        let mut ledgers = Vec::new();
+        for (shard_id, &count) in counts.iter().enumerate() {
+            let shard_id = shard_id as u32;
+            let entries: Vec<_> = (0..count)
+                .map(|nonce| EntryDataV1 {
+                    round_id: cfg.round_id,
+                    shard_id,
+                    participant_lock_hash: [9; 32],
+                    ticket_count: 1,
+                    principal: cfg.ticket_price,
+                    position_base: nonce,
+                    entry_nonce: nonce,
+                    entropy_commitment: [nonce as u8; 32],
+                })
+                .collect();
+            let mut tree = MmrHost::new();
+            for entry in &entries {
+                tree.append(&entry_leaf(entry)).unwrap();
+            }
+            let frozen = EntryShardDataV1 {
+                round_id: cfg.round_id,
+                shard_id,
+                state: SHARD_STATE_FROZEN,
+                sequence: count,
+                entry_count: count,
+                ticket_count: count,
+                principal_total: count * cfg.ticket_price,
+                accumulator_root: tree.root().unwrap(),
+            };
+            let mut ledger = AggregationState::new(&cfg, &frozen).unwrap();
+            for (nonce, entry) in entries.iter().enumerate() {
+                let proof = tree.membership_proof(nonce as u64).unwrap();
+                ledger = ledger
+                    .accept(&cfg, core::slice::from_ref(entry), &[150], &[&proof])
+                    .unwrap()
+                    .0;
+            }
+            assert_eq!(ledger.accepted_batches(), count);
+            ledgers.push(ledger.close(&cfg, ABSOLUTE_EPOCH_FLAG | 10).unwrap());
+        }
+        (cfg, ledgers)
+    }
+
+    #[test]
+    fn total_accepted_batches_sums_every_shard() {
+        let (cfg, ledgers) = closed_ledgers_with_batches(&[3, 0, 5, 1]);
+        let seal = RoundSeal::new(&cfg, &ledgers).unwrap();
+        assert_eq!(seal.total_accepted_batches(), Ok(9));
+    }
+
+    #[test]
+    fn total_accepted_batches_is_zero_for_an_empty_round() {
+        let (cfg, ledgers) = closed_ledgers_with_batches(&[0, 0, 0, 0]);
+        let seal = RoundSeal::new(&cfg, &ledgers).unwrap();
+        assert_eq!(seal.total_accepted_batches(), Ok(0));
     }
 }

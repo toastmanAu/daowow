@@ -76,8 +76,23 @@ impl InitialEntitlements {
                 if *prize_index != i as u64 {
                     return Err(CoreError::StateTransition);
                 }
+                // A zero here can never be discharged: record_verified_prize
+                // rejects amount == 0, and the only other evidence the batch
+                // owed this ticket nothing is a funding cell the final drain
+                // consumes. The seal's accepted-batch count retires this
+                // batch regardless, so a tolerated zero would leave its
+                // winner permanently unretirable.
+                //
+                // The draw-time MAX_POOL_BAR gate only rules out a schedule
+                // whose weight spread is too wide for any realistic pool
+                // (some positions zero while others are positive) — it
+                // cannot know the realized DAO yield, which matures after
+                // the draw. So this still fires on a gate-passing round
+                // whenever realized yield exactly matches deposited capital
+                // (prize_pool == 0), and it still covers configs predating
+                // the gate.
                 if amount == 0 {
-                    continue;
+                    return Err(CoreError::Conservation);
                 }
                 let (shard_id, local) = draw.locate(*position)?;
                 prizes.push(PrizeEntitlement {

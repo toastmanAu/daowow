@@ -330,6 +330,34 @@ fn main() {
         .unwrap();
         let mut after_redeem = funding;
         after_redeem.prize_paid = funding.prize_pool;
+        // Retirement fixtures: the sealed round (config + entropy record cell
+        // deps, already assembled by the Python harness) plus the raw
+        // committed schedule bytes `retire()` expects as the group input's
+        // own witness (not wrapped in a WitnessArgs, unlike the round-creation
+        // witness above). The winning ticket's memento content is fully
+        // determined here, where the real draw and the post-redemption
+        // PrizeRedemptionState are already in hand.
+        let draw = daowow_core::computed_draw::ComputedDraw::new(
+            &cfg,
+            record.as_ref().unwrap(),
+            &schedule,
+        )
+        .unwrap();
+        assert_eq!(draw.positions().len(), 1);
+        let (rank, _global_position) = draw.positions()[0];
+        let memento_args = daowow_core::memento::MementoArgs {
+            commitment: cfg.commitment(),
+            shard_id: 0,
+            position: 0,
+        };
+        let memento_data = daowow_core::memento::MementoData {
+            renderer_version: daowow_core::memento::MEMENTO_RENDERER_V1,
+            prize_index: rank as u32,
+            paid_count: claim_after.paid_count(),
+            paid_total: claim_after.paid_total(),
+        };
+        let memento_lock_size = 32 + 1 + participant.args().raw_data().len() as u64;
+        let memento_capacity = daowow_core::memento::memento_occupied_capacity(memento_lock_size);
         Some(
             json!({"data": hex(&funding.encode()), "type": script(cfg.settlement_type, &funding_args),
             "lock": script(cfg.settlement_type, &[0]), "witness": hex(funding_witness.as_slice()),
@@ -342,6 +370,14 @@ fn main() {
                 "amount": prize.amount,
                 "claim_input_index": 1,
                 "payment_output_index": 2,
+            },
+            "retirement": {
+                "schedule_raw": hex(&schedule.encode()),
+                "memento": {
+                    "type": script(cfg.entry_shard_type, &memento_args.encode()),
+                    "data": hex(&memento_data.encode()),
+                    "capacity": format!("0x{memento_capacity:x}"),
+                }
             }}),
         )
     } else {

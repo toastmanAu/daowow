@@ -3,7 +3,8 @@
 Date: 2026-09-16. Status: design for user review. Decisions recorded here were
 made by the user on 2026-09-16: a round whose committed schedule cannot yield a
 positive prize for every drawn position is voided at the draw rather than
-discovered at settlement, and a batch may not allocate a zero prize to a drawn
+discovered at settlement (the viability bound became an absolute constant during
+implementation — see below), and a batch may not allocate a zero prize to a drawn
 position; retirement is its own transaction rather than riding the final
 redemption; the memento is a new args tag on `entry-shard-type` rather than a
 separate binary; the memento's data is the self-contained 54-byte layout below.
@@ -54,35 +55,50 @@ Call that the **pool bar**. It is a closed form over the committed schedule, not
 a simulation. For the `[40, 25, 20, 10, 5]` schedule the bar is 20 shannons; for
 a pathological `[1, 1, 1000]` it is 1002.
 
-Every batch's pool is the DAO yield on at least one ticket price:
-`AggregationState::accept` rejects an empty batch and requires
-`principal == ticket_count * ticket_price` with `ticket_count >= 1`, and
-`prize_pool = realized_total - input_capacity` where `input_capacity >= principal`.
-So the worst case over every batch a round can produce is a pure function of the
-schedule and `ticket_price`, knowable before any deposit matures.
-
 `ComputedDraw::new` gains that as a second success condition beside the existing
 `total >= cfg.minimum_tickets`:
 
 ```
-viable  <=>  schedule.min_viable_pool(total_tickets) <= cfg.ticket_price / VIABILITY_RATIO
+viable  <=>  schedule.min_viable_pool(total_tickets) <= MAX_POOL_BAR
 ```
 
-with `VIABILITY_RATIO = 1_000_000`. A round that is not viable draws no
-positions and is a **failed round** — the existing, already-tested void path: no
-prizes are owed, depositors recover principal and yield through the
+with `MAX_POOL_BAR = 1_000_000` shannons (0.01 CKB). A round that is not viable
+draws no positions and is a **failed round** — the existing, already-tested void
+path: no prizes are owed, depositors recover principal and yield through the
 participant-keyed path untouched, and every claim retires immediately as a
 non-winner. No capacity is stranded and no partial payment can have happened,
-because the decision is derived from round-level data only (`total_tickets`, the
-committed schedule, `ticket_price`) and is therefore identical for every batch
-and for retirement. A round cannot pay prizes from one batch and then discover
-another is unyieldable.
+because the decision is derived from round-level data only (`total_tickets` and
+the committed schedule) and is therefore identical for every batch and for
+retirement. A round cannot pay prizes from one batch and then discover another
+is unyieldable.
 
-The ratio is where the economic assumption lives, and it is an assumption, not a
-theorem: it asserts that DAO compensation over a full term exceeds one part per
-million of the deposited principal. At a 100 CKB ticket it permits a pool bar of
-10,000 shannons against a realistic term yield of roughly 0.2 to 0.3 per cent —
-about a 2,000-fold margin. Changing the ratio is a one-constant change.
+The bound is deliberately an absolute constant rather than a fraction of
+`cfg.ticket_price`. An earlier draft of this design used
+`ticket_price / 1_000_000`, which is wrong for a reason worth recording:
+`ticket_price` sits at offset 36 of `RoundConfigV1::encode()`, so it is inside
+`commitment()` and therefore inside the draw seed
+`H("DAOWOW_AUTHENTICATED_DRAW_V1" ‖ commitment ‖ record)`. Deriving the
+viability allowance from it would make whether a round draws depend on a value
+that also decides which tickets win, and would make any change to a ticket price
+reshuffle the draw rather than rescale it.
+
+The economic assumption is now explicit rather than hidden in a ratio: every
+batch a round can produce yields more than 0.01 CKB. The smallest batch is one
+ticket — `AggregationState::accept` rejects an empty batch and forces
+`principal == ticket_count * ticket_price` with `ticket_count >= 1` — and a
+realistic ticket funds at least its own 220 CKB claim cell, whose DAO
+compensation over a full term runs to tens of millions of shannons, roughly
+twenty times the bound. Every schedule in the repository today sits far below
+it: the core draw fixture's `[4, 3, 2, 1]` has bar 10 and the integration
+harness's `[1; 32]` has bar 32.
+
+What this bound does NOT do is adapt to an unusually small ticket price. A round
+priced below the claim-cell floor could still produce a batch whose pool falls
+under its schedule's bar. That costs nothing in safety — part two below still
+refuses such a batch, so the retirement count argument holds either way — and
+costs only that such a round would strand a batch rather than void cleanly. A
+future `RoundConfigV1` version that commits a minimum ticket price would close
+it; this design does not add a config field for it.
 
 This gate cannot live in `RoundConfigV1::validate()` or in `round-type`:
 the config carries `prize_schedule_hash`, not the weights, and the schedule
@@ -109,6 +125,31 @@ statement of what it guarantees.
 The guard must test the computed allocation, not the pool size: a pool of at
 least one shannon per position is **not** sufficient, because weights
 `[1, 1, 1000]` with a pool of `3` allocate `[1, 0, 2]`.
+
+The guard is unconditional on `amount == 0`, which also refuses a batch whose
+realized yield is exactly its deposited capacity — `prize_pool == 0`, so every
+drawn position allocates zero. That case was previously tolerated by deriving a
+funding cell with `prize_count == 0` and an empty prize list. It cannot be
+tolerated now, and the reason is the same one that motivates the guard: the
+obligation universe is `Σ accepted_batches` from the seal, which counts a
+zero-yield batch like any other, while a winner has no positive prize to record
+against it. `paid_count` could never reach the universe, and every winner of that
+round would be permanently unretirable.
+
+This is the one place the design cannot offer a graceful void. A round's
+viability is decidable at the draw; a single batch's realized yield is not
+knowable until it matures, long after prizes from other batches may already have
+been paid. So a zero-yield batch is refused at derivation and its capacity is
+stranded until the schedule or batch is changed — a worse outcome than an
+unretirable claim, since principal is larger than claim capacity.
+
+It is accepted because Nervos DAO makes it unreachable for an enforced term: the
+accumulated rate rises every epoch, so a deposit of at least one ticket held for
+`dao_term_periods` yields strictly more than zero, by many orders of magnitude
+more than the one shannon per drawn position this guard needs. A zero-yield batch
+would mean the deposit did not mature, which the DAO withdrawal path already
+prevents. The residual risk is therefore a protocol-level anomaly, not an
+economic corner.
 
 Residual risk, now quantified: a batch strands only if actual DAO compensation
 over a full term fell below one part per million of principal, which would also
@@ -149,6 +190,56 @@ The entropy record's existence is itself the proof that the round is sealed:
 commitment. No separate seal check is required. A claim therefore cannot retire
 before the draw is recorded, which is correct — before then, nobody knows
 whether it won.
+
+### Open constraint: the schedule witness slot is unbuildable under a signature lock
+
+The witness row above reads `PrizeSchedule` bytes as the **raw** contents of
+`load_witness(0, Source::GroupInput)` (`contracts/entry-shard-type/src/claim.rs:236`)
+— not a `WitnessArgs`-wrapped payload. This is fine for a lock that never
+looks at its own witness (the devnet fixture lock), but it is not buildable
+for the obvious real-world case: a single-input retire transaction whose
+claim cell sits under a standard `secp256k1_blake160_sighash_all` lock.
+
+That lock requires witness slot 0 of its own lock group to decode as a
+`WitnessArgs` carrying a 65-byte signature in `lock`. A one-input retire has
+exactly one witness slot (index 0), and it must simultaneously be:
+
+- a `WitnessArgs` (for the secp256k1 lock to find its signature), and
+- the raw `PrizeSchedule` bytes (for the claim's `retire()` to decode).
+
+It cannot be both: `PrizeSchedule::decode` requires `data[0] == 1` as its
+first byte, while a molecule-encoded `WitnessArgs` begins with a 4-byte
+little-endian total size. The two encodings collide at byte 0 in general and
+`decode` fails closed — a single-input retire under a signature lock is
+structurally unbuildable, not merely awkward.
+
+**Workaround (sound, not yet exercised on devnet):** place a second cell
+under the same lock at a **lower** input index in the same transaction, so
+that cell's witness slot carries the `WitnessArgs`/signature and the retiring
+claim's own (higher-index) witness slot is free to carry the raw schedule
+bytes unwrapped. `secp256k1_blake160_sighash_all`'s `sighash_all` digest
+treats every witness beyond the first in its lock group as opaque bytes it
+simply hashes — it does not require them to be `WitnessArgs` — so the
+schedule stays fully committed by the signature even though the lock never
+parses it. This shape has not been built or run; see the devnet-proof caveat
+below and `docs/HANDOFF-2026-09-16.md`.
+
+**Preferred long-term fix:** move the committed schedule out of the bare
+witness slot and into `WitnessArgs.input_type` — the idiomatic slot this
+codebase already uses for type-script-owned witness data. See
+`validate_initial_funding` in `crates/daowow-contracts-common/src/entitlements.rs`
+(around line 159, `witness.input_type().to_opt()`), which reads its own
+type-script payload out of `input_type` rather than the bare witness. Doing
+the same for the schedule would make a one-input, signature-locked retire
+buildable directly (the lock's own signature lives in `lock`, the schedule
+lives in `input_type`, both coexist in one `WitnessArgs`), eliminating the
+need for the two-input workaround entirely. Not done in this branch —
+recorded as a follow-up.
+
+**Devnet proof caveat:** `tests/devnet/retirement_history.py` builds the
+single-input shape only, and it works only because the devnet participant
+lock is a smoke-minimal fixture lock that ignores witness 0 entirely. It does
+not exercise, and cannot exercise, the signature-lock case above.
 
 ## Claim script: retire mode
 

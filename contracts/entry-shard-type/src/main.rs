@@ -17,6 +17,7 @@
 mod claim;
 mod entropy;
 mod ledger;
+mod memento;
 mod seal;
 
 use ckb_std::ckb_constants::Source;
@@ -77,6 +78,11 @@ fn main() -> i8 {
             && args[0] == daowow_core::claim::CLAIM_TAG
         {
             return claim::run(&script).unwrap_or_else(err);
+        }
+        if args.len() == daowow_core::memento::MEMENTO_ARGS_SIZE
+            && args[0] == daowow_core::memento::MEMENTO_TAG
+        {
+            return memento::run(&script).unwrap_or_else(err);
         }
     }
     if script.args().raw_data().len() == 77 {

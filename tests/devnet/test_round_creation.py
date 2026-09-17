@@ -10,6 +10,7 @@ import unittest
 from node_harness import IsolatedNode
 from reorg_history import replace_entropy_branch
 from refund_history import refund_excluded_entry
+from retirement_history import retire_sealed_round
 from settlement_reorg import recover_settlement_history
 from test_native_dao import CKB, commit, input_cell
 
@@ -66,8 +67,18 @@ class RoundCreationTests(unittest.TestCase):
     def test_partial_round_completes_payout(self):
         self.run_history(reorg=False, partial=True, partial_full=True)
 
+    def test_sealed_round_retires_to_completion(self):
+        self.run_history(reorg=False, partial=True, partial_full=True, retire=True)
+
     def run_history(
-        self, *, reorg, refund=False, recover=False, partial=False, partial_full=False
+        self,
+        *,
+        reorg,
+        refund=False,
+        recover=False,
+        partial=False,
+        partial_full=False,
+        retire=False,
     ):
         with IsolatedNode(daowow=True) as node:
             genesis = node.rpc("get_block_by_number", ["0x0"])
@@ -916,3 +927,23 @@ class RoundCreationTests(unittest.TestCase):
                     payout_hash,
                     flush=True,
                 )
+                if retire:
+                    self.assertIn(
+                        "retirement", settlement, "missing retirement fixture"
+                    )
+                    # The excluded entry's claim (shard 0, position 1) was
+                    # never drawn and never redeemed; the accepted entry's
+                    # claim (shard 0, position 0) is the sole winner and has
+                    # just redeemed the round's one and only batch above.
+                    retire_sealed_round(
+                        self,
+                        node,
+                        protocol_deps,
+                        entropy_hash,
+                        settlement["retirement"],
+                        entry_hash,
+                        entry_tx,
+                        5,
+                        redeem_hash,
+                        redeem,
+                    )

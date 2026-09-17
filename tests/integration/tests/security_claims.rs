@@ -236,6 +236,7 @@ const CLAIM_TRANSITION: &str = "-95";
 const CLAIM_GROUP: &str = "-93";
 const CLAIM_RETIRE: &str = "-96";
 const CLAIM_REDEEM: &str = "-97";
+const CLAIM_UNIVERSE: &str = "-98";
 
 #[test]
 fn append_without_a_claim_per_ticket_is_rejected() {
@@ -262,7 +263,16 @@ fn append_with_an_extra_claim_is_rejected() {
 
 #[test]
 fn duplicate_position_is_rejected() {
-    // two claims both at position 0 instead of 0 and 1 (count still matches)
+    // two claims both at position 0 instead of 0 and 1 (count still matches).
+    // This shape has TWO independently-failing script groups: the shard
+    // transition (SHARD_CLAIM_CELL, from validate_mint's duplicate-position
+    // check) and the claim group itself (CLAIM_GROUP, since two identical-args
+    // outputs collapse into one group with more than one member). CKB runs
+    // script groups in script-hash order and reports whichever fails first,
+    // and that order depends on the deployed binary's own hash — any change
+    // to the entry-shard-type binary (e.g. adding a new dispatch mode) can
+    // flip which of the two legitimate rejections is observed. Either is a
+    // correct rejection of this malformed mint.
     let mut f = fixture();
     let (mut b, _, claims, w) = build_append(&mut f, &[2]);
     let (c0, d0) = claims[0].clone();
@@ -271,7 +281,12 @@ fn duplicate_position_is_rejected() {
         .output_data(d0.pack())
         .output(c0)
         .output_data(d0.pack());
-    expect_code(&mut f, &b.witness(w).build(), SHARD_CLAIM_CELL);
+    let err = expect_fail(&mut f.w.context, &b.witness(w).build());
+    let code = code_of(&err);
+    assert!(
+        code == SHARD_CLAIM_CELL || code == CLAIM_GROUP,
+        "unexpected failure: {err}"
+    );
 }
 
 #[test]
@@ -518,5 +533,8 @@ fn burning_a_claim_is_rejected() {
         )
         .output_data(Bytes::new().pack())
         .build();
-    expect_code(&mut f, &tx, CLAIM_RETIRE);
+    // No entropy record or round config is offered as evidence, so retirement
+    // now fails at the sealed-round authentication step rather than the old
+    // unconditional refusal.
+    expect_code(&mut f, &tx, CLAIM_UNIVERSE);
 }
