@@ -199,3 +199,18 @@ Task 3: minor (deferred): window_width is reassigned identically on every
 invocation rather than set once. Cosmetic.
 
 Task 3: complete (commits 1a0794b..5371b49, review clean, 0 fix rounds)
+Task 4: review spec MET, quality approved, ZERO findings. The reviewer verified
+every claim against source rather than the report: the entry_start != 0 condition
+is stated rather than implying unconditional enforcement; both config guards are
+correctly shown as gated on maximum_tickets != 0 so an uncapped multi-shard round
+is not implied to be refused; closing is worded as an announced target plus an
+observable freeze with no "closes at X" language; the devnet evidence is
+explicitly scoped to one deposit per round over a one-element set; and the
+handoff lost exactly the one stale bullet, with every other open item
+byte-identical including all three known-failing tests. It also recomputed
+claim_occupied_capacity independently — 8 + 53 + 78 + 81 = 220 CKB exactly.
+
+Task 4: complete (commits d43d45d..d306cc1, review clean, 0 fix rounds)
+
+All four tasks complete, zero fix rounds across the whole plan. Final
+whole-branch review dispatched on opus.
