@@ -422,6 +422,16 @@ fn redeeming_the_same_source_twice_is_rejected_by_the_claim() {
     let mut forged = paid_once.encode();
     forged[65..73].copy_from_slice(&2u64.to_le_bytes());
     forged[73..81].copy_from_slice(&(paid_once.paid_total() * 2).to_le_bytes());
+    // Move the paid root too. The settlement refuses a successor whose root is
+    // unchanged (`after_state.paid_root() == before_state.paid_root()` in
+    // settlement-type's redeem), so forging only the counters makes BOTH
+    // scripts reject: settlement for the stale root, the claim for the stale
+    // absence proof. CKB then reports whichever script group sorts first by
+    // hash, and those hashes move with every contract binary — which is why
+    // this test flipped between -77 and -97 across five recorded binaries.
+    // Changing the root leaves the funding side genuinely consistent, so only
+    // the claim can refuse and the exact-code assertion means something.
+    forged[33] ^= 0xff;
     let (funding_cell, _) = fx.w.cell(&fx.funding);
     let in_cap: u64 = funding_cell.capacity().unpack();
     let amount = fx.claims[0].amount;
