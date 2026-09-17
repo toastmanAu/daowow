@@ -2,7 +2,7 @@ mod common;
 
 use ckb_testtool::ckb_types::{
     bytes::Bytes,
-    core::{DepType, ScriptHashType, TransactionBuilder, TransactionView},
+    core::{ScriptHashType, TransactionBuilder, TransactionView},
     packed::*,
     prelude::*,
 };
@@ -67,13 +67,15 @@ fn packed_bytes(b: &[u8]) -> ckb_testtool::ckb_types::packed::Bytes {
     pack_pbytes(b)
 }
 
-fn run_contract(world: &mut World, name: &str) {
-    let bin: Bytes = if name.starts_with('/') {
-        std::fs::read(name).expect("bin").into()
-    } else {
-        read_bin(name)
-    };
-    let op = world.context.deploy_cell(bin);
+/// A transaction spending one cell locked by `name`'s binary, with no type
+/// script and nothing else happening: the minimal shape that makes the binary
+/// execute as a lock.
+///
+/// The `/tmp` transaction dump this used to write on every call is gone. It
+/// was debug scaffolding on a fixed path, so two of these tests running at
+/// once raced over the same file.
+fn contract_as_lock_tx(world: &mut World, name: &str) -> TransactionView {
+    let op = world.context.deploy_cell(read_bin(name));
     let contract_lock = world
         .context
         .build_script_with_hash_type(&op, ScriptHashType::Data1, Bytes::new())
@@ -98,20 +100,13 @@ fn run_contract(world: &mut World, name: &str) {
             WitnessArgs::new_builder().build().as_bytes().as_ref(),
         ))
         .build();
-    let tx = world.context.complete_tx(tx);
-    let dump = dump_tx_json(&world.context, &tx);
-    std::fs::write("/tmp/failing_tx.json", dump).unwrap();
-    let c = expect_ok(&mut world.context, &tx);
-    println!("{} lock cycles: {}", name, c);
+    world.context.complete_tx(tx)
 }
 
-#[test]
-fn template_contract_runs() {
-    let mut world = World::new(ACC_SMT);
-    run_contract(
-        &mut world,
-        "/tmp/template-contract/target/riscv64imac-unknown-none-elf/release/template-contract",
-    );
+fn run_contract(world: &mut World, name: &str) {
+    let tx = contract_as_lock_tx(world, name);
+    let c = expect_ok(&mut world.context, &tx);
+    println!("{name} lock cycles: {c}");
 }
 
 #[test]
@@ -120,10 +115,29 @@ fn alloc_contract_runs() {
     run_contract(&mut world, "smoke-alloc");
 }
 
+/// `round-type` is a type script only, and must refuse to guard a cell as a
+/// lock rather than succeed by accident.
+///
+/// Unlike entry-shard-type and settlement-type, which carry deliberate
+/// public-lock modes, round-type's `main` goes straight to the round config in
+/// `Source::GroupOutput`. A lock group has inputs and never outputs, so that
+/// read always fails and the script returns ROUND_ERROR_CONFIG.
+///
+/// This test used to assert `expect_ok` on exactly this transaction, as a
+/// "the binary loads and runs" smoke, and had therefore been red for as long
+/// as round-type has had its current shape — carried as a known failure rather
+/// than fixed. Asserting the refusal instead makes it pin a real property: if
+/// round-type ever grows a lock mode, this goes red and the change has to be
+/// deliberate.
 #[test]
-fn round_type_binary_as_lock() {
+fn round_type_binary_refuses_to_act_as_a_lock() {
     let mut world = World::new(ACC_SMT);
-    run_contract(&mut world, "round-type");
+    let tx = contract_as_lock_tx(&mut world, "round-type");
+    let err = expect_fail(&mut world.context, &tx);
+    assert!(
+        format!("{err}").contains("error code -17"),
+        "expected ROUND_ERROR_CONFIG (-17), got: {err}"
+    );
 }
 
 #[test]
