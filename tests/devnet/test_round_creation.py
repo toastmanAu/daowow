@@ -46,6 +46,51 @@ def mine_to_epoch(node, target):
     os.environ.get("DAOWOW_RUN_ISOLATED_NODE") == "1", "explicit Docker opt-in required"
 )
 class RoundCreationTests(unittest.TestCase):
+    # Populated by every run_history() invocation that reaches the DAO
+    # deposit (all but the two refund-only histories) / the maturity
+    # section (only the histories that carry a batch all the way to
+    # settlement). Asserted in tearDownClass across the whole suite: the
+    # requirement is that every deposit in the round starts within a
+    # bounded window and every batch finishes (matures) at the same
+    # boundary, which is a property of the *fleet* of batches this test
+    # class produces, not any single one of them.
+    deposit_epoch_numbers = []
+    maturity_deltas = []
+    window_width = None
+
+    @classmethod
+    def tearDownClass(cls):
+        if cls.deposit_epoch_numbers:
+            spread = max(cls.deposit_epoch_numbers) - min(cls.deposit_epoch_numbers)
+            print(
+                "DAOWOW deposit epoch numbers across",
+                len(cls.deposit_epoch_numbers),
+                "batches:",
+                cls.deposit_epoch_numbers,
+                "spread",
+                spread,
+                "configured window width",
+                cls.window_width,
+                flush=True,
+            )
+            assert cls.window_width is not None
+            assert spread <= cls.window_width, (
+                f"deposit epoch spread {spread} exceeded the configured "
+                f"window width {cls.window_width}"
+            )
+        if cls.maturity_deltas:
+            print(
+                "DAOWOW maturity deltas (epochs past deposit) across",
+                len(cls.maturity_deltas),
+                "batches:",
+                cls.maturity_deltas,
+                flush=True,
+            )
+            assert set(cls.maturity_deltas) == {360}, (
+                "every batch must mature at the same D+360 boundary, got "
+                f"{cls.maturity_deltas}"
+            )
+
     def test_creation_entry_freeze_and_aggregation_history(self):
         self.run_history(reorg=False)
 
@@ -182,6 +227,28 @@ class RoundCreationTests(unittest.TestCase):
                 "append", exported, "missing canonical entry transition fixture"
             )
             append = exported["append"]
+            window = exported["window"]
+            self.assertGreater(
+                window["entry_start"], 0, "entry_start must be non-zero for the opening check to run"
+            )
+            # The opening check (entry-shard-type) only fires when entry_start
+            # is non-zero, and it reads its bound from the shard input's own
+            # `since` field, not the block the append lands in — but CKB
+            # consensus itself will refuse to include a tx whose absolute-
+            # epoch `since` names an epoch the tip hasn't reached yet. Mine to
+            # entry_start for real before submitting the append, rather than
+            # asserting a since value the chain could never have honoured.
+            for _ in range(30):
+                if int(node.rpc("get_tip_header")["epoch"], 16) & 0xFFFFFF >= window[
+                    "entry_start"
+                ]:
+                    break
+                node.rpc("generate_block")
+            else:
+                self.fail(
+                    "entry_start epoch not reached before the first append; "
+                    "devnet cannot exercise the opening check"
+                )
             protocol_deps = deps + [
                 {"out_point": {"tx_hash": tx_hash, "index": "0x0"}, "dep_type": "code"}
             ]
@@ -193,7 +260,10 @@ class RoundCreationTests(unittest.TestCase):
                 "version": "0x0",
                 "cell_deps": protocol_deps,
                 "header_deps": [],
-                "inputs": [input_cell(tx_hash, 1), input_cell(tx_hash, 3)],
+                "inputs": [
+                    input_cell(tx_hash, 1, int(append["since"], 16)),
+                    input_cell(tx_hash, 3),
+                ],
                 "outputs": [
                     outputs[1],
                     {
@@ -382,6 +452,19 @@ class RoundCreationTests(unittest.TestCase):
                 aggregate_hash,
                 aggregate_header["number"],
                 flush=True,
+            )
+            # The requirement: every deposit starts inside a bounded window.
+            # `close()` only forces `since >= aggregation_deadline` when
+            # aggregation is *incomplete*; a complete round can close as soon
+            # as `entry_end`. So the window is a property this harness must
+            # observe on the real chain, not one the protocol enforces on the
+            # deposit itself — assert it rather than assume it.
+            deposit_epoch_number = int(aggregate_header["epoch"], 16) & 0xFFFFFF
+            self.assertGreaterEqual(deposit_epoch_number, window["entry_end"])
+            self.assertLessEqual(deposit_epoch_number, window["aggregation_deadline"])
+            type(self).deposit_epoch_numbers.append(deposit_epoch_number)
+            type(self).window_width = (
+                window["aggregation_deadline"] - window["entry_end"]
             )
             if partial:
                 accepted = node.rpc(
@@ -625,7 +708,15 @@ class RoundCreationTests(unittest.TestCase):
                 )
                 entropy_tx["outputs"][1] = sponsor_cell
             deposit_epoch = int(aggregate_header["epoch"], 16)
-            term_epoch = deposit_epoch + 180
+            # dao-lock only requires since >= deposit_epoch + 180 (one term),
+            # but RFC 0023 native DAO maturity then snaps to the *next*
+            # 180-epoch boundary from the deposit: preparing phase one exactly
+            # at D+180 matures at D+180, while D+181 (or anywhere up to
+            # D+359) matures at D+360, deterministically, regardless of the
+            # deposit's epoch fraction. Target D+181 — strictly inside
+            # (D+180, D+360) — so every batch lands on the same D+360
+            # boundary instead of racing a fraction-precision knife edge.
+            term_epoch = deposit_epoch + 181
             term_since = 0x2000000000000000 | term_epoch
             receipt_dep = {
                 "out_point": {"tx_hash": aggregate_hash, "index": "0x2"},
@@ -683,6 +774,21 @@ class RoundCreationTests(unittest.TestCase):
             elapsed = wn - dn + int(wi * dl > di * wl)
             periods = (elapsed + 179) // 180
             final_epoch = (deposit_epoch & ~0xFFFFFF) | (dn + periods * 180)
+            # The property under test: targeting phase one strictly inside
+            # (D+180, D+360) — never exactly at D+180 — makes maturity land
+            # on the SAME boundary (D+360) for every batch, deterministically,
+            # regardless of where within that span the withdrawal actually
+            # landed (mining and tx-commit timing vary run to run). final_epoch
+            # and deposit_epoch share the same index/length (fraction) bits by
+            # construction, so their raw difference is exactly periods * 180.
+            maturity_delta = final_epoch - deposit_epoch
+            self.assertEqual(
+                maturity_delta,
+                360,
+                "phase one landed on the D+180 knife edge instead of "
+                "strictly inside (D+180, D+360)",
+            )
+            type(self).maturity_deltas.append(maturity_delta)
             # Actual occupied capacity: 8 + (32+1+104) + (32+1) + 8 = 186 CKB.
             deposit_ar = int.from_bytes(
                 bytes.fromhex(aggregate_header["dao"][2:])[8:16], "little"
