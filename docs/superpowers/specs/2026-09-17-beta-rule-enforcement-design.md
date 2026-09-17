@@ -173,9 +173,6 @@ problem and the disclosure along with it.
 Still required before a round can be created, and deliberately not invented
 here:
 
-Still required before a round can be created, and deliberately not invented
-here:
-
 - The prize schedule: 1 to 32 positive weights. Truncation is no longer a
   concern at these numbers (see above), but the viability gate still applies:
   `MAX_POOL_BAR` voids a round whose weight spread is too wide for a batch's
