@@ -812,8 +812,16 @@ fn two_items_naming_the_same_claim_input_are_rejected() {
     let built = build_redeem_with(&mut fx, &which, None, false, &mut |items, _| {
         items[1].0 = items[0].0;
     });
-    // the settlement's dedup and the second claim's "not named" check both
-    // refuse; which reports first depends on script-hash order
+    // Three groups refuse at once and no construction separates them, so the
+    // OR is the honest assertion rather than a lax one: the settlement's
+    // `used_claims` dedup, the double-named claim's `mine.is_some()` branch,
+    // and the now-unnamed second claim's "no item names me" branch. Both
+    // scripts read the SAME redemption witness, so a duplicated
+    // `claim_input_index` is visible to both by construction — making one side
+    // consistent is impossible. Measured, not assumed: deleting the
+    // settlement's `used_claims.contains` disjunct leaves this test green,
+    // because the claims still refuse. What that costs is recorded on the
+    // isolated test below, which pins the claim's branch on its own.
     expect_code(&mut fx, &built.tx, &[SETTLE_REDEEM, CLAIM_REDEEM]);
 }
 
@@ -823,9 +831,65 @@ fn zero_amount_item_is_rejected() {
     let built = build_redeem_with(&mut fx, &[0], None, false, &mut |items, _| {
         items[0].3 = 0;
     });
-    // settlement rejects amount 0 before any proof; the claim rejects it in
-    // record_verified_prize. Either code proves no zero-value marker is paid.
+    // Both scripts refuse amount 0 — the settlement in its per-item guard, the
+    // claim in `record_verified_prize` — and again nothing can make one side
+    // consistent, since both read the same item. Either code proves no
+    // zero-value marker is paid, which is what this test is for.
+    //
+    // The settlement's own guard is additionally shadowed by its membership
+    // check: deleting `|| item.amount == 0` does not accept the transaction,
+    // it moves the refusal to SETTLE_PROOF (-73), because a zero amount no
+    // longer matches the committed prize leaf. This test still goes red on
+    // that mutation, since -73 is outside the asserted set.
     expect_code(&mut fx, &built.tx, &[SETTLE_REDEEM, CLAIM_REDEEM]);
+}
+
+/// A claim that no item names cannot advance its paid state — isolated to the
+/// claim script, unlike the two tests above.
+///
+/// The settlement iterates the witness ITEMS, never the inputs, so it has no
+/// check that every claim-typed input is named. With the funding successor
+/// made consistent for the one surviving item, the settlement accepts and only
+/// the unnamed claim's own script can refuse. That makes this the isolated
+/// half of `two_items_naming_the_same_claim_input_are_rejected`, whose
+/// three simultaneous refusals cannot be told apart.
+///
+/// The property matters on its own: without it a winner could ride along on a
+/// stranger's redemption transaction, marking one of its own prize sources
+/// paid while no payment output is ever produced for it.
+#[test]
+fn a_claim_not_named_by_any_item_cannot_advance() {
+    let mut fx = fixture(&PRIZES, false);
+    let before = fx.funding_data;
+    // `which[0]` lands at input index 2, so this is the amount of the item
+    // that survives the tweak below.
+    let kept_amount = fx.claims[0].amount;
+    let (funding_cell, _) = fx.w.cell(&fx.funding);
+    let in_cap: u64 = funding_cell.capacity().unpack();
+    let built = build_redeem_with(&mut fx, &[0, 1], None, false, &mut |items, outputs| {
+        // Drop the item naming the second claim (input index 3) along with the
+        // payment output it would have been paid through (index 4, the last
+        // one the builder pushed). The claim itself stays an input, with the
+        // advanced successor the builder already computed — so its redeem
+        // branch runs and finds nothing naming it.
+        items.retain(|o| o.0 == 2);
+        outputs.remove(4);
+        // Make the settlement consistent with the single surviving item: it
+        // recomputes prize_paid from the items it reads, and requires
+        // paid + successor capacity == the funding input's capacity. Leaving
+        // these sized for two prizes would have the settlement refuse first
+        // and this test would prove nothing about the claim.
+        let mut data = before;
+        data.prize_paid += kept_amount;
+        outputs[0].0 = outputs[0]
+            .0
+            .clone()
+            .as_builder()
+            .capacity(pack_u64(in_cap - kept_amount))
+            .build();
+        outputs[0].1 = Bytes::from(data.encode().to_vec());
+    });
+    expect_code(&mut fx, &built.tx, &[CLAIM_REDEEM]);
 }
 
 #[test]
