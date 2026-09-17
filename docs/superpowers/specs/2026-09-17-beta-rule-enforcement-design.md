@@ -151,20 +151,36 @@ wallet transaction cost" finding. At 1000 CKB per ticket the claim overhead is
 about 22 per cent of the ticket price, which is material and must be visible
 rather than absorbed silently.
 
+Decided: **`maximum_tickets = 200`**, **`minimum_tickets = 50`**.
+
+| | |
+| --- | --- |
+| Full round principal | 200,000 CKB |
+| Minimum viable round | 50,000 CKB |
+| Entrant pays per ticket | ~1,220 CKB (1000 ticket + ~220 claim cell) |
+| Claim overhead | ~22 per cent of the ticket price, returned at retirement |
+
+A useful property falls out of this pairing and should not be disturbed
+casually. `MAX_SCHEDULE_PRIZES` is 32 and `weights_for(tickets)` truncates to
+`min(tickets, len)`. Because `minimum_tickets = 50` exceeds 32, a round that
+draws at all has more accepted tickets than the schedule has weights, so **the
+schedule never truncates in a successful round**. That removes the audit's
+truncation-disclosure requirement entirely: a preset can promise a fixed winner
+count, because an underfilled-but-successful round still has at least 50 tickets
+for at most 32 prizes. Lowering `minimum_tickets` below 33 would reintroduce the
+problem and the disclosure along with it.
+
 Still required before a round can be created, and deliberately not invented
 here:
 
-- `maximum_tickets` — the hard round-wide cap. At 1000 CKB per ticket, a cap of
-  1000 is 1,000,000 CKB of principal, which is a large sum to source for a
-  testnet rehearsal; a smaller cap may suit the first round.
-- `minimum_tickets` — the threshold below which the round fails and depositors
-  are refunded their principal plus yield. Must be at most `maximum_tickets`,
-  which the new guard enforces.
-- The prize schedule: 1 to 32 positive weights. The audit requires that presets
-  disclose truncation — fewer accepted tickets than weights truncates the
-  schedule — so a preset must not promise a fixed winner count in an underfilled
-  draw. Note also that the viability gate (`MAX_POOL_BAR`) voids a round whose
-  weight spread is too wide for a batch's yield to pay every drawn position.
+Still required before a round can be created, and deliberately not invented
+here:
+
+- The prize schedule: 1 to 32 positive weights. Truncation is no longer a
+  concern at these numbers (see above), but the viability gate still applies:
+  `MAX_POOL_BAR` voids a round whose weight spread is too wide for a batch's
+  yield to pay every drawn position, so `ceil(sum / min)` of the chosen weights
+  must stay at or below 1,000,000 shannons.
 - `entry_start`, `entry_end` and `aggregation_deadline`, chosen so the deposit
   window is tight per the lock-window requirement above.
 
