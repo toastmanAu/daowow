@@ -10,13 +10,46 @@
 // browser, since they are CommonJS and browsers have no module.exports.
 import { createWallet } from "../chain/wallet.js";
 
-const { loadManifest } = window.DaowowManifest;
-const { createRpc } = window.DaowowRpc;
-const { findRounds, findShards, deriveRoundState, ROUND_STATE } = window.DaowowDiscovery;
+// Read lazily rather than at module scope: a top-level window read makes the
+// module impossible to import anywhere without a DOM, including in tests.
+const chain = () => ({
+  loadManifest: window.DaowowManifest.loadManifest,
+  createRpc: window.DaowowRpc.createRpc,
+  ...window.DaowowDiscovery,
+});
 
 const SHANNONS = 100000000n;
 
 const el = (id) => document.getElementById(id);
+
+// The ?manifest= query parameter is the only attacker-reachable input this
+// page takes, so it is validated before it is used or quoted anywhere.
+// Same-origin absolute paths only: "//evil.example" is a protocol-relative
+// URL, not a path, and would fetch cross-origin.
+export function isSafeManifestUrl(value) {
+  return typeof value === "string"
+    && value.startsWith("/")
+    && !value.startsWith("//")
+    && !/[<>"'\\\s]/.test(value);
+}
+
+// Errors are rendered as TEXT, never as markup. Messages can carry a server's
+// words (an RPC error body) or a URL the visitor supplied, and interpolating
+// either into innerHTML is an HTML injection -- enough to plant convincing
+// phishing markup on a page whose whole job is to be trusted with a wallet,
+// even with a CSP that blocks inline script.
+function showError(node, headline, detail) {
+  node.textContent = "";
+  const box = document.createElement("div");
+  box.className = "error";
+  box.append(headline);
+  if (detail) {
+    const code = document.createElement("code");
+    code.textContent = detail;
+    box.append(code);
+  }
+  node.append(box);
+}
 const text = (node, value) => { node.textContent = value; };
 
 // CKB amounts are BigInt shannons: Number would silently round above 2^53.
@@ -30,7 +63,10 @@ function stat(label, value, sub) {
     (sub ? `<div class="sub">${sub}</div>` : "") + `</dd></div>`;
 }
 
-function renderRound(round, shards, nowEpoch) {
+// Safe to build as markup: every interpolated value is either a BigInt
+// (rendered as digits) or a hex string produced by codec.js's own hex(),
+// which emits nothing outside [0-9a-f]. No caller-supplied text reaches here.
+function renderRound(round, shards, nowEpoch, deriveRoundState, ROUND_STATE) {
   const c = round.config;
   const s = deriveRoundState(c, shards, nowEpoch);
   const label = { [ROUND_STATE.OPEN]: "Open", [ROUND_STATE.PENDING]: "Not yet open",
@@ -57,9 +93,16 @@ function renderRound(round, shards, nowEpoch) {
 }
 
 async function init() {
+  const { loadManifest, createRpc, findRounds, findShards,
+          deriveRoundState, ROUND_STATE } = chain();
   const params = new URLSearchParams(location.search);
-  const manifestUrl = params.get("manifest") ?? "/deployments/testnet-manifest.json";
+  const requested = params.get("manifest");
   const rounds = el("rounds");
+  if (requested !== null && !isSafeManifestUrl(requested)) {
+    showError(rounds, "Refused that manifest location: it must be a same-origin path.");
+    return;
+  }
+  const manifestUrl = requested ?? "/deployments/testnet-manifest.json";
 
   let manifest;
   try {
@@ -67,8 +110,7 @@ async function init() {
     if (!res.ok) throw new Error(`${res.status} fetching ${manifestUrl}`);
     manifest = loadManifest(await res.json());
   } catch (e) {
-    rounds.innerHTML = `<div class="error">Could not load the deployment manifest.
-      <code>${e.message}</code></div>`;
+    showError(rounds, "Could not load the deployment manifest.", e.message);
     return;
   }
 
@@ -85,7 +127,7 @@ async function init() {
     nowEpoch = BigInt(tip.epoch) & 0xffffffn;
     text(el("epoch"), nowEpoch.toString());
   } catch (e) {
-    rounds.innerHTML = `<div class="error">Could not reach the node.<code>${e.message}</code></div>`;
+    showError(rounds, "Could not reach the node.", e.message);
     return;
   }
 
@@ -93,7 +135,7 @@ async function init() {
   try {
     found = await findRounds(rpc, manifest);
   } catch (e) {
-    rounds.innerHTML = `<div class="error">Round discovery failed.<code>${e.message}</code></div>`;
+    showError(rounds, "Round discovery failed.", e.message);
     return;
   }
 
@@ -106,7 +148,7 @@ async function init() {
   const html = [];
   for (const round of found) {
     const shards = await findShards(rpc, manifest, round.config.roundId);
-    html.push(renderRound(round, shards, nowEpoch));
+    html.push(renderRound(round, shards, nowEpoch, deriveRoundState, ROUND_STATE));
   }
   rounds.innerHTML = html.join("");
 }
