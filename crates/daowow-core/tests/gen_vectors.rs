@@ -106,6 +106,93 @@ fn gen_vectors() {
         "payout_item": PAYOUT_ITEM_SIZE,
     });
 
+    // Cell-encoding oracles for the JavaScript decoders in apps/web/chain/.
+    // Every field gets a distinct, non-zero, non-repeating value: a decoder
+    // reading a neighbouring offset must produce a visibly wrong number, which
+    // a zero-filled or uniform sample would hide. u64s are emitted as STRINGS
+    // because JSON numbers are IEEE-754 doubles and shannon amounts exceed
+    // 2^53, so a numeric encoding would silently round.
+    let sref = |n: u8, ht: u8| ScriptRef {
+        code_hash: ckb_hash256_one(&[n]),
+        hash_type: ht,
+    };
+    let oracle_cfg = RoundConfigV1 {
+        version: 1,
+        round_id,
+        ticket_price: 100_000_000_000,
+        minimum_tickets: 50,
+        maximum_tickets: 200,
+        entry_start: 1_001,
+        entry_end: 1_002,
+        aggregation_deadline: 1_003,
+        dao_term_periods: 2,
+        entry_shard_count: 1,
+        prize_schedule_hash: ckb_hash256_one(b"VECTOR-PRIZE-SCHEDULE"),
+        fee_policy_hash: ckb_hash256_one(b"VECTOR-FEE-POLICY"),
+        keeper_policy_hash: ckb_hash256_one(b"VECTOR-KEEPER-POLICY"),
+        flags: 7,
+        accumulator_id: ACC_SMT,
+        entry_lock: sref(11, 2),
+        dao_lock: sref(12, 2),
+        settlement_type: sref(13, 2),
+        entry_shard_type: sref(14, 2),
+        dao_type: sref(15, 1),
+    };
+    let oracle_shard = EntryShardDataV1 {
+        round_id,
+        shard_id: 0,
+        state: SHARD_STATE_OPEN,
+        sequence: 3,
+        entry_count: 4,
+        ticket_count: 5,
+        principal_total: 500_000_000_000,
+        accumulator_root: ckb_hash256_one(b"VECTOR-ACC-ROOT"),
+    };
+    let script_ref_json = |r: &ScriptRef| {
+        json!({ "code_hash": hex(&r.code_hash), "hash_type": r.hash_type })
+    };
+    let cell_encodings = json!({
+        "round_config": {
+            "hex": hex(&oracle_cfg.encode()),
+            "commitment": hex(&oracle_cfg.commitment()),
+            "fields": {
+                "version": oracle_cfg.version,
+                "round_id": hex(&oracle_cfg.round_id),
+                "ticket_price": oracle_cfg.ticket_price.to_string(),
+                "minimum_tickets": oracle_cfg.minimum_tickets.to_string(),
+                "maximum_tickets": oracle_cfg.maximum_tickets.to_string(),
+                "entry_start": oracle_cfg.entry_start.to_string(),
+                "entry_end": oracle_cfg.entry_end.to_string(),
+                "aggregation_deadline": oracle_cfg.aggregation_deadline.to_string(),
+                "dao_term_periods": oracle_cfg.dao_term_periods,
+                "entry_shard_count": oracle_cfg.entry_shard_count,
+                "prize_schedule_hash": hex(&oracle_cfg.prize_schedule_hash),
+                "fee_policy_hash": hex(&oracle_cfg.fee_policy_hash),
+                "keeper_policy_hash": hex(&oracle_cfg.keeper_policy_hash),
+                "flags": oracle_cfg.flags,
+                "accumulator_id": oracle_cfg.accumulator_id,
+                "entry_lock": script_ref_json(&oracle_cfg.entry_lock),
+                "dao_lock": script_ref_json(&oracle_cfg.dao_lock),
+                "settlement_type": script_ref_json(&oracle_cfg.settlement_type),
+                "entry_shard_type": script_ref_json(&oracle_cfg.entry_shard_type),
+                "dao_type": script_ref_json(&oracle_cfg.dao_type),
+            },
+        },
+        "shard_data": {
+            "hex": hex(&oracle_shard.encode()),
+            "fields": {
+                "round_id": hex(&oracle_shard.round_id),
+                "shard_id": oracle_shard.shard_id,
+                "state": oracle_shard.state,
+                "sequence": oracle_shard.sequence.to_string(),
+                "entry_count": oracle_shard.entry_count.to_string(),
+                "ticket_count": oracle_shard.ticket_count.to_string(),
+                "principal_total": oracle_shard.principal_total.to_string(),
+                "accumulator_root": hex(&oracle_shard.accumulator_root),
+            },
+        },
+    });
+
     let v = json!({
         "meta": {
             "hash": "blake2b-256 personalization ckb-default-hash",
@@ -155,6 +242,7 @@ fn gen_vectors() {
             "rejection_sample_prize0_n1000000": { "position": pos, "retry": retry },
         },
         "canonical_sizes": sizes,
+        "cell_encodings": cell_encodings,
     });
 
     let out = concat!(
@@ -163,4 +251,23 @@ fn gen_vectors() {
     );
     fs::write(out, serde_json::to_string_pretty(&v).unwrap()).unwrap();
     println!("written {}", out);
+}
+
+/// Guards the oracle the JavaScript decoders are pinned to. If encode and
+/// decode ever disagree, `apps/web/chain/codec.js` would be pinned to a lie
+/// and its tests would still be green.
+#[test]
+fn cell_encoding_oracles_round_trip() {
+    let round_id = ckb_hash256_one(b"DAOWOW-VECTOR-ROUND-1");
+    let shard = EntryShardDataV1 {
+        round_id,
+        shard_id: 0,
+        state: SHARD_STATE_OPEN,
+        sequence: 3,
+        entry_count: 4,
+        ticket_count: 5,
+        principal_total: 500_000_000_000,
+        accumulator_root: ckb_hash256_one(b"VECTOR-ACC-ROOT"),
+    };
+    assert_eq!(EntryShardDataV1::decode(&shard.encode()).unwrap(), shard);
 }
