@@ -1,0 +1,53 @@
+{
+    "jsonrpc": "2.0",
+    "result": {
+        "last_cursor": "0x409bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce801a776bf02d19cafa3749d906cc2c9ab1cf1e80ff700000000013c1b290000000100000000",
+        "objects": [
+            {
+                "block_number": "0x13c063b",
+                "out_point": {
+                    "index": "0x2",
+                    "tx_hash": "0x39b1c11ed7ca2e4a0491c69d105ee07e5659e88109661d4b48f2ff39a45cf1f1"
+                },
+                "output": {
+                    "capacity": "0x48cda09ae00",
+                    "lock": {
+                        "args": "0xa776bf02d19cafa3749d906cc2c9ab1cf1e80ff7",
+                        "code_hash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+                        "hash_type": "type"
+                    },
+                    "type": {
+                        "args": "0xcedd69942af40494311d443e5a00479658901f122a502042b6bbd9fb1c9811c8",
+                        "code_hash": "0x00000000000000000000000000000000000000000000000000545950455f4944",
+                        "hash_type": "type"
+                    }
+                },
+                "output_data": null,
+                "tx_index": "0x2"
+            },
+            {
+                "block_number": "0x13c1b29",
+                "out_point": {
+                    "index": "0x0",
+                    "tx_hash": "0x1074b1ac79213c22b5e32a0fde44a858a47f9575c9f54006a1deb80d32070cb1"
+                },
+                "output": {
+                    "capacity": "0x48cda09ae00",
+                    "lock": {
+                        "args": "0xa776bf02d19cafa3749d906cc2c9ab1cf1e80ff7",
+                        "code_hash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+                        "hash_type": "type"
+                    },
+                    "type": {
+                        "args": "0x624c021b5029d6706a94a94c7b30f87312db0386d5c2564b229a9554e1a64e70",
+                        "code_hash": "0x00000000000000000000000000000000000000000000000000545950455f4944",
+                        "hash_type": "type"
+                    }
+                },
+                "output_data": null,
+                "tx_index": "0x1"
+            }
+        ]
+    },
+    "id": 1
+}
