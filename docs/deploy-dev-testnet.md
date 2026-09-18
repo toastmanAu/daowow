@@ -86,47 +86,84 @@ Expect both to pass, at 64% and 39% of the limit:
   OK   dev-testnet-b.toml       3 cells  232,912 bytes  ≈ 235,112 serialized  (39.4% of the limit)
 ```
 
-## 3. Generate the transactions
+## 3. Generate and send part a
 
-Two configs, two info files, two migration directories. `gen-txs` signs and
-sends nothing, so it is safe to re-run.
+**Generate each part only when you are ready to send it.** Both parts spend
+from the same wallet, so a part b generated before part a commits will select
+cells part a is already spending, and the node rejects it:
+
+```
+PoolRejectedRBF: RBF rejected: Tx's current fee is 233750,
+expect it to >= 733998 to replace old txs
+```
+
+That is not a fee problem. It means the transaction conflicts with one already
+in the mempool, and CKB will only replace it at a punitive price. The cure is
+to regenerate against current chain state, never to raise the fee.
 
 ```sh
-for part in a b; do
-  mkdir -p "deployments/dev-migration-$part"
-  ckb-cli --url "$CKB_URL" deploy gen-txs \
-    --from-address "$ADDR" \
-    --fee-rate 1000 \
-    --deployment-config "deployments/dev-testnet-$part.toml" \
-    --info-file "dev-deploy-$part.json" \
-    --migration-dir "deployments/dev-migration-$part"
-done
+mkdir -p deployments/dev-migration-a
+ckb-cli --url "$CKB_URL" deploy gen-txs \
+  --from-address "$ADDR" --fee-rate 1000 \
+  --deployment-config deployments/dev-testnet-a.toml \
+  --info-file dev-deploy-a.json \
+  --migration-dir deployments/dev-migration-a
 ```
 
-Expect, and stop if the totals differ:
-
-```
-part a: entry-shard-type 229445.0 + settlement-type 153269.0  -> 382714.0 CKB, fee 0.0038
-part b: round-type 60141.0 + entry-lock 95453.0 + dao-lock 77501.0 -> 233095.0 CKB, fee 0.0023
-```
-
-615,809 CKB across the two, the same total as before the split.
-
-## 4. Sign and send, one part at a time
-
-Send part a, wait for it to commit, then part b. Sending both before the first
-confirms risks the second selecting inputs the first already spent.
+Expect `entry-shard-type 229445.0 + settlement-type 153269.0 -> 382714.0 CKB`.
 
 ```sh
-for part in a b; do
-  ckb-cli --url "$CKB_URL" deploy sign-txs \
-    --from-account "$LOCKARG" --info-file "dev-deploy-$part.json" --add-signatures
-  ckb-cli --url "$CKB_URL" deploy apply-txs \
-    --info-file "dev-deploy-$part.json" --migration-dir "deployments/dev-migration-$part"
-done
+ckb-cli --url "$CKB_URL" deploy sign-txs \
+  --from-account "$LOCKARG" --info-file dev-deploy-a.json --add-signatures
+ckb-cli --url "$CKB_URL" deploy apply-txs \
+  --info-file dev-deploy-a.json --migration-dir deployments/dev-migration-a
 ```
 
-A wrong password is harmless: it fails before signing, and nothing is sent.
+A wrong password is harmless: it fails before signing and nothing is sent.
+
+## 4. Wait for part a to commit, then generate and send part b
+
+Do not start this until part a reports `committed`:
+
+```sh
+TX_A=$(python3 -c "import json;print(json.load(open('dev-deploy-a.json'))['new_recipe']['cell_recipes'][0]['tx_hash'])")
+ckb-cli --url "$CKB_URL" rpc get_transaction --hash "$TX_A" | grep -A1 tx_status
+```
+
+`gen-txs` refuses to overwrite an existing info file, so clear the previous
+attempt before regenerating:
+
+```sh
+rm -f dev-deploy-b.json && rm -rf deployments/dev-migration-b
+mkdir -p deployments/dev-migration-b
+ckb-cli --url "$CKB_URL" deploy gen-txs \
+  --from-address "$ADDR" --fee-rate 1000 \
+  --deployment-config deployments/dev-testnet-b.toml \
+  --info-file dev-deploy-b.json \
+  --migration-dir deployments/dev-migration-b
+```
+
+Expect `round-type 60141.0 + entry-lock 95453.0 + dao-lock 77501.0 -> 233095.0 CKB`.
+
+Confirm the two parts share no inputs before sending — if they do, part a had
+not committed yet:
+
+```sh
+python3 -c "
+import json
+sp=lambda f:{i['previous_output']['tx_hash']+':'+i['previous_output']['index']
+             for i in json.load(open(f))['cell_tx']['inputs']}
+overlap = sp('dev-deploy-a.json') & sp('dev-deploy-b.json')
+print('overlap:', overlap or 'NONE — safe to send')
+"
+```
+
+```sh
+ckb-cli --url "$CKB_URL" deploy sign-txs \
+  --from-account "$LOCKARG" --info-file dev-deploy-b.json --add-signatures
+ckb-cli --url "$CKB_URL" deploy apply-txs \
+  --info-file dev-deploy-b.json --migration-dir deployments/dev-migration-b
+```
 
 ## 5. Write the manifest
 
