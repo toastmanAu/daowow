@@ -1,5 +1,14 @@
 # DAOWOW UI sprint — progress notes
 
+> **2026-09-18: `index.html` + `engine.js` model a SUPERSEDED design.** They pay
+> prizes directly to participants. The shipped contracts issue one transferable
+> claim NFT per ticket, whose holder redeems each batch's prize and finally
+> retires the claim for a non-redeemable memento. Everything below describes
+> that older model and is kept as history, not as a description of the
+> protocol. The live, chain-connected view is `apps/web/dapp/`, specified in
+> `docs/superpowers/specs/2026-09-18-dapp-foundation-design.md`.
+
+
 2026-09-15: a separate consumer-facing `entry.html` preview now provides ticket
 selection/review and wallet-availability information. The existing simulator
 below is preserved. See [entry preview notes](ENTRY-README.md); this is not a

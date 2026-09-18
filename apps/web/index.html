@@ -8,6 +8,21 @@
 </head>
 <body>
 
+<!-- This simulator models a design the contracts no longer implement. Kept
+     for its lifecycle walkthrough, but it must not be mistaken for the
+     protocol: see docs/superpowers/specs/2026-09-18-dapp-foundation-design.md
+     decision D6. Gate 5 decides whether it moves behind /simulator. -->
+<div style="background:hsl(28 80% 22%);color:hsl(40 90% 92%);padding:14px 20px;
+            font:14px/1.5 'Avenir Next',Avenir,'Segoe UI',sans-serif;
+            border-bottom:2px solid hsl(39 96% 64%);">
+  <strong style="color:hsl(39 96% 64%)">Historical simulator — superseded design.</strong>
+  This page models an earlier protocol in which prizes were paid directly to
+  participants. The shipped contracts issue a transferable claim NFT per ticket,
+  which its holder redeems and later retires for a memento. Winners, amounts and
+  flows shown here are <em>not</em> how DAOWOW works.
+  <a href="dapp/" style="color:hsl(39 96% 64%)">Open the live round view →</a>
+</div>
+
 <header class="topbar">
   <div class="wordmark">DAO<span>WOW</span></div>
   <span class="badge badge-model" title="All balances, transactions and cycles are simulated locally — no chain connection">LOCAL MODEL</span>
