@@ -1,0 +1,9 @@
+{
+  "artifactSha256": "7e88967e329cf7d6fa4858e5e9200e6d56d0b805a4200fc8c082ca2e50ee9d90",
+  "packages": {
+    "@ckb-ccc/core": "1.21.0",
+    "@ckb-ccc/joy-id": "1.2.3"
+  },
+  "builtWith": "esbuild --bundle --format=esm --platform=browser --target=es2022 --minify",
+  "regenerate": "tools/build-vendor-ccc.sh"
+}
