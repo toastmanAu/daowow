@@ -43,3 +43,13 @@ test("no error path interpolates a message into innerHTML", () => {
       `innerHTML must not carry the manifest URL: ${sink.slice(0, 60)}`);
   }
 });
+
+test("no thrown message reflects the manifest URL back to the page", () => {
+  // Defence in depth over the validator and over textContent rendering: the
+  // visitor's own string is never echoed into what the page displays.
+  const throws = SOURCE.match(/throw new Error\([^)]*\)/g) ?? [];
+  for (const t of throws) {
+    assert.ok(!t.includes("manifestUrl"),
+      `thrown messages must not carry the manifest URL: ${t}`);
+  }
+});

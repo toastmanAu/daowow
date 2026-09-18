@@ -107,7 +107,14 @@ async function init() {
   let manifest;
   try {
     const res = await fetch(manifestUrl);
-    if (!res.ok) throw new Error(`${res.status} fetching ${manifestUrl}`);
+    // The URL is deliberately NOT echoed into the message. It is validated
+    // and the message is rendered as text, so this is not injectable, but
+    // reflecting a visitor-supplied string back into the page buys nothing
+    // and is one fewer thing for a later edit to get wrong.
+    if (!res.ok) {
+      console.error("manifest fetch failed", res.status, manifestUrl);
+      throw new Error(`${res.status} fetching the deployment manifest`);
+    }
     manifest = loadManifest(await res.json());
   } catch (e) {
     showError(rounds, "Could not load the deployment manifest.", e.message);
