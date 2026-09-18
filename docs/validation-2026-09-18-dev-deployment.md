@@ -91,7 +91,33 @@ default — `node_harness` patches the module list, and
 `test_node_harness.LiveNodeTests.test_indexer_rpc_module_is_enabled` proves
 the patch took effect.
 
-Result: see the section appended below once the run completes.
+### Result — 17/17, 1,483s
+
+- **8 rounds discovered through the indexer**, one per history, each a
+  358-byte cell returned at the out point the round was created at. The
+  indexer path the client depends on therefore works against a real chain, not
+  only against captured pages.
+- The captured cell is decoded by `apps/web/test/discovery.test.js` with the
+  production decoder. Its sharpest assertion costs nothing: the round-type
+  script's **args are the round id**, and the indexer matched on them to find
+  the cell, so the decoded round id must equal the args the node itself used.
+  A decoder reading the id from the wrong offset disagrees with the node's own
+  matching. Shifting the offset by one byte reds both this test and the Rust
+  oracle test — two independent sources.
+- **5 premature-winner retire refusals**, every one reporting
+  `error code -99` (CLAIM_ERROR_INCOMPLETE), unchanged by this work.
+
+This closes the gap the testnet leg leaves open. Every other decoder test
+proves the JavaScript agrees with the *encoder*; this proves it agrees with
+what a node actually serves.
+
+**One failure on the way, mine.** The first run errored in 8 histories with
+`'PosixPath' object is not subscriptable`. The capture step named its variable
+`fixture`, which is already the genesis fixture cell in that 1000-line
+function, so every later `fixture["lock"]` read broke. Plain shadowing from
+introducing a name into a long function without checking what was already
+bound. Renamed, and the rename carries a comment saying why the obvious name
+is wrong there.
 
 ## Not covered
 
