@@ -240,10 +240,15 @@ class RoundCreationTests(unittest.TestCase):
                 len(live_rounds), 1, "the indexer must return exactly this round"
             )
             self.assertEqual(live_rounds[0]["out_point"]["tx_hash"], tx_hash)
-            fixture = (
+            # NOT named `fixture`: that name is already the genesis fixture
+            # cell in this function and shadowing it breaks every later
+            # fixture["lock"] read.
+            round_fixture_path = (
                 ROOT / "apps" / "web" / "test" / "fixtures" / "devnet-round-cell.json"
             )
-            fixture.write_text(json.dumps(live_rounds[0], indent=2, sort_keys=True))
+            round_fixture_path.write_text(
+                json.dumps(live_rounds[0], indent=2, sort_keys=True)
+            )
             print(
                 "DAOWOW round discovered through the indexer",
                 tx_hash,

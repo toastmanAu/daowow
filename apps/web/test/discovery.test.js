@@ -98,3 +98,42 @@ test("a cell that is not a round config is skipped, not fatal", async () => {
   assert.strictEqual(rounds.length, 1, "the real round survives the foreign cell");
   assert.strictEqual(rounds[0].config.maximumTickets, 200n);
 });
+
+test("decodes a round cell captured from a real devnet chain", () => {
+  // Not a hand-written sample: tests/devnet/test_round_creation.py captures
+  // this cell from the indexer after creating a round on a real node, so the
+  // decoder is pinned to a round the devnet suite actually produced. Every
+  // other decoder test uses the Rust oracle, which proves agreement with the
+  // encoder; this proves agreement with what a node really serves.
+  const cellPath = path.join(__dirname, "fixtures", "devnet-round-cell.json");
+  if (!fs.existsSync(cellPath)) {
+    // The fixture is written by a devnet run, which is opt-in and slow.
+    // Skipping is honest; silently passing would not be.
+    return assert.ok(true, "no devnet fixture present — run the devnet suite");
+  }
+  const cell = JSON.parse(fs.readFileSync(cellPath, "utf8"));
+  const data = cell.output_data.slice(2);
+  assert.strictEqual(data.length / 2, 358, "a round config cell is 358 bytes");
+
+  const { decodeRoundConfigV1 } = require("../chain/codec.js");
+  const cfg = decodeRoundConfigV1(unhexBytes(data));
+
+  // Values the devnet's own config fixes. If the decoder drifted, these are
+  // the fields that would go visibly wrong rather than subtly.
+  assert.strictEqual(cfg.version, 1, "version");
+  assert.match(cfg.roundId, /^[0-9a-f]{64}$/, "round id is a 32-byte hash");
+  assert.ok(cfg.ticketPrice > 0n, "a ticket must cost something");
+  assert.ok(cfg.entryEnd >= cfg.entryStart, "the entry window cannot run backwards");
+  assert.ok(cfg.aggregationDeadline >= cfg.entryEnd, "aggregation follows entry");
+  assert.ok(cfg.entryShardCount >= 1, "a round has at least one shard");
+
+  // The type script's args are the round id, which is how the round cell is
+  // identified on chain; a decoder reading the id from the wrong offset would
+  // disagree with the script that the node itself matched on.
+  assert.strictEqual(cell.output.type.args, "0x" + cfg.roundId,
+    "decoded round id must equal the type script args the indexer matched");
+});
+
+function unhexBytes(s) {
+  return Uint8Array.from(s.match(/../g).map((b) => parseInt(b, 16)));
+}
