@@ -1,4 +1,7 @@
 "use strict";
+// Wrapped in an IIFE: loaded as a classic script these files share one
+// global scope, so top-level declarations would collide between modules.
+(function () {
 // Finding rounds on chain and deriving what to display about them.
 //
 // State is DERIVED on every read, never stored. The beta plan forbids keeping
@@ -6,8 +9,12 @@
 // canonical state rather than leave the UI asserting something the chain no
 // longer says.
 
+// Resolved the same dual way this file exports itself: require() under
+// node's test runner, window in the browser, where require does not exist at
+// all and a bare require() call would throw before anything rendered.
 const { decodeRoundConfigV1, decodeEntryShardDataV1, SHARD_STATE,
-  ROUND_CONFIG_SIZE, SHARD_DATA_SIZE } = require("./codec.js");
+  ROUND_CONFIG_SIZE, SHARD_DATA_SIZE } =
+  typeof require === "function" ? require("./codec.js") : window.DaowowCodec;
 
 const ROUND_STATE = Object.freeze({
   PENDING: "pending",
@@ -104,3 +111,4 @@ async function findShards(rpc, manifest, roundId) {
 const api = { findRounds, findShards, deriveRoundState, ROUND_STATE };
 if (typeof module !== "undefined" && module.exports) module.exports = api;
 if (typeof window !== "undefined") window.DaowowDiscovery = api;
+})();

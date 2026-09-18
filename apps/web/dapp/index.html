@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DAOWOW — live round</title>
+<!--
+  entry.html forbids all network access; this page must reach a CKB node, so
+  the policy is relaxed DELIBERATELY and narrowly to the endpoints a manifest
+  may name. It cannot be derived from the manifest at runtime, because the
+  policy has to be in force before the manifest is fetched. Gate 5 should
+  serve this as a real HTTP header with only the endpoint actually in use.
+-->
+<meta http-equiv="Content-Security-Policy" content="
+  default-src 'none';
+  script-src 'self';
+  style-src 'self';
+  img-src 'self' data:;
+  connect-src 'self' http://192.168.68.134:8114 https://testnet.ckb.dev;
+  form-action 'none';
+  base-uri 'none'">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext y='26' font-size='28'%3E%E2%97%8E%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="dapp.css">
+</head>
+<body>
+<header class="site-header">
+  <span class="brand"><span class="brand-symbol">◎</span>DAO<span class="brand-light">WOW</span></span>
+  <button id="connect" class="wallet-button" type="button">Connect wallet</button>
+</header>
+
+<main>
+  <p class="banner">
+    <strong>Testnet.</strong>
+    <span>Read-only view. This page cannot build, sign or send a transaction — entry arrives in the next milestone.</span>
+  </p>
+
+  <div id="rounds" aria-live="polite">
+    <div class="card"><p class="empty">Loading round data…</p></div>
+  </div>
+</main>
+
+<footer>
+  <span>network <span class="mono" id="net">…</span></span>
+  <span>node <span class="mono" id="rpc">…</span></span>
+  <span>tip epoch <span class="mono" id="epoch">…</span></span>
+</footer>
+
+<!-- Classic scripts, evaluated before the deferred module below, each
+     publishing itself on window. codec must precede discovery, which reads it. -->
+<script src="../chain/codec.js"></script>
+<script src="../chain/manifest.js"></script>
+<script src="../chain/rpc.js"></script>
+<script src="../chain/discovery.js"></script>
+<script type="module" src="dapp.js"></script>
+</body>
+</html>

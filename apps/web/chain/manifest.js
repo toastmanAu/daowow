@@ -1,4 +1,7 @@
 "use strict";
+// Wrapped in an IIFE: loaded as a classic script these files share one
+// global scope, so top-level declarations would collide between modules.
+(function () {
 // Deployment manifest loading.
 //
 // The client hardcodes no chain constants (spec D4): network, RPC endpoint and
@@ -83,3 +86,4 @@ function loadManifest(raw) {
 const api = { loadManifest, REQUIRED_SCRIPTS, HASH_TYPES, SCHEMA_VERSION };
 if (typeof module !== "undefined" && module.exports) module.exports = api;
 if (typeof window !== "undefined") window.DaowowManifest = api;
+})();

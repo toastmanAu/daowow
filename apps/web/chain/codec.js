@@ -1,4 +1,7 @@
 "use strict";
+// Wrapped in an IIFE: loaded as a classic script these files share one
+// global scope, so top-level declarations would collide between modules.
+(function () {
 // Decoders for the on-chain cell payloads round discovery reads.
 //
 // Byte layouts mirror crates/daowow-core/src/encoding.rs. They are pinned
@@ -79,3 +82,4 @@ const api = {
 };
 if (typeof module !== "undefined" && module.exports) module.exports = api;
 if (typeof window !== "undefined") window.DaowowCodec = api;
+})();

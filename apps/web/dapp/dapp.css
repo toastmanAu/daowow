@@ -1,0 +1,66 @@
+/* DAOWOW live round view. Self-contained; no remote fonts or assets.
+   Colour and type are ported from entry.css so the live client and the entry
+   preview read as one product. */
+:root {
+  color-scheme: dark;
+  --blue: hsl(220 67% 24%); --deep: hsl(222 65% 17%);
+  --paper: hsl(45 35% 96%); --ink: hsl(222 49% 20%);
+  --amber: hsl(39 96% 64%); --muted: hsl(217 27% 76%);
+  --quiet: hsl(220 17% 42%); --line: hsl(220 26% 42%);
+  --good: hsl(152 52% 62%); --warn: hsl(39 96% 64%);
+  font-family: 'Avenir Next', Avenir, 'Segoe UI', sans-serif;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--deep); color: var(--paper); font-size: 16px; line-height: 1.6; }
+button { font: inherit; cursor: pointer; }
+button:disabled { cursor: not-allowed; opacity: .45; }
+:focus-visible { outline: 3px solid var(--amber); outline-offset: 5px; }
+h1, h2, h3, p { margin: 0; }
+h1, h2 { letter-spacing: -.04em; line-height: 1.08; font-weight: 600; }
+code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+.site-header { max-width: 1120px; margin: auto; padding: 24px 32px; display: flex; gap: 32px; align-items: center; }
+.brand { font-size: 24px; font-weight: 700; letter-spacing: -.06em; display: inline-flex; align-items: center; }
+.brand-symbol { font-size: 40px; margin-right: 12px; color: var(--amber); line-height: 1; }
+.brand-light { font-weight: 400; }
+.wallet-button { margin-left: auto; display: flex; align-items: center; gap: 8px; background: transparent;
+  color: var(--paper); border: 1px solid var(--line); border-radius: 8px; padding: 12px 16px; font-size: 14px; }
+.wallet-button:hover:not(:disabled) { background: hsl(220 50% 28%); }
+
+main { max-width: 1120px; margin: auto; padding: 0 32px 64px; }
+.banner { display: flex; gap: 12px; align-items: baseline; padding: 12px 16px; border-radius: 8px;
+  background: hsl(219 48% 31%); color: hsl(218 60% 90%); font-size: 12px; margin-bottom: 24px; }
+.banner strong { color: var(--paper); }
+
+.card { background: var(--blue); border-radius: 24px; padding: 32px; margin-bottom: 24px; }
+.card h2 { font-size: 32px; }
+.card-head { display: flex; align-items: center; gap: 16px; margin-bottom: 24px; }
+.state { border-radius: 24px; padding: 4px 14px; font-size: 12px; font-weight: 600; letter-spacing: .02em; }
+.state-open { background: var(--good); color: var(--ink); }
+.state-pending { background: hsl(220 36% 44%); color: var(--paper); }
+.state-frozen { background: hsl(220 20% 62%); color: var(--ink); }
+
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 24px; }
+.stat { display: flex; flex-direction: column; gap: 4px; }
+.stat dt { font-size: 12px; color: var(--muted); }
+.stat dd { margin: 0; font-size: 28px; font-weight: 600; letter-spacing: -.03em; }
+.stat dd span { font-size: 15px; font-weight: 400; color: var(--muted); }
+.stat .sub { font-size: 12px; color: var(--muted); font-weight: 400; letter-spacing: 0; }
+
+.bar { height: 10px; border-radius: 6px; background: hsl(221 55% 32%); overflow: hidden; margin: 24px 0 8px; }
+.bar > i { display: block; height: 100%; background: var(--amber); }
+.bar-note { font-size: 12px; color: var(--muted); display: flex; justify-content: space-between; }
+
+.empty { color: var(--muted); font-size: 14px; }
+.error { border-radius: 8px; padding: 16px; background: hsl(0 40% 28%); color: hsl(0 60% 92%); font-size: 14px; }
+.error code { display: block; margin-top: 8px; font-size: 12px; opacity: .85; word-break: break-all; }
+
+footer { max-width: 1120px; margin: auto; padding: 24px 32px 48px; border-top: 1px solid var(--line);
+  display: flex; flex-wrap: wrap; gap: 8px 24px; font-size: 12px; color: var(--muted); }
+footer .mono { color: var(--paper); }
+
+@media (max-width: 720px) {
+  .site-header { padding: 16px; gap: 16px; flex-wrap: wrap; }
+  main, footer { padding-left: 16px; padding-right: 16px; }
+  .card { padding: 24px 20px; } .card h2 { font-size: 26px; }
+}

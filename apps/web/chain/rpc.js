@@ -1,4 +1,7 @@
 "use strict";
+// Wrapped in an IIFE: loaded as a classic script these files share one
+// global scope, so top-level declarations would collide between modules.
+(function () {
 // Minimal CKB JSON-RPC client with cursor-safe indexer paging.
 
 function createRpc(url, options = {}) {
@@ -52,3 +55,4 @@ function createRpc(url, options = {}) {
 const api = { createRpc };
 if (typeof module !== "undefined" && module.exports) module.exports = api;
 if (typeof window !== "undefined") window.DaowowRpc = api;
+})();
