@@ -255,11 +255,63 @@ does not show claim capacity yet". 2a does not quote anything, so nothing here
 depends on it, but 2b's quote must state it plainly and the number may warrant
 revisiting the ticket price or the cap.
 
+## The dev deployment
+
+Settled 2026-09-18. The deployer is
+
+```
+ckt1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqd8w6ls95vu473hf8vsdnpvn2cu785qlac0rckws
+```
+
+which resolves to standard `secp256k1_blake160_sighash_all`
+(`hash_type: type`, code hash `0x9bd7e06f…a3cce8`) with args
+`0xa776bf02d19cafa3749d906cc2c9ab1cf1e80ff7`, lock hash
+`0xb8b26d42680f81f4af184ec283bc366cd2de778c09be445781ea1747c0f6c126`. Measured
+2026-09-18: 140 live cells, 1,391,878 CKB.
+
+**Phill runs the deployment himself with `ckb-cli`.** No private key, seed or
+password goes into this repository, into a script it contains, or into any
+agent's hands. The deliverable from this side is a manifest and a verification
+procedure, never a signing step.
+
+### What it costs now
+
+Materially more than the prototype's 180,777 CKB, because the contracts have
+grown. A plain code cell is 8 (capacity) + 53 (secp lock) + the binary:
+
+| contract | binary bytes | cell CKB |
+|---|---:|---:|
+| round-type | 60,080 | 60,141 |
+| entry-shard-type | 229,384 | 229,445 |
+| entry-lock | 95,392 | 95,453 |
+| dao-lock | 77,440 | 77,501 |
+| settlement-type | 153,208 | 153,269 |
+| **total** | | **615,809** |
+
+That leaves about 776,069 CKB, which must also cover round creation and keeper
+operation in later gates. Participants fund their own principal and claim
+cells; the deployer does not.
+
+### Deploy as `data1`, not Type ID
+
+`ScriptRef` carries `hash_type` as a field and the contracts compare against
+whatever the round config records, so either is mechanically valid. Use
+`data1`.
+
+A Type ID deployment holds the code hash constant *by construction* while the
+binary behind it changes, so a runtime check that the code hash still matches
+can never detect a redeploy — only the dep cell's data hash moves. A `data1`
+deployment is structurally immune: its code hash **is** its data hash, so a new
+binary is a new script rather than a reinterpretation of cells already live
+under the old one. For a dev deployment that gate 4 supersedes, upgradeability
+is an anti-feature: it is exactly the ability to change code under a round
+that is already open. This follows the feedback log's 2026-09-12 finding that
+"pin the script you verified" means pinning the data hash.
+
+The manifest records each contract's data hash, `hash_type: data1`, and out
+point; 2a's client reads them and hardcodes nothing (D4).
+
 ## Open questions
 
-- **The dev deployment's funding.** Deploying the current contracts to testnet
-  needs testnet CKB for code cells; the prototype deployment used 180,777 CKB.
-  Who funds it and from which key is not settled here, and no key material goes
-  anywhere near this repository.
 - **Final routing.** Whether the dApp becomes `/` at daowow.org with the
   simulator relocated is deferred to gate 5.
