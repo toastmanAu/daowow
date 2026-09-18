@@ -165,9 +165,16 @@ class IsolatedNode:
                         "exec", identifier, "cat", f"/tmp/{relative}"
                     ).decode()
                     if relative == "ckb.toml":
+                        # The pinned image's default rpc modules are
+                        # ["Net", "Pool", "Miner", "Chain", "Stats",
+                        #  "Subscription", "Experiment", "Debug", "Terminal"] --
+                        # no Indexer, so get_cells is unavailable and the web
+                        # client's round discovery cannot be exercised against
+                        # this node at all. IntegrationTest gives the mining
+                        # and tx-pool control the suite already relies on.
                         config, count = re.subn(
                             r"(modules\s*=\s*\[)",
-                            r'\1"IntegrationTest", ',
+                            r'\1"IntegrationTest", "Indexer", ',
                             config,
                             count=1,
                         )

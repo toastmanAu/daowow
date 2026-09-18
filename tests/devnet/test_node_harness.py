@@ -130,6 +130,37 @@ class LiveNodeTests(unittest.TestCase):
                     break
             self.assertEqual(status["status"], "committed")
 
+    def test_indexer_rpc_module_is_enabled(self):
+        """get_cells must be reachable, or the web client's round discovery
+        cannot be exercised against this node at all.
+
+        The pinned image does NOT enable Indexer by default -- its rpc modules
+        are Net, Pool, Miner, Chain, Stats, Subscription, Experiment, Debug and
+        Terminal. node_harness patches the module list; this proves the patch
+        took effect rather than silently failing to match.
+        """
+        with IsolatedNode() as node:
+            tip = node.rpc("get_indexer_tip")
+            self.assertIn("block_number", tip)
+            # And the call discovery actually makes, not merely the tip probe.
+            page = node.rpc(
+                "get_cells",
+                [
+                    {
+                        "script": {
+                            "code_hash": "0x" + "00" * 32,
+                            "hash_type": "data",
+                            "args": "0x",
+                        },
+                        "script_type": "lock",
+                    },
+                    "asc",
+                    "0x1",
+                    None,
+                ],
+            )
+            self.assertIn("objects", page)
+
     def test_isolated_node_mines_with_target_cycle_limit(self):
         with IsolatedNode() as node:
             identifier = node.container_id
