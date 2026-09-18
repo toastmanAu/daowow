@@ -1,6 +1,16 @@
 # Reclaiming testnet capacity before the dev deployment
 
-Measured 2026-09-18 against `https://testnet.ckb.dev/rpc`.
+Measured 2026-09-18 against the wyltek-10700 testnet node
+(`http://192.168.68.134:8114`) and cross-checked against
+`https://testnet.ckb.dev/rpc`. Both returned identical figures.
+
+Set these once; every command below uses them:
+
+```sh
+export ADDR=ckt1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqd8w6ls95vu473hf8vsdnpvn2cu785qlac0rckws
+export CKB_URL=http://192.168.68.134:8114        # wyltek-10700
+# export CKB_URL=https://testnet.ckb.dev/rpc     # public fallback
+```
 
 ## Why this is on the critical path
 
@@ -21,7 +31,7 @@ wallet's own cells. A binary this wallet no longer references may still be a
 dependency of somebody else's live cell, and consuming it would strand them.
 
 ```sh
-node tools/audit-wallet-cells.mjs ckt1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqd8w6ls95vu473hf8vsdnpvn2cu785qlac0rckws
+node tools/audit-wallet-cells.mjs "$ADDR" "$CKB_URL"
 ```
 
 | bucket | cells | CKB |
@@ -101,8 +111,24 @@ deployment. Leave them until you have confirmed what they belong to.
 
 ## The commands
 
-`ckb-cli` 2.0.0. Flags below were checked against that version's `--help`;
-confirm again if yours differs.
+`ckb-cli` 2.0.0. Flags below were checked against that version's `--help`,
+and the whole build was dry-run to `tx info` against the real cells before
+being written here — everything short of signing and sending.
+
+**`--url` is mandatory and goes before the subcommand.** `ckb-cli` defaults to
+a local node at `http://127.0.0.1:8114`, and `tx add-input` reaches out to the
+node to resolve each input's capacity and lock. Without it every `add-input`
+fails with:
+
+```
+http error: `error sending request for url (http://127.0.0.1:8114/)`
+```
+
+Use the wyltek-10700 testnet node. Verified 2026-09-18: synced in lockstep with
+the public chain (tip 22,453,793 on both), indexer module enabled, and it
+returns `access-control-allow-origin: *`. Running the audit against it and
+against `https://testnet.ckb.dev/rpc` produced identical figures, which is a
+two-node cross-check rather than one endpoint's opinion.
 
 `ckb-cli wallet transfer` selects its own inputs and will not target these
 cells, so the transaction is built by hand with the `tx` subcommands.
@@ -115,25 +141,42 @@ repo (`--privkey-path`). The lock arg for this address is
 ### Transaction 1
 
 ```sh
-ADDR=ckt1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqd8w6ls95vu473hf8vsdnpvn2cu785qlac0rckws
 TX=0xa4d1e1e8b9a672a53a273889cd43599d2390320d3621e84f40f12fc46cf199fe
 
-ckb-cli tx init --tx-file reclaim-1.json
+ckb-cli --url "$CKB_URL" tx init --tx-file reclaim-1.json
 for i in 0 1 2 3 4; do
-  ckb-cli tx add-input --tx-file reclaim-1.json --tx-hash "$TX" --index "$i"
+  ckb-cli --url "$CKB_URL" tx add-input --tx-file reclaim-1.json --tx-hash "$TX" --index "$i"
 done
 
 # 78,649 in, less a 0.1 CKB fee.
-ckb-cli tx add-output --tx-file reclaim-1.json \
+ckb-cli --url "$CKB_URL" tx add-output --tx-file reclaim-1.json \
   --capacity 78648.9 --to-sighash-address "$ADDR"
 
 # READ THIS BEFORE SIGNING: five inputs, one output, and the difference
 # between them is the fee. A mistyped capacity is burned, not refunded.
-ckb-cli tx info --tx-file reclaim-1.json
+ckb-cli --url "$CKB_URL" tx info --tx-file reclaim-1.json
+```
 
-ckb-cli tx sign-inputs --tx-file reclaim-1.json \
+That `tx info` was run for real on 2026-09-18 and prints:
+
+```
+[input]  ... => 15981.0, (data-length: 15920, type-script: none, lock-kind: sighash(secp))
+[input]  ... => 19077.0, (data-length: 19016, ...)
+[input]  ... =>  9397.0, (data-length: 9336,  ...)
+[input]  ... => 22613.0, (data-length: 22552, ...)
+[input]  ... => 11581.0, (data-length: 11520, ...)
+[output] ... => 78648.9, (data-length: 0, type-script: none, lock-kind: sighash(secp))
+input_total: 78649.0 (CKB)
+output_total: 78648.9 (CKB)
+tx_fee: 0.1 (CKB)
+```
+
+If yours does not match that exactly, stop rather than sign.
+
+```sh
+ckb-cli --url "$CKB_URL" tx sign-inputs --tx-file reclaim-1.json \
   --from-account 0xa776bf02d19cafa3749d906cc2c9ab1cf1e80ff7 --add-signatures
-ckb-cli tx send --tx-file reclaim-1.json
+ckb-cli --url "$CKB_URL" tx send --tx-file reclaim-1.json
 ```
 
 ### Transaction 2
@@ -143,19 +186,20 @@ Only after transaction 1 has confirmed and the audit below reflects it.
 ```sh
 TX=0x9916a7a720e61e15b57c59c7500780d2b3e0d4c21101b96e4ba32d388801c47b
 
-ckb-cli tx init --tx-file reclaim-2.json
+ckb-cli --url "$CKB_URL" tx init --tx-file reclaim-2.json
 for i in 0 1 2 3 4; do
-  ckb-cli tx add-input --tx-file reclaim-2.json --tx-hash "$TX" --index "$i"
+  ckb-cli --url "$CKB_URL" tx add-input --tx-file reclaim-2.json --tx-hash "$TX" --index "$i"
 done
 
-# 138,873 in, less a 0.1 CKB fee.
-ckb-cli tx add-output --tx-file reclaim-2.json \
+# 138,873 in, less a 0.1 CKB fee. Expect input_total 138873.0,
+# output_total 138872.9, tx_fee 0.1.
+ckb-cli --url "$CKB_URL" tx add-output --tx-file reclaim-2.json \
   --capacity 138872.9 --to-sighash-address "$ADDR"
 
-ckb-cli tx info --tx-file reclaim-2.json
-ckb-cli tx sign-inputs --tx-file reclaim-2.json \
+ckb-cli --url "$CKB_URL" tx info --tx-file reclaim-2.json
+ckb-cli --url "$CKB_URL" tx sign-inputs --tx-file reclaim-2.json \
   --from-account 0xa776bf02d19cafa3749d906cc2c9ab1cf1e80ff7 --add-signatures
-ckb-cli tx send --tx-file reclaim-2.json
+ckb-cli --url "$CKB_URL" tx send --tx-file reclaim-2.json
 ```
 
 Keep `reclaim-1.json` and `reclaim-2.json` out of the repository. They contain
@@ -168,7 +212,7 @@ moves, because reclaiming converts locked capacity into liquid capacity rather
 than creating any.
 
 ```sh
-node tools/audit-wallet-cells.mjs ckt1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqd8w6ls95vu473hf8vsdnpvn2cu785qlac0rckws
+node tools/audit-wallet-cells.mjs "$ADDR" "$CKB_URL"
 ```
 
 Expected after both transactions:
