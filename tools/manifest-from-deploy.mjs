@@ -8,17 +8,21 @@
 //
 // Read-only with respect to the chain: it builds a file, nothing else.
 //
+// The deployment spans SEVERAL info files, because all five binaries in one
+// transaction exceed CKB's block size limit, so it takes more than one
+// transaction to deploy them. Pass every info file.
+//
 // Usage:
-//   node tools/manifest-from-deploy.mjs <info-file> <rpc-url> [purpose]
+//   node tools/manifest-from-deploy.mjs <rpc-url> <info-file>...
 //     > deployments/dev-testnet-manifest.json
 
 import fs from "node:fs";
 
-const [infoPath, rpcUrl, purpose = "dev-deployment-gate-2"] = process.argv.slice(2);
-if (!infoPath || !rpcUrl) {
-  console.error(
-    "usage: node tools/manifest-from-deploy.mjs <info-file> <rpc-url> [purpose]",
-  );
+const PURPOSE = "dev-deployment-gate-2";
+
+const [rpcUrl, ...infoPaths] = process.argv.slice(2);
+if (!rpcUrl || infoPaths.length === 0) {
+  console.error("usage: node tools/manifest-from-deploy.mjs <rpc-url> <info-file>...");
   process.exit(2);
 }
 
@@ -33,10 +37,25 @@ const REQUIRED = [
   "settlement-type",
 ];
 
-const info = JSON.parse(fs.readFileSync(infoPath, "utf8"));
-const recipes = info?.new_recipe?.cell_recipes;
-if (!Array.isArray(recipes) || recipes.length === 0) {
-  throw new Error(`${infoPath} has no new_recipe.cell_recipes`);
+const recipes = [];
+for (const infoPath of infoPaths) {
+  const info = JSON.parse(fs.readFileSync(infoPath, "utf8"));
+  const found = info?.new_recipe?.cell_recipes;
+  if (!Array.isArray(found) || found.length === 0) {
+    throw new Error(`${infoPath} has no new_recipe.cell_recipes`);
+  }
+  for (const recipe of found) {
+    const clash = recipes.find((r) => r.name === recipe.name);
+    if (clash) {
+      // Two info files naming the same cell means one deployment was applied
+      // twice, or a stale file is in the list. Either way the manifest would
+      // silently pick one out point and the reader could not tell which.
+      throw new Error(
+        `${recipe.name} appears in more than one info file; remove the stale one`,
+      );
+    }
+    recipes.push(recipe);
+  }
 }
 
 const rpc = async (method, params) => {
@@ -84,13 +103,13 @@ for (const name of REQUIRED) {
 const manifest = {
   schemaVersion: 1,
   status: "generated",
-  purpose,
+  purpose: PURPOSE,
   fundedRoundsReady: false,
   network: chain.chain,
   rpcUrl,
   genesisHash: genesis,
   generatedAt: new Date().toISOString(),
-  generatedFrom: infoPath,
+  generatedFrom: infoPaths,
   note:
     "Dev deployment for gate 2. Superseded by gate 4's hardened deployment. " +
     "Verify with tools/verify-deployment.mjs before trusting it.",

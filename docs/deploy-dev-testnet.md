@@ -37,8 +37,9 @@ operation in later gates.
 
 ## Why data-hash pinned, not Type ID
 
-`deployments/dev-testnet.toml` sets `enable_type_id = false` on every cell, so
-each script's code hash **is** the data hash of its binary.
+Both `deployments/dev-testnet-a.toml` and `-b.toml` set
+`enable_type_id = false` on every cell, so each script's code hash **is** the
+data hash of its binary.
 
 A Type ID deployment holds the code hash constant by construction while the
 binary behind it changes, so no runtime check can ever detect a redeploy —
@@ -62,56 +63,86 @@ for c in round-type entry-shard-type entry-lock dao-lock settlement-type; do
 done
 ```
 
-## 2. Generate the transactions
+## 2. Check the size before anything else
 
-`gen-txs` builds and prices the transactions without signing or sending
-anything, so it is safe to run repeatedly.
+**All five binaries do not fit in one transaction.** They serialise to 616,768
+bytes against a 597,000-byte block size limit, and the node refuses the whole
+thing with `ExceededMaximumBlockBytes`.
 
-```sh
-mkdir -p deployments/dev-migration
-ckb-cli --url "$CKB_URL" deploy gen-txs \
-  --from-address "$ADDR" \
-  --fee-rate 1000 \
-  --deployment-config deployments/dev-testnet.toml \
-  --info-file dev-deploy.json \
-  --migration-dir deployments/dev-migration
-```
-
-Expect exactly this, and stop if the total differs:
-
-```
-[cell] NewAdded , name:       round-type, old-capacity: 0.0, new-capacity: 60141.0
-[cell] NewAdded , name: entry-shard-type, old-capacity: 0.0, new-capacity: 229445.0
-[cell] NewAdded , name:       entry-lock, old-capacity: 0.0, new-capacity: 95453.0
-[cell] NewAdded , name:         dao-lock, old-capacity: 0.0, new-capacity: 77501.0
-[cell] NewAdded , name:  settlement-type, old-capacity: 0.0, new-capacity: 153269.0
-> new total capacity: 615809.0 (CKB)
-```
-
-## 3. Sign and send
+`ckb-cli deploy gen-txs` does **not** catch this. It prices capacity, prints
+`status: success`, and writes a signable info file for a transaction that
+cannot be broadcast — so the constraint appears only after you have entered
+your password. That is why the deployment is split in two, and why this check
+runs first:
 
 ```sh
-ckb-cli --url "$CKB_URL" deploy sign-txs \
-  --from-account "$LOCKARG" --info-file dev-deploy.json --add-signatures
-
-ckb-cli --url "$CKB_URL" deploy apply-txs \
-  --info-file dev-deploy.json --migration-dir deployments/dev-migration
+node tools/check-deploy-size.mjs deployments/dev-testnet-*.toml
 ```
 
-## 4. Write the manifest
+Expect both to pass, at 64% and 39% of the limit:
+
+```
+  OK   dev-testnet-a.toml       2 cells  382,592 bytes  ≈ 384,392 serialized  (64.4% of the limit)
+  OK   dev-testnet-b.toml       3 cells  232,912 bytes  ≈ 235,112 serialized  (39.4% of the limit)
+```
+
+## 3. Generate the transactions
+
+Two configs, two info files, two migration directories. `gen-txs` signs and
+sends nothing, so it is safe to re-run.
+
+```sh
+for part in a b; do
+  mkdir -p "deployments/dev-migration-$part"
+  ckb-cli --url "$CKB_URL" deploy gen-txs \
+    --from-address "$ADDR" \
+    --fee-rate 1000 \
+    --deployment-config "deployments/dev-testnet-$part.toml" \
+    --info-file "dev-deploy-$part.json" \
+    --migration-dir "deployments/dev-migration-$part"
+done
+```
+
+Expect, and stop if the totals differ:
+
+```
+part a: entry-shard-type 229445.0 + settlement-type 153269.0  -> 382714.0 CKB, fee 0.0038
+part b: round-type 60141.0 + entry-lock 95453.0 + dao-lock 77501.0 -> 233095.0 CKB, fee 0.0023
+```
+
+615,809 CKB across the two, the same total as before the split.
+
+## 4. Sign and send, one part at a time
+
+Send part a, wait for it to commit, then part b. Sending both before the first
+confirms risks the second selecting inputs the first already spent.
+
+```sh
+for part in a b; do
+  ckb-cli --url "$CKB_URL" deploy sign-txs \
+    --from-account "$LOCKARG" --info-file "dev-deploy-$part.json" --add-signatures
+  ckb-cli --url "$CKB_URL" deploy apply-txs \
+    --info-file "dev-deploy-$part.json" --migration-dir "deployments/dev-migration-$part"
+done
+```
+
+A wrong password is harmless: it fails before signing, and nothing is sent.
+
+## 5. Write the manifest
 
 The client reads a schemaVersion 1 manifest; `ckb-cli` writes its own recipe
-format. This bridges them so nobody hand-copies 32-byte hashes.
+format. This bridges them so nobody hand-copies 32-byte hashes. Pass **both**
+info files — the scripts are spread across two transactions.
 
 ```sh
-node tools/manifest-from-deploy.mjs dev-deploy.json "$CKB_URL" \
+node tools/manifest-from-deploy.mjs "$CKB_URL" dev-deploy-a.json dev-deploy-b.json \
   > deployments/dev-testnet-manifest.json
 ```
 
-It refuses a cell that carries a type id, since that would mean the config was
-edited and the data-hash guarantee above is gone.
+It refuses a cell carrying a type id, a missing script, and the same info file
+passed twice.
 
-## 5. Verify against the chain — required
+## 6. Verify against the chain — required
 
 This is the only check that proves the chain runs the code in this tree.
 Comparing a manifest against a build proves nothing: on 2026-09-12 that exact
@@ -138,7 +169,7 @@ controls were run on 2026-09-18:
   local build and four cells that are no longer live. An empty manifest also
   exits 1, because verifying nothing is not a pass.
 
-## 6. Point the client at it
+## 7. Point the client at it
 
 ```sh
 python3 -m http.server 8931 --bind 127.0.0.1      # from the REPO ROOT
@@ -154,8 +185,9 @@ only.
 
 - Record the result in a `docs/validation-*.md`, including anything that did
   not work (plan Task 12).
-- `dev-deploy.json` is operational scratch and is git-ignored. It carries no
+- `dev-deploy-a.json` and `dev-deploy-b.json` are operational scratch and are
+  git-ignored. They carry no
   key material — only transactions and, after signing, signatures that become
-  public on broadcast — but it is not project state.
+  public on broadcast — but they are not project state.
 - When gate 4 supersedes this, these five cells become reclaimable. Run
   `tools/audit-wallet-cells.mjs` and follow `docs/reclaim-testnet-capacity.md`.

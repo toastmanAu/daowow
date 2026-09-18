@@ -1,0 +1,37 @@
+# DAOWOW dev deployment for gate 2 — testnet, part 2 of 2.
+#
+# SPLIT ACROSS TWO TRANSACTIONS. All five binaries in one transaction
+# serialises to 616,768 bytes against a 597,000-byte block size limit, and the
+# node refuses it with ExceededMaximumBlockBytes. `ckb-cli deploy gen-txs`
+# does NOT catch this: it prices capacity and reports success, so the failure
+# only appears at broadcast. Run tools/check-deploy-size.mjs before signing.
+#
+# enable_type_id = false on every cell: a script's code hash IS the data hash
+# of its binary, so a rebuilt binary is a DIFFERENT script rather than a
+# silent reinterpretation of cells already live under the old one. A Type ID
+# deployment would hold the code hash constant while the binary changed.
+#
+# [lock] is the deployer's own lock, NOT --zero-lock: the capacity stays
+# reclaimable once gate 4 supersedes this.
+
+[[cells]]
+name = "round-type"
+enable_type_id = false
+location = { file = "target/riscv64imac-unknown-none-elf/release/round-type" }
+
+[[cells]]
+name = "entry-lock"
+enable_type_id = false
+location = { file = "target/riscv64imac-unknown-none-elf/release/entry-lock" }
+
+[[cells]]
+name = "dao-lock"
+enable_type_id = false
+location = { file = "target/riscv64imac-unknown-none-elf/release/dao-lock" }
+
+# The lock placed on every deployed code cell: the deployer's own
+# secp256k1_blake160_sighash_all, so the capacity can be recovered later.
+[lock]
+code_hash = "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8"
+args = "0xa776bf02d19cafa3749d906cc2c9ab1cf1e80ff7"
+hash_type = "type"
