@@ -439,6 +439,18 @@ fn freeze_and_frozen_immutability() {
 /// compares one shard's count against `maximum_tickets` — which is why
 /// `RoundConfigV1::validate` refuses a cap with more than one shard.
 fn beta_config(round_id: [u8; 32]) -> RoundConfigV1 {
+    // ACC_SMT here is a LIMITATION OF THIS FILE, not the beta's choice.
+    // ADR-0001 selected MMR and the devnet exporter configures rounds with
+    // ACC_MMR; the beta will use MMR. But build_entry_tx above is written
+    // against SmtHost throughout, so an MMR round cannot be appended to here
+    // without an MMR builder, which belongs with gate 2b's entry work.
+    //
+    // What these two tests prove is therefore narrower than "the beta's exact
+    // configuration": the cap, minimum, price and single shard are the beta's,
+    // and the cap check in shard.rs is accumulator-independent, but the
+    // accumulator is not. Switching the line below to ACC_MMR makes the
+    // accept-at-cap test fail with -33 (SHARD_ERROR_ENTRY_CELL), which is the
+    // SMT witness being handed to the MMR verifier — measured, not assumed.
     let mut cfg = default_config(round_id, ACC_SMT);
     cfg.ticket_price = 1000 * SHANNONS;
     cfg.maximum_tickets = 200;
@@ -448,7 +460,8 @@ fn beta_config(round_id: [u8; 32]) -> RoundConfigV1 {
 }
 
 /// A capped single-shard round can actually be created on chain, and accepts
-/// exactly its cap.
+/// exactly its cap. See beta_config: the accumulator is SMT here, not the
+/// beta's MMR, because this file's entry builder is SMT-only.
 ///
 /// Every other integration and devnet round in this repository is multi-shard
 /// and uncapped, so before this test no on-chain evidence existed that the
