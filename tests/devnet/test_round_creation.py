@@ -210,6 +210,47 @@ class RoundCreationTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "ValidationFailure"):
                 node.rpc("send_transaction", [missing_schedule, "passthrough"])
             tx_hash, header = commit(node, tx)
+            # The web client finds rounds through the INDEXER, not by knowing
+            # an out point, so that path is exercised here against a real
+            # round rather than against a mock. It needs the Indexer rpc
+            # module, which the pinned image does not enable by default (see
+            # node_harness). The captured cell is also the fixture
+            # apps/web/test/discovery.test.js decodes, so the JavaScript
+            # decoder is pinned to a round this suite actually created.
+            found = node.rpc(
+                "get_cells",
+                [
+                    {
+                        "script": exported["round_type"],
+                        "script_type": "type",
+                        "script_search_mode": "prefix",
+                        "with_data": True,
+                    },
+                    "asc",
+                    "0xa",
+                    None,
+                ],
+            )
+            live_rounds = [
+                o
+                for o in found["objects"]
+                if len(o["output_data"]) == 2 + 358 * 2
+            ]
+            self.assertEqual(
+                len(live_rounds), 1, "the indexer must return exactly this round"
+            )
+            self.assertEqual(live_rounds[0]["out_point"]["tx_hash"], tx_hash)
+            fixture = (
+                ROOT / "apps" / "web" / "test" / "fixtures" / "devnet-round-cell.json"
+            )
+            fixture.write_text(json.dumps(live_rounds[0], indent=2, sort_keys=True))
+            print(
+                "DAOWOW round discovered through the indexer",
+                tx_hash,
+                "data bytes",
+                (len(live_rounds[0]["output_data"]) - 2) // 2,
+                flush=True,
+            )
             for i in range(3):
                 live = node.rpc(
                     "get_live_cell", [{"tx_hash": tx_hash, "index": hex(i)}, True]
