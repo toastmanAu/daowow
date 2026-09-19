@@ -22,13 +22,13 @@ reaching an indexer — were solved before anything could be signed.
 - The MMR append witness, built in the browser.
 - Shard-head contention: detect, retry, and report honestly.
 - Signing through JoyID, broadcast, and confirmation.
+- TX-04: refunding an excluded entry after the aggregation deadline.
 
 ### Non-goals
 
 - No transfer, redemption, retirement or memento. That is 2c.
 - No draw animation. That is 2d.
 - No operator or keeper functionality, including round creation. Gate 3.
-- No refund path. An excluded entry's refund is a separate flow.
 
 ## Decisions
 
@@ -74,7 +74,52 @@ constants — `100000000` shannons per CKB, the 358/101-byte cell sizes, the
 a loose substring search is useless here: `1000` already appears in
 `apps/web/dapp/dapp.js`, inside `SHANNONS = 100000000n`.
 
-### D3. The quote states the capacity overhead plainly
+### D3. The demo round is 10,000 CKB a ticket, capped at 10
+
+Approved in conversation 2026-09-19, replacing the 1000 x 200 shape gate 1
+enforced. Per D2 this is configuration, not a constant: it changes the round
+config the operator creates and requires no client change whatsoever.
+
+The reason is the ratio. A claim cell costs 222 CKB per ticket regardless of
+what a ticket is worth, so raising the price relative to that fixed cost
+improves the overhead tenfold:
+
+| shape | 10 tickets | overhead |
+|---|---|---|
+| 1,000 x 200 | 12,457 CKB for 10,000 principal | **24.57%** |
+| 10,000 x 10 | 102,457 CKB for 100,000 principal | **2.46%** |
+
+Proposed `minimum_tickets` is 5. Viability is not a constraint either way: the
+default schedule's weights are `[40, 25, 20, 10, 5]`, so `min_viable_pool` is
+20 shannons at five or more tickets — never binding.
+
+**Two consequences worth stating before the demo, not after.**
+
+*Most prizes will fall below the payment-cell floor.* A payment cell needs
+about 61 CKB. On 100,000 CKB of principal over roughly 30 days, a 2.5%
+annualised DAO yield is a pool near 205 CKB, so by the schedule's weights only
+the top prize clears the floor:
+
+```
+prize 0   82 CKB   clears
+prize 1   51 CKB   below the floor
+prize 2   41 CKB   below the floor
+prize 3   21 CKB   below the floor
+prize 4   10 CKB   below the floor
+```
+
+This is a supported path, not a defect — the devnet already redeems a prize
+with a sponsor top-up — but it means the sponsor must fund top-ups for most
+prizes, and the client must show the prize a winner actually receives rather
+than the cell's capacity, which is mostly top-up.
+
+*A single entrant can buy the entire round.* The protocol constrains
+`minimum_tickets`, never a minimum number of distinct entrants, so with a cap
+of 10 one wallet can hold every ticket and win every prize — on yield from its
+own principal. Harmless, and a poor demonstration. Worth deciding whether the
+demo relies on convention or on the operator watching the round.
+
+### D4. The quote states the capacity overhead plainly
 
 Approved in conversation 2026-09-19. The overhead is large and the honest
 response is to show it, not to bury or discount it.
@@ -88,19 +133,21 @@ Entering costs more than principal, in three parts:
 | claim cell | **ticket** | **222 CKB** | `8 + 55 JoyID lock + 78 type + 81 data` |
 | fee | tx | small | |
 
-A claim is minted per **ticket**, not per entry, so at this run's 1000 CKB
+A claim is minted per **ticket**, not per entry, so at the demo's 10,000 CKB
 price a ten-ticket entry is:
 
 ```
-principal     10 x 1000 = 10,000 CKB   returned at settlement
-claim cells   10 x  222 =  2,220 CKB   returned when the claim retires
-entry cell                    237 CKB  returned at settlement
-                          -----------
-total                      12,457 CKB  + fee
+principal     10 x 10000 = 100,000 CKB   returned at settlement
+claim cells   10 x   222 =   2,220 CKB   returned when the claim retires
+entry cell                     237 CKB   returned at settlement
+                           ------------
+total                       102,457 CKB  + fee
 ```
 
-That is **24.6% above principal**, locked for the round's duration — one to two
-native DAO cycles, roughly 30 to 60 days. It is recoverable, not spent: the
+That is **2.46% above principal**, locked for the round's duration — one to two
+native DAO cycles, roughly 30 to 60 days. The same ten tickets under the
+earlier 1,000 CKB shape carried 24.57%, because the 222 CKB claim cell is fixed
+per ticket whatever the ticket is worth. It is recoverable, not spent: the
 claim capacity returns when the claim retires (2c), and a winner's memento is
 193 CKB.
 
@@ -111,7 +158,7 @@ gap `docs/HANDOFF-2026-09-16.md` recorded against the old entry preview.
 The claim figure is computed from the **connected wallet's own lock**, never
 assumed: 222 CKB is the JoyID number (22-byte args), and a secp lock gives 220.
 
-### D4. Contention is a first-class flow, not error handling
+### D5. Contention is a first-class flow, not error handling
 
 Gate 1 fixed the beta at one entry shard, so every entrant competes for one
 cell. `TX-02` in `docs/transaction-templates.md` says so outright: "retry
@@ -131,7 +178,7 @@ wallet. The client must therefore:
 `entry_nonce == first_nonce_in_tx + nonce_index_in_tx`, so a rebuilt entry is
 genuinely a different entry, not a resubmission of the same bytes.
 
-### D5. The visitor approves our numbers before the wallet sees them
+### D6. The visitor approves our numbers before the wallet sees them
 
 2a recorded an obligation to settle before the first signature. CCC's JoyID
 signer hands off to JoyID's own hosted signing UI, so this is not the
@@ -191,8 +238,15 @@ cannot express the closing side — that is the freeze transition's job.
   200-ticket entry mints 200 claim cells in one transaction — worth measuring
   against the block size limit, which the dev deployment has already shown is
   a real constraint at 597,000 bytes.
-- **Who pays the fee when an entry loses a contention race?** The failed
-  attempt costs nothing on chain, but repeated signature prompts are a poor
-  experience and the wallet may be asked to sign several times.
-- **Refunds.** An excluded entry is refundable, and the flow is unbuilt. It may
-  belong in 2c rather than here.
+- ~~Who pays the fee when an entry loses a contention race?~~ **Answered, and
+  the question was misframed.** A losing entry is rejected by the pool and
+  never committed, so no fee is paid and nothing reaches the chain. The cost is
+  entirely a matter of experience: the visitor approves in their wallet, waits,
+  and is asked to approve again. What remains open is how many silent retries
+  are acceptable before the client stops and explains.
+- **How does a visitor learn their entry was excluded?** Refunds are in scope
+  (TX-04), but an excluded entry is only knowable after the aggregation
+  deadline, by which time the visitor has likely closed the page. Discovering
+  refundable entries on reconnect is part of this, and the client must derive
+  that from chain state rather than remembering a local flag — a reorg can
+  reverse it.
