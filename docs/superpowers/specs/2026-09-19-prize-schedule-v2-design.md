@@ -155,9 +155,11 @@ how the redeploy is split.
 
 ## Open questions
 
-- **Does the client display payout depth before entry?** A visitor deciding
-  whether to buy the eighth ticket is deciding whether a second prize exists.
-  That is a strong reason to show the table, and it belongs in 2b's quote.
+- ~~Does the client display payout depth before entry?~~ **Answered
+  2026-09-19: yes.** A visitor deciding whether to buy the eighth ticket is
+  deciding whether a second prize exists at all, so the payout table is part of
+  2b's entry view, and the site explains the methodology behind it. Specified
+  in `2026-09-19-dapp-entry-design.md` under D7.
 - **What happens to a round already open when an operator wants a different
   table?** Nothing can change it, by D2. That is the intended answer, but it
   means the demo's thresholds must be right before the round is created.

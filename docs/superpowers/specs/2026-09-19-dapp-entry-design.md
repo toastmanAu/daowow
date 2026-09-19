@@ -23,6 +23,7 @@ reaching an indexer — were solved before anything could be signed.
 - Shard-head contention: detect, retry, and report honestly.
 - Signing through JoyID, broadcast, and confirmation.
 - TX-04: refunding an excluded entry after the aggregation deadline.
+- The live payout table, and a page explaining the methodology behind it.
 
 ### Non-goals
 
@@ -191,6 +192,65 @@ complete quote and requires an explicit confirmation **before** invoking the
 signer, so the visitor has already agreed to a specific total from a page whose
 source they can read. The client must never present a figure it did not
 compute from chain data.
+
+### D7. The site shows the payout table and explains how any of this works
+
+Approved in conversation 2026-09-19.
+
+**The payout table, in the entry view.** Prize schedule v2 makes payout depth a
+function of the field, so a visitor deciding whether to buy the eighth ticket
+is deciding whether a second prize exists at all. Hiding that would make the
+decision unintelligible. The entry view shows the committed table, which place
+the round currently pays to, and what the next threshold is:
+
+```
+tickets so far   6 of 10          paying 1 place
+                                  2nd place opens at 8
+```
+
+Every figure comes from the committed schedule, decoded from the round config
+like everything else (D2). The client renders the table; it never defines it.
+
+**A methodology page.** The single most important fact about DAOWOW is
+counter-intuitive and has to be stated plainly rather than inferred:
+
+> Prizes are funded by Nervos DAO yield on the pooled principal. Entrants get
+> their principal back whether they win or lose. Nobody's stake pays anybody
+> else's prize.
+
+That is the whole design, and a visitor who does not understand it will read
+the page as a conventional lottery where losers fund winners. The page must
+cover, in plain language:
+
+- **Where prizes come from.** Pooled principal is deposited into the Nervos
+  DAO for one or two 180-epoch cycles; the yield is the prize pool; the
+  principal returns to its depositor at settlement.
+- **How many places pay** — the v2 threshold table and why depth scales.
+- **How winners are chosen.** The entry set is sealed first, then entropy is
+  taken from the hashes of four blocks at +64, +128, +192 and +256 after the
+  seal's inclusion block. The seed is
+  `blake2b(DAOWOW_AUTHENTICATED_DRAW_V1 || config commitment || entropy record)`
+  and positions are drawn by rejection sampling. Nobody, including the
+  operator, can know those block hashes when entry closes.
+- **What it costs beyond principal** — D4's capacity table, and that it is
+  locked rather than spent.
+- **What a ticket actually is** — a transferable claim NFT per ticket, whose
+  holder redeems prize rights; principal and refunds stay with the depositor.
+- **How long capacity is committed** — one to two DAO cycles, 30 to 60 days.
+
+**Two honesty constraints, which a reviewer should enforce.**
+
+*Nothing may be described as live that is not built.* At 2b the client can
+enter and refund; transfer, redemption, retirement and the draw reveal are 2c
+and 2d. The page describes the protocol and marks clearly what the client can
+do today.
+
+*The draw description must not overclaim.* Sealing the entry set before the
+entropy blocks exist prevents anyone choosing entropy to suit a known field,
+and using four spaced blocks makes influence far harder than one. It is not a
+VRF or a randomness beacon: a miner who controlled the relevant blocks could
+in principle grind, and the page should say so rather than assert
+unqualified fairness.
 
 ## The transaction
 
