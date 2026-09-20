@@ -193,6 +193,31 @@ fn gen_vectors() {
         },
     });
 
+    // Prize schedule v2 oracle. The web client renders the payout table, so it
+    // needs the selection RULE pinned, not only the bytes: places_at is the
+    // number of paying places at each interesting ticket count, including both
+    // sides of every threshold.
+    let demo_schedule = daowow_core::schedule::PrizeSchedule::new_tiered(
+        &[40, 25, 20, 10, 5],
+        &[1, 8, 20, 50, 100],
+    )
+    .unwrap();
+    let mut places_at = serde_json::Map::new();
+    for tickets in [1u64, 7, 8, 19, 20, 49, 50, 99, 100, 1000] {
+        places_at.insert(
+            tickets.to_string(),
+            json!(demo_schedule.weights_for(tickets).unwrap().len()),
+        );
+    }
+    let prize_schedule_v2 = json!({
+        "note": "demo schedule; v1 wire is unchanged and lives in the v1 tests",
+        "hex": hex(&demo_schedule.encode()),
+        "commitment": hex(&demo_schedule.commitment()),
+        "weights": demo_schedule.weights_for(u64::MAX).unwrap(),
+        "thresholds": demo_schedule.thresholds(),
+        "places_at": places_at,
+    });
+
     let v = json!({
         "meta": {
             "hash": "blake2b-256 personalization ckb-default-hash",
@@ -242,6 +267,7 @@ fn gen_vectors() {
             "rejection_sample_prize0_n1000000": { "position": pos, "retry": retry },
         },
         "canonical_sizes": sizes,
+        "prize_schedule_v2": prize_schedule_v2,
         "cell_encodings": cell_encodings,
     });
 
