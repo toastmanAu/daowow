@@ -31,3 +31,6 @@ reclaim-*.json
 # ckb-cli deploy working files (operational scratch, not project state)
 dev-deploy-*.json
 deployments/dev-migration-*/
+
+# ckb-cli reclaim working file
+reclaim.json
