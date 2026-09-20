@@ -95,3 +95,63 @@ fn a_non_winner_retires_at_the_maximum_shard_count() {
     let cycles = expect_ok(&mut w.context, &tx);
     println!("retire at 256 shards: {cycles} cycles");
 }
+
+/// The committed payout table decides who wins, and CKB-VM agrees with the
+/// host about it.
+///
+/// This is the on-chain proof of prize schedule v2. Under the v1 rule a
+/// four-ticket round draws `min(4, 5) = 4` positions, so EVERY ticket wins and
+/// no non-winner exists — `sealed_round_with_schedule` would panic looking for
+/// one. Under the tiered table `[1, 8, 20, 50, 100]` only the first place is
+/// open below eight tickets, so exactly one position is drawn and three
+/// tickets are non-winners.
+///
+/// Retiring one of those three therefore only succeeds if the CONTRACT
+/// selects places by threshold too. A contract still using the v1 rule would
+/// consider the ticket a winner and refuse with CLAIM_ERROR_INCOMPLETE. The
+/// test's fixture could not even be built against v1, which is what makes it
+/// discriminating rather than merely passing.
+#[test]
+fn the_committed_threshold_table_decides_winners_on_chain() {
+    let tiered = daowow_core::schedule::PrizeSchedule::new_tiered(
+        &[40, 25, 20, 10, 5],
+        &[1, 8, 20, 50, 100],
+    )
+    .unwrap();
+    // The premise, asserted rather than assumed: v1 and v2 disagree here.
+    assert_eq!(
+        default_prize_schedule().weights_for(4).unwrap().len(),
+        4,
+        "v1 draws a place per ticket, so a four-ticket round has no non-winner"
+    );
+    assert_eq!(
+        tiered.weights_for(4).unwrap().len(),
+        1,
+        "the tiered table opens only the first place below eight tickets"
+    );
+
+    let mut w = World::new(ACC_MMR);
+    let round = sealed_round_with_schedule(&mut w, 1, 4, tiered);
+    let (_, lock) = w.always_success();
+    let (claim_op, _args) = seed_claim(
+        &mut w,
+        &lock,
+        round.non_winning_shard,
+        round.non_winning_position,
+    );
+
+    let tx = TransactionBuilder::default()
+        .input(CellInput::new_builder().previous_output(claim_op).build())
+        .output(
+            CellOutputBuilder::default()
+                .capacity(pack_u64(claim_cell_capacity(&lock)))
+                .lock(lock.clone())
+                .build(),
+        )
+        .output_data(Bytes::new().pack())
+        .cell_dep(round.config_dep.clone())
+        .cell_dep(round.entropy_dep.clone())
+        .witness(schedule_witness(&round.schedule))
+        .build();
+    expect_ok(&mut w.context, &tx);
+}

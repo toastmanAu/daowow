@@ -722,17 +722,32 @@ pub fn sealed_round_with_entropy(
     shards: u32,
     total_tickets: u64,
 ) -> SealedRound {
+    sealed_round_with_schedule(world, shards, total_tickets, default_prize_schedule())
+}
+
+/// As above, but with a caller-chosen prize schedule. A tiered (v2) schedule
+/// changes how many positions are drawn for a given ticket count, and so
+/// changes which tickets are non-winners — which is the whole point of the
+/// threshold rule and the only way to exercise it on chain.
+pub fn sealed_round_with_schedule(
+    world: &mut World,
+    shards: u32,
+    total_tickets: u64,
+    schedule: daowow_core::schedule::PrizeSchedule,
+) -> SealedRound {
     assert_eq!(
         total_tickets % shards as u64,
         0,
         "sealed_round_with_entropy: total_tickets must divide evenly across shards"
     );
     let tickets_per_shard = total_tickets / shards as u64;
-    let schedule = default_prize_schedule();
+    // The round id includes the schedule commitment so two fixtures differing
+    // only in their payout table are still distinct rounds.
     let round_id = daowow_core::hash::ckb_hash256(&[
         b"claim-retirement-fixture",
         &shards.to_le_bytes(),
         &total_tickets.to_le_bytes(),
+        &schedule.commitment(),
     ]);
     let mut base_cfg = default_config(round_id, ACC_MMR);
     base_cfg.entry_shard_count = shards;
