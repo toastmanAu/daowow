@@ -14,25 +14,67 @@ pub const MAX_SCHEDULE_PRIZES: usize = 32;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PrizeSchedule {
     weights: Vec<u64>,
+    /// Minimum accepted tickets at which each place begins paying.
+    /// Non-decreasing, and `thresholds[0] <= 1` so any drawing round pays at
+    /// least one place.
+    thresholds: Vec<u64>,
 }
 
 impl PrizeSchedule {
     /// Validate 1–32 strictly positive weights. Returns `InvalidArgument`
     /// for an invalid count/zero weight, or `Overflow` if their sum exceeds u64.
     pub fn new(weights: &[u64]) -> Result<Self, CoreError> {
+        // The v1 rule: place `i` pays from `i + 1` tickets, which is exactly
+        // the historical `min(tickets, len)` selection.
+        let thresholds: Vec<u64> = (1..=weights.len() as u64).collect();
+        Self::new_tiered(weights, &thresholds)
+    }
+
+    /// Validate weights together with a per-place ticket threshold. A place
+    /// pays only once the round reaches its threshold, so payout depth scales
+    /// with the field instead of with nothing.
+    pub fn new_tiered(weights: &[u64], thresholds: &[u64]) -> Result<Self, CoreError> {
         validate_weights(weights)?;
+        validate_thresholds(weights.len(), thresholds)?;
         Ok(Self {
             weights: weights.to_vec(),
+            thresholds: thresholds.to_vec(),
         })
+    }
+
+    pub fn thresholds(&self) -> &[u64] {
+        &self.thresholds
+    }
+
+    /// True when the table is the v1 default. `encode` then emits the v1 wire,
+    /// so a schedule written before v2 keeps its exact bytes and therefore its
+    /// commitment.
+    fn is_v1_default(&self) -> bool {
+        self.thresholds
+            .iter()
+            .enumerate()
+            .all(|(i, t)| *t == i as u64 + 1)
     }
 
     /// Canonical wire: version 1, count u32 LE, then ordered weights u64 LE.
     pub fn encode(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(5 + self.weights.len() * 8);
-        out.push(1);
+        if self.is_v1_default() {
+            // Byte-identical to the pre-v2 encoding. Any round whose config
+            // committed to these bytes must keep validating.
+            let mut out = Vec::with_capacity(5 + self.weights.len() * 8);
+            out.push(1);
+            out.extend_from_slice(&(self.weights.len() as u32).to_le_bytes());
+            for weight in &self.weights {
+                out.extend_from_slice(&weight.to_le_bytes());
+            }
+            return out;
+        }
+        let mut out = Vec::with_capacity(5 + self.weights.len() * 16);
+        out.push(2);
         out.extend_from_slice(&(self.weights.len() as u32).to_le_bytes());
-        for weight in &self.weights {
+        for (weight, threshold) in self.weights.iter().zip(&self.thresholds) {
             out.extend_from_slice(&weight.to_le_bytes());
+            out.extend_from_slice(&threshold.to_le_bytes());
         }
         out
     }
@@ -41,23 +83,52 @@ impl PrizeSchedule {
     /// version, invalid count, truncated or trailing bytes; weight validation
     /// has the same errors as [`Self::new`]. No cell provenance is established.
     pub fn decode(data: &[u8]) -> Result<Self, CoreError> {
-        if data.len() < 5 || data[0] != 1 {
+        if data.len() < 5 {
             return Err(CoreError::Encoding);
         }
+        let version = data[0];
         let count = u32::from_le_bytes(data[1..5].try_into().map_err(|_| CoreError::Encoding)?);
         // Bound the untrusted count before arithmetic, allocation or iteration.
-        if count == 0 || count > MAX_SCHEDULE_PRIZES as u32 || data.len() != 5 + count as usize * 8
-        {
+        if count == 0 || count > MAX_SCHEDULE_PRIZES as u32 {
             return Err(CoreError::Encoding);
         }
-        let weights: Vec<_> = data[5..]
-            .as_chunks::<8>()
-            .0
-            .iter()
-            .map(|bytes| u64::from_le_bytes(*bytes))
-            .collect();
-        validate_weights(&weights)?;
-        Ok(Self { weights })
+        let count = count as usize;
+        match version {
+            1 => {
+                if data.len() != 5 + count * 8 {
+                    return Err(CoreError::Encoding);
+                }
+                let weights: Vec<_> = data[5..]
+                    .as_chunks::<8>()
+                    .0
+                    .iter()
+                    .map(|bytes| u64::from_le_bytes(*bytes))
+                    .collect();
+                Self::new(&weights)
+            }
+            2 => {
+                if data.len() != 5 + count * 16 {
+                    return Err(CoreError::Encoding);
+                }
+                let mut weights = Vec::with_capacity(count);
+                let mut thresholds = Vec::with_capacity(count);
+                for pair in data[5..].as_chunks::<16>().0 {
+                    let (w, t) = pair.split_at(8);
+                    weights.push(u64::from_le_bytes(w.try_into().map_err(|_| CoreError::Encoding)?));
+                    thresholds
+                        .push(u64::from_le_bytes(t.try_into().map_err(|_| CoreError::Encoding)?));
+                }
+                let schedule = Self::new_tiered(&weights, &thresholds)?;
+                // A v2 wire carrying the default table would give one schedule
+                // two encodings and so two commitments, and the commitment
+                // would stop identifying it. One encoding per schedule.
+                if schedule.is_v1_default() {
+                    return Err(CoreError::Encoding);
+                }
+                Ok(schedule)
+            }
+            _ => Err(CoreError::Encoding),
+        }
     }
 
     /// CKB-personalized Blake2b-256 of `DAOWOW_PRIZE_SCHEDULE_V1 || encoding`.
@@ -113,6 +184,22 @@ impl PrizeSchedule {
     }
 }
 
+/// Thresholds must match the weights one-for-one, open the first place to any
+/// drawing round, and never let a later place open before an earlier one.
+fn validate_thresholds(count: usize, thresholds: &[u64]) -> Result<(), CoreError> {
+    if thresholds.len() != count {
+        return Err(CoreError::InvalidArgument);
+    }
+    match thresholds.first() {
+        Some(first) if *first <= 1 => {}
+        _ => return Err(CoreError::InvalidArgument),
+    }
+    if thresholds.windows(2).any(|w| w[1] < w[0]) {
+        return Err(CoreError::InvalidArgument);
+    }
+    Ok(())
+}
+
 fn validate_weights(weights: &[u64]) -> Result<(), CoreError> {
     if weights.is_empty() || weights.len() > MAX_SCHEDULE_PRIZES || weights.contains(&0) {
         return Err(CoreError::InvalidArgument);
@@ -144,6 +231,102 @@ mod tests {
         assert_eq!(s.encode(), WIRE);
         assert_eq!(s.commitment(), COMMITMENT);
         assert_eq!(PrizeSchedule::decode_committed(&WIRE, &COMMITMENT), Ok(s));
+    }
+
+    #[test]
+    fn a_v1_schedule_still_encodes_to_the_same_bytes_and_commitment() {
+        // COMPATIBILITY CANARY. The deployed round config, the golden vectors
+        // and every existing test commit to these exact bytes. If v2 changed
+        // them a live round would stop validating against its own committed
+        // schedule, and nothing else in the suite would say so first.
+        let s = PrizeSchedule::new(&[40, 25, 20, 10, 5]).unwrap();
+        assert_eq!(s.encode(), WIRE.to_vec());
+        assert_eq!(s.commitment(), COMMITMENT);
+    }
+
+    #[test]
+    fn new_defaults_thresholds_to_the_v1_rule() {
+        let s = PrizeSchedule::new(&[40, 25, 20, 10, 5]).unwrap();
+        assert_eq!(s.thresholds(), &[1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn a_tiered_schedule_round_trips_through_v2() {
+        let s = PrizeSchedule::new_tiered(&[40, 25, 20, 10, 5], &[1, 8, 20, 50, 100]).unwrap();
+        let wire = s.encode();
+        assert_eq!(wire[0], 2, "a non-default table must emit version 2");
+        assert_eq!(wire.len(), 5 + 16 * 5);
+        assert_eq!(PrizeSchedule::decode(&wire), Ok(s));
+    }
+
+    #[test]
+    fn a_v1_wire_decodes_with_the_default_thresholds() {
+        let s = PrizeSchedule::decode(&WIRE).unwrap();
+        assert_eq!(s.thresholds(), &[1, 2, 3, 4, 5]);
+        assert_eq!(s, PrizeSchedule::new(&[40, 25, 20, 10, 5]).unwrap());
+    }
+
+    #[test]
+    fn a_v2_wire_carrying_the_default_table_is_refused() {
+        // Otherwise one schedule would have two valid encodings and therefore
+        // two commitments, and the commitment would stop identifying it.
+        let mut wire = alloc::vec![2u8];
+        wire.extend_from_slice(&2u32.to_le_bytes());
+        for (w, t) in [(40u64, 1u64), (25, 2)] {
+            wire.extend_from_slice(&w.to_le_bytes());
+            wire.extend_from_slice(&t.to_le_bytes());
+        }
+        assert_eq!(PrizeSchedule::decode(&wire), Err(CoreError::Encoding));
+    }
+
+    #[test]
+    fn decreasing_thresholds_are_refused() {
+        // The first threshold is deliberately VALID (<= 1) so the ordering
+        // guard is the only one that can refuse this. [8, 1] would have been
+        // caught by the first-threshold check instead, leaving the ordering
+        // check unpinned while the test still passed.
+        assert_eq!(
+            PrizeSchedule::new_tiered(&[40, 25, 20], &[1, 8, 5]),
+            Err(CoreError::InvalidArgument)
+        );
+    }
+
+    #[test]
+    fn a_first_threshold_above_one_is_refused() {
+        // Otherwise a round could draw with zero paying places, a state no
+        // existing path expects.
+        assert_eq!(
+            PrizeSchedule::new_tiered(&[40, 25], &[2, 8]),
+            Err(CoreError::InvalidArgument)
+        );
+    }
+
+    #[test]
+    fn a_threshold_count_mismatch_is_refused() {
+        assert_eq!(
+            PrizeSchedule::new_tiered(&[40, 25, 20], &[1, 8]),
+            Err(CoreError::InvalidArgument)
+        );
+    }
+
+    #[test]
+    fn a_truncated_or_overlong_v2_wire_is_refused() {
+        let s = PrizeSchedule::new_tiered(&[40, 25], &[1, 8]).unwrap();
+        let wire = s.encode();
+        assert_eq!(
+            PrizeSchedule::decode(&wire[..wire.len() - 1]),
+            Err(CoreError::Encoding)
+        );
+        let mut long = wire.clone();
+        long.push(0);
+        assert_eq!(PrizeSchedule::decode(&long), Err(CoreError::Encoding));
+    }
+
+    #[test]
+    fn an_unknown_version_is_refused() {
+        let mut wire = PrizeSchedule::new(&[40, 25]).unwrap().encode();
+        wire[0] = 3;
+        assert_eq!(PrizeSchedule::decode(&wire), Err(CoreError::Encoding));
     }
 
     #[test]
