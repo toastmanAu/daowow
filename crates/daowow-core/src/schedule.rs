@@ -151,7 +151,17 @@ impl PrizeSchedule {
         if tickets == 0 {
             return Err(CoreError::InvalidArgument);
         }
-        let count = tickets.min(self.weights.len() as u64) as usize;
+        // Thresholds are non-decreasing, so the open places are a prefix and
+        // take_while finds all of them.
+        let open = self
+            .thresholds
+            .iter()
+            .take_while(|threshold| **threshold <= tickets)
+            .count() as u64;
+        // Capped at the ticket count: a place cannot be paid to a position
+        // that does not exist. Thresholds [1, 1, 1] would otherwise pay three
+        // places in a two-ticket round.
+        let count = open.min(tickets).min(self.weights.len() as u64) as usize;
         Ok(&self.weights[..count])
     }
 
@@ -231,6 +241,65 @@ mod tests {
         assert_eq!(s.encode(), WIRE);
         assert_eq!(s.commitment(), COMMITMENT);
         assert_eq!(PrizeSchedule::decode_committed(&WIRE, &COMMITMENT), Ok(s));
+    }
+
+    #[test]
+    fn v1_and_v2_agree_for_every_ticket_count() {
+        // The migration proof. v1 IS v2 with thresholds [1, 2, ..., n], so a
+        // schedule built either way must select identically at every size.
+        // This is what says no existing round's behaviour changed.
+        let weights = [40, 25, 20, 10, 5];
+        let v1 = PrizeSchedule::new(&weights).unwrap();
+        let v2 = PrizeSchedule::new_tiered(&weights, &[1, 2, 3, 4, 5]).unwrap();
+        for tickets in 1..40u64 {
+            assert_eq!(
+                v1.weights_for(tickets).unwrap(),
+                v2.weights_for(tickets).unwrap(),
+                "disagreed at {tickets} tickets"
+            );
+        }
+    }
+
+    #[test]
+    fn a_place_opens_exactly_at_its_threshold() {
+        let s = PrizeSchedule::new_tiered(&[40, 25, 20, 10, 5], &[1, 8, 20, 50, 100]).unwrap();
+        for (tickets, places) in [
+            (1u64, 1usize),
+            (7, 1),
+            (8, 2),
+            (19, 2),
+            (20, 3),
+            (49, 3),
+            (50, 4),
+            (99, 4),
+            (100, 5),
+            (1000, 5),
+        ] {
+            assert_eq!(
+                s.weights_for(tickets).unwrap().len(),
+                places,
+                "{tickets} tickets should pay {places}"
+            );
+        }
+    }
+
+    #[test]
+    fn selection_never_exceeds_the_ticket_count() {
+        // Thresholds alone would pay three places to a two-ticket round, and
+        // there are not three distinct positions to draw.
+        let s = PrizeSchedule::new_tiered(&[40, 25, 20], &[1, 1, 1]).unwrap();
+        assert_eq!(s.weights_for(2).unwrap().len(), 2);
+        assert_eq!(s.weights_for(1).unwrap().len(), 1);
+        assert_eq!(s.weights_for(3).unwrap().len(), 3);
+    }
+
+    #[test]
+    fn min_viable_pool_follows_the_threshold_selection() {
+        let s = PrizeSchedule::new_tiered(&[40, 25, 20, 10, 5], &[1, 8, 20, 50, 100]).unwrap();
+        // At 7 tickets only place 0 pays: ceil(40 / 40) = 1.
+        assert_eq!(s.min_viable_pool(7).unwrap(), 1);
+        // At 8 the second place opens: ceil(65 / 25) = 3.
+        assert_eq!(s.min_viable_pool(8).unwrap(), 3);
     }
 
     #[test]
