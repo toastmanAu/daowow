@@ -27,32 +27,22 @@ use ckb_testtool::ckb_types::{
 };
 use common::*;
 
-/// Build an entry transaction (SMT accumulator).
+/// Build an entry transaction against either accumulator.
 fn build_entry_tx(
     world: &mut World,
     cfg: &RoundConfigV1,
     round_op: &OutPoint,
     shard_op: &OutPoint,
     shard_before: &EntryShardDataV1,
-    host: &mut SmtHost,
+    host: &mut EntryAccumulator,
     entries: &[EntryDataV1],
     participant_hash: &Hash32,
     spurious_entry_cells: usize,
 ) -> (TransactionView, EntryShardDataV1) {
-    // Each certificate authenticates one exact insertion; chain roots in
-    // witness entry order rather than proving every leaf against final root.
-    let mut certs: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
-    for e in entries {
-        let absence = host.absence_proof(&[smt_key(e)]).unwrap();
-        host.insert(&smt_key(e), &smt_leaf(e)).unwrap();
-        let inclusion = host.inclusion_proof(&[smt_key(e)]).unwrap();
-        certs.push((absence, inclusion));
-    }
-    let cert_refs: Vec<(&[u8], &[u8])> = certs
-        .iter()
-        .map(|(a, b)| (a.as_slice(), b.as_slice()))
-        .collect();
-    let witness = smt_append_witness(entries, &cert_refs);
+    // The accumulator owns how an append is authenticated: SMT chains an
+    // absence/inclusion certificate per entry, MMR carries the peak lists
+    // either side of the append.
+    let witness = host.append_witness(entries);
 
     // expected post-state (tolerates deliberately-invalid entries used in
     // adversarial tests: the contract must reject them anyway)
@@ -143,7 +133,7 @@ fn contended_shard_head_serializes_via_utxo() {
     let round_op = world.create_round(&cfg);
     let (shard_op, shard0) = world.create_shard(&cfg, 0, 1);
 
-    let mut host = SmtHost::new();
+    let mut host = EntryAccumulator::smt();
 
     let (_, lock_a) = world.always_success();
     let ph_a = World::participant_hash(&lock_a);
@@ -198,8 +188,8 @@ fn batched_entries_and_parallel_shards() {
 
     let (_, lock) = world.always_success();
     let ph = World::participant_hash(&lock);
-    let mut host_a = SmtHost::new();
-    let mut host_b = SmtHost::new();
+    let mut host_a = EntryAccumulator::smt();
+    let mut host_b = EntryAccumulator::smt();
 
     let ea = make_entry_batch(&cfg, &shard_a, &ph, &[2, 1], &[[0xC1; 32], [0xC2; 32]]);
     let eb = [make_entry(&cfg, &shard_b, &ph, 5, &[0xC3; 32])];
@@ -245,7 +235,7 @@ fn adversarial_entry_txs_rejected() {
     let (shard_op, shard0) = world.create_shard(&cfg, 0, 1);
     let (_, lock) = world.always_success();
     let ph = World::participant_hash(&lock);
-    let mut host = SmtHost::new();
+    let mut host = EntryAccumulator::smt();
 
     // 1. forged accumulator root (no valid certificate)
     let e = make_entry(&cfg, &shard0, &ph, 1, &[0xD1; 32]);
@@ -279,7 +269,7 @@ fn adversarial_entry_txs_rejected() {
     // 2. principal mismatch
     let mut e2 = make_entry(&cfg, &shard0, &ph, 2, &[0xD2; 32]);
     e2.principal = 1;
-    let mut host2 = SmtHost::new();
+    let mut host2 = EntryAccumulator::smt();
     let (tx2, _) = build_entry_tx(
         &mut world,
         &cfg,
@@ -295,7 +285,7 @@ fn adversarial_entry_txs_rejected() {
     println!("principal mismatch rejected: {:?}", err);
 
     // 3. sequence jump
-    let mut host3 = SmtHost::new();
+    let mut host3 = EntryAccumulator::smt();
     let e3 = make_entry(&cfg, &shard0, &ph, 1, &[0xD3; 32]);
     let (tx3, _) = build_entry_tx(
         &mut world,
@@ -323,7 +313,7 @@ fn adversarial_entry_txs_rejected() {
     println!("sequence jump rejected: {:?}", err);
 
     // 4. spurious entry cell not covered by the witness
-    let mut host4 = SmtHost::new();
+    let mut host4 = EntryAccumulator::smt();
     let e4 = make_entry(&cfg, &shard0, &ph, 1, &[0xD4; 32]);
     let (tx4, _) = build_entry_tx(
         &mut world,
@@ -340,7 +330,7 @@ fn adversarial_entry_txs_rejected() {
     println!("uncovered entry cell rejected: {:?}", err);
 
     // 5. entry cell for another shard (round mismatch)
-    let mut host5 = SmtHost::new();
+    let mut host5 = EntryAccumulator::smt();
     let mut e5 = make_entry(&cfg, &shard0, &ph, 1, &[0xD5; 32]);
     e5.shard_id = 3;
     let (tx5, _) = build_entry_tx(
@@ -366,7 +356,7 @@ fn freeze_and_frozen_immutability() {
     let (shard_op, shard0) = world.create_shard(&cfg, 0, 1);
     let (_, lock) = world.always_success();
     let ph = World::participant_hash(&lock);
-    let mut host = SmtHost::new();
+    let mut host = EntryAccumulator::smt();
     let e = make_entry(&cfg, &shard0, &ph, 2, &[0xE1; 32]);
     let (_tx, _shard1) = build_entry_tx(
         &mut world,
@@ -439,19 +429,10 @@ fn freeze_and_frozen_immutability() {
 /// compares one shard's count against `maximum_tickets` — which is why
 /// `RoundConfigV1::validate` refuses a cap with more than one shard.
 fn beta_config(round_id: [u8; 32]) -> RoundConfigV1 {
-    // ACC_SMT here is a LIMITATION OF THIS FILE, not the beta's choice.
-    // ADR-0001 selected MMR and the devnet exporter configures rounds with
-    // ACC_MMR; the beta will use MMR. But build_entry_tx above is written
-    // against SmtHost throughout, so an MMR round cannot be appended to here
-    // without an MMR builder, which belongs with gate 2b's entry work.
-    //
-    // What these two tests prove is therefore narrower than "the beta's exact
-    // configuration": the cap, minimum, price and single shard are the beta's,
-    // and the cap check in shard.rs is accumulator-independent, but the
-    // accumulator is not. Switching the line below to ACC_MMR makes the
-    // accept-at-cap test fail with -33 (SHARD_ERROR_ENTRY_CELL), which is the
-    // SMT witness being handed to the MMR verifier — measured, not assumed.
-    let mut cfg = default_config(round_id, ACC_SMT);
+    // ACC_MMR: the accumulator the beta actually uses. ADR-0001 selected MMR
+    // and the devnet exporter configures rounds with it, so a test named for
+    // the beta's configuration must run it too.
+    let mut cfg = default_config(round_id, ACC_MMR);
     cfg.ticket_price = 1000 * SHANNONS;
     cfg.maximum_tickets = 200;
     cfg.minimum_tickets = 50;
@@ -460,8 +441,7 @@ fn beta_config(round_id: [u8; 32]) -> RoundConfigV1 {
 }
 
 /// A capped single-shard round can actually be created on chain, and accepts
-/// exactly its cap. See beta_config: the accumulator is SMT here, not the
-/// beta's MMR, because this file's entry builder is SMT-only.
+/// exactly its cap, under the beta's own MMR accumulator.
 ///
 /// Every other integration and devnet round in this repository is multi-shard
 /// and uncapped, so before this test no on-chain evidence existed that the
@@ -469,14 +449,14 @@ fn beta_config(round_id: [u8; 32]) -> RoundConfigV1 {
 /// unit tests and by the config guard.
 #[test]
 fn the_beta_config_creates_a_round_and_accepts_exactly_its_cap() {
-    let mut world = World::new(ACC_SMT);
+    let mut world = World::new(ACC_MMR);
     let cfg = beta_config([0xB7; 32]);
     assert!(cfg.validate().is_ok(), "the beta config must be valid");
     let round_op = world.create_round(&cfg);
     let (shard_op, shard) = world.create_shard(&cfg, 0, 1);
     let (_, lock) = world.always_success();
     let ph = World::participant_hash(&lock);
-    let mut host = SmtHost::new();
+    let mut host = EntryAccumulator::mmr();
 
     // The cap is checked against the whole batch (`base + delta > cap`), so one
     // entry of 200 tickets exercises the boundary exactly as 200 separate
@@ -496,13 +476,13 @@ fn the_beta_config_creates_a_round_and_accepts_exactly_its_cap() {
 /// test at a cap of 10.
 #[test]
 fn the_beta_config_refuses_one_ticket_over_its_cap() {
-    let mut world = World::new(ACC_SMT);
+    let mut world = World::new(ACC_MMR);
     let cfg = beta_config([0xB8; 32]);
     let round_op = world.create_round(&cfg);
     let (shard_op, shard) = world.create_shard(&cfg, 0, 1);
     let (_, lock) = world.always_success();
     let ph = World::participant_hash(&lock);
-    let mut host = SmtHost::new();
+    let mut host = EntryAccumulator::mmr();
 
     let entries = [make_entry(&cfg, &shard, &ph, 201, &[0xE2; 32])];
     let (tx, _) = build_entry_tx(
@@ -510,3 +490,4 @@ fn the_beta_config_refuses_one_ticket_over_its_cap() {
     );
     expect_fail(&mut world.context, &tx);
 }
+

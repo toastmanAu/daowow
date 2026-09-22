@@ -628,6 +628,76 @@ pub fn redemption_witness(
     pack_pbytes(&daowow_core::witness::encode_redemption_witness(items).unwrap())
 }
 
+/// The shard accumulator a test drives, so one entry builder can exercise
+/// either. `build_entry_tx` was SMT-only, which meant the beta config tests
+/// ran an accumulator the beta does not use (ADR-0001 selected MMR, and the
+/// devnet exporter configures ACC_MMR).
+pub enum EntryAccumulator {
+    Smt(SmtHost),
+    Mmr(daowow_core::accumulator::mmr::host::MmrHost),
+}
+
+impl EntryAccumulator {
+    pub fn smt() -> Self {
+        Self::Smt(SmtHost::new())
+    }
+
+    pub fn mmr() -> Self {
+        Self::Mmr(daowow_core::accumulator::mmr::host::MmrHost::new())
+    }
+
+    /// Append every entry and return the witness the shard script expects.
+    /// The MMR witness carries the peak list from BEFORE the appends and the
+    /// one after, so the contract can re-derive the transition itself.
+    pub fn append_witness(&mut self, entries: &[EntryDataV1]) -> Bytes {
+        match self {
+            Self::Smt(host) => {
+                let mut certs: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+                for e in entries {
+                    let absence = host.absence_proof(&[smt_key(e)]).unwrap();
+                    host.insert(&smt_key(e), &smt_leaf(e)).unwrap();
+                    let inclusion = host.inclusion_proof(&[smt_key(e)]).unwrap();
+                    certs.push((absence, inclusion));
+                }
+                let refs: Vec<(&[u8], &[u8])> = certs
+                    .iter()
+                    .map(|(a, b)| (a.as_slice(), b.as_slice()))
+                    .collect();
+                smt_append_witness(entries, &refs)
+            }
+            Self::Mmr(host) => {
+                let old = encode_mmr_peaks(host);
+                for e in entries {
+                    host.append(&daowow_core::leaf::entry_leaf(e)).unwrap();
+                }
+                let new = encode_mmr_peaks(host);
+                Bytes::from(daowow_core::witness::encode_shard_append_witness_mmr(
+                    entries, &old, &new,
+                ))
+            }
+        }
+    }
+
+    /// The root the shard successor must carry. An empty MMR bags to nothing,
+    /// and the shard script treats that case as the all-zero root.
+    pub fn root(&self) -> Hash32 {
+        match self {
+            Self::Smt(host) => host.root(),
+            Self::Mmr(host) => host.root().unwrap_or([0u8; 32]),
+        }
+    }
+}
+
+/// One byte of peak count, then 32 bytes per peak — the encoding
+/// `mmr_decode_peaks` expects and `devnet_round.rs` already writes.
+fn encode_mmr_peaks(host: &daowow_core::accumulator::mmr::host::MmrHost) -> Vec<u8> {
+    let mut out = vec![host.peaks().len() as u8];
+    for peak in host.peaks() {
+        out.extend_from_slice(peak);
+    }
+    out
+}
+
 pub fn smt_leaf(entry: &EntryDataV1) -> Hash32 {
     daowow_core::leaf::entry_leaf(entry)
 }
