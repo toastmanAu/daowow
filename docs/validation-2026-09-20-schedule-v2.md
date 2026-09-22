@@ -112,8 +112,42 @@ Client re-checked against the new deployment in Chromium: manifest parsed,
 node reached at epoch 13871, discovery clean with zero console errors and zero
 error boxes, no rounds — expected, since round creation is gate 3.
 
-## Not yet done
+## Task 6: proving the rule reaches consensus
 
-- Task 5 (redeploy) — needs Phill, since it signs.
-- Task 6 (devnet round at the demo schedule, proving two places pay at ten
-  tickets) — can run before Task 5, since the devnet deploys its own binaries.
+The plan asked for a devnet round. **It was done in the integration suite
+instead, and the reason is worth recording rather than glossing.**
+
+The devnet round accepts exactly **one ticket**, and at one ticket the
+ticket-count cap binds, so v1 and v2 select identically and the round cannot
+discriminate between them at all. Making it discriminate means raising ticket
+counts, which ripples through the DAO deposit amounts and the Python history's
+assertions. For this particular property the devnet also adds nothing over
+`ckb-testtool`: the draw is pure script logic and both run the identical
+binary. What a real node uniquely tests — pool policy, fee rates, cell floors —
+does not touch the draw.
+
+`claim_retirement.rs::the_committed_threshold_table_decides_winners_on_chain`
+builds a four-ticket round under the tiered table and retires a non-winner
+against the real contract binary.
+
+It is discriminating because **the fixture cannot be built under v1**. At four
+tickets the v1 rule draws `min(4, 5) = 4` positions, so every ticket wins and
+no non-winner exists; the tiered table opens only the first place below eight,
+so one position is drawn and three tickets are non-winners. Control run:
+swapping the tiered schedule for the default panics with "no non-winning ticket
+in this fixture", and restoring it passes. The test also asserts its own
+premise — 4 places under v1, 1 under the tiered table — so a future change
+making them agree fails loudly instead of turning the test into a tautology.
+
+## Still open
+
+- **No round exists on testnet**, so the client's discovery proves it finds
+  scripts, not that it renders a round. Round creation is gate 3.
+- **The demo round shape** (10,000 CKB a ticket, cap 10, minimum 5, one shard,
+  tiered schedule) is specified but not yet created anywhere. The devnet
+  exporter still runs its own single-ticket round.
+- `audit-wallet-cells.mjs` and `reclaim-cells.sh` **disagree about dao-lock**:
+  the audit lists it as reclaimable because it is unreferenced, while the
+  reclaim script refuses it because it is the current build. The refusal is the
+  one that matters, but the audit's number is misleading and should learn the
+  same check.
