@@ -1,5 +1,11 @@
 # DAOWOW dev deployment for gate 2 — testnet, part 2 of 2.
 #
+# 2026-09-22: dao-lock REMOVED. Prize schedule v2 changed daowow-core, which
+# moved four of the five binaries — but NOT dao-lock, whose rebuilt hash is
+# identical to what is already deployed. It keeps its existing out point at
+# 0xb536d389...:2 and must not be redeployed or reclaimed; the manifest still
+# carries it from the original deployment.
+#
 # SPLIT ACROSS TWO TRANSACTIONS. All five binaries in one transaction
 # serialises to 616,768 bytes against a 597,000-byte block size limit, and the
 # node refuses it with ExceededMaximumBlockBytes. `ckb-cli deploy gen-txs`
@@ -23,11 +29,6 @@ location = { file = "target/riscv64imac-unknown-none-elf/release/round-type" }
 name = "entry-lock"
 enable_type_id = false
 location = { file = "target/riscv64imac-unknown-none-elf/release/entry-lock" }
-
-[[cells]]
-name = "dao-lock"
-enable_type_id = false
-location = { file = "target/riscv64imac-unknown-none-elf/release/dao-lock" }
 
 # The lock placed on every deployed code cell: the deployer's own
 # secp256k1_blake160_sighash_all, so the capacity can be recovered later.
