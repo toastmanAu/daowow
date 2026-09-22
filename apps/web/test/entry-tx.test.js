@@ -188,7 +188,7 @@ test("peaks that do not fit the shard are refused with a usable message", () => 
     manifest: MANIFEST, config, schedule: decodeSchedule(unhex(V.prize_schedule_v2.hex)),
     shard: wrongCount, lock, participantLockHash: "33".repeat(32), tickets: 1n,
     nowEpoch: 1005n, configCellOutPoint: CONFIG_DEP,
-  }), /peak/i);
+  }), /rebuild them with derivePeaks/);
 
   const wrongPeaks = {
     ...shard, entryCount: 1n, peaks: ["aa".repeat(32)],
