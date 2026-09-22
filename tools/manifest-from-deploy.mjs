@@ -12,19 +12,35 @@
 // transaction exceed CKB's block size limit, so it takes more than one
 // transaction to deploy them. Pass every info file.
 //
+// A PARTIAL redeploy is normal: a change to a shared crate moves some
+// binaries and not others, and a contract whose hash did not move keeps its
+// existing out point. Pass --base <manifest> to carry those forward. Every
+// carried script is reported, because silently inheriting an out point is
+// exactly how a manifest comes to describe a deployment that is not there.
+//
 // Usage:
-//   node tools/manifest-from-deploy.mjs <rpc-url> <info-file>...
+//   node tools/manifest-from-deploy.mjs <rpc-url> [--base <manifest>] <info-file>...
 //     > deployments/dev-testnet-manifest.json
 
 import fs from "node:fs";
 
 const PURPOSE = "dev-deployment-gate-2";
 
-const [rpcUrl, ...infoPaths] = process.argv.slice(2);
+const argv = process.argv.slice(2);
+let basePath = null;
+const baseAt = argv.indexOf("--base");
+if (baseAt !== -1) {
+  basePath = argv[baseAt + 1];
+  argv.splice(baseAt, 2);
+}
+const [rpcUrl, ...infoPaths] = argv;
 if (!rpcUrl || infoPaths.length === 0) {
-  console.error("usage: node tools/manifest-from-deploy.mjs <rpc-url> <info-file>...");
+  console.error(
+    "usage: node tools/manifest-from-deploy.mjs <rpc-url> [--base <manifest>] <info-file>...",
+  );
   process.exit(2);
 }
+const base = basePath ? JSON.parse(fs.readFileSync(basePath, "utf8")) : null;
 
 // Every script the client needs. Listing them explicitly means a deployment
 // that silently dropped one fails here rather than producing a manifest the
@@ -75,7 +91,22 @@ const genesis = await rpc("get_block_hash", ["0x0"]);
 const scripts = {};
 for (const name of REQUIRED) {
   const recipe = recipes.find((r) => r.name === name);
-  if (!recipe) throw new Error(`deployment is missing the ${name} cell`);
+  if (!recipe) {
+    const carried = base?.scripts?.[name];
+    if (!carried) {
+      throw new Error(
+        `deployment is missing the ${name} cell, and no --base manifest supplies it`,
+      );
+    }
+    // Reported on stderr so it appears in the operator's terminal but not in
+    // the manifest being written to stdout.
+    console.error(
+      `carried forward from ${basePath}: ${name} at ` +
+        `${carried.cellDep.outPoint.txHash.slice(0, 14)}...:${carried.cellDep.outPoint.index}`,
+    );
+    scripts[name] = carried;
+    continue;
+  }
   if (recipe.type_id && recipe.type_id !== "None") {
     // A Type ID deployment would hold the code hash constant while the binary
     // behind it changed, so no runtime check could detect a redeploy. The

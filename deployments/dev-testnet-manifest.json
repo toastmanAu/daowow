@@ -6,7 +6,7 @@
   "network": "ckb_testnet",
   "rpcUrl": "http://192.168.68.134:8114",
   "genesisHash": "0x10639e0895502b5688a6be8cf69460d76541bfa4821629d86d62ba0aae3f9606",
-  "generatedAt": "2026-09-18T08:58:18.312Z",
+  "generatedAt": "2026-09-22T10:16:38.605Z",
   "generatedFrom": [
     "dev-deploy-a.json",
     "dev-deploy-b.json"
@@ -14,38 +14,38 @@
   "note": "Dev deployment for gate 2. Superseded by gate 4's hardened deployment. Verify with tools/verify-deployment.mjs before trusting it.",
   "scripts": {
     "round-type": {
-      "codeHash": "0xdc1722489533499ac4e709f4be657926792e663183141f08bbf3571b23d5a36d",
+      "codeHash": "0x6134e43925b4495d2c0db93ed83a22fd973e36712c4ca9afce99ecfa3b5405ec",
       "hashType": "data1",
       "binaryBytes": null,
       "cellDep": {
         "outPoint": {
-          "txHash": "0xb536d389344447adb6bcddda348a87e0432fc117f4c5419b08bc5bedd0296e41",
+          "txHash": "0x86cb7a8ebac06ec26099e7da062764a64be61b4fa763c4509f82adc18f3400be",
           "index": 0
         },
         "depType": "code"
       },
-      "occupiedCapacityShannons": "6014100000000"
+      "occupiedCapacityShannons": "6245300000000"
     },
     "entry-shard-type": {
-      "codeHash": "0x6afa519d839d3e4f04d029d901ed4b6ff7ceb9158a6fdad4c0d9a78cbb5efd89",
+      "codeHash": "0x60052a7bc888489cf3fff5967d58ac123b52c99afc3bf46d6956e47328682b3a",
       "hashType": "data1",
       "binaryBytes": null,
       "cellDep": {
         "outPoint": {
-          "txHash": "0x41169f0ddebfa99108e4fcb591bd247e5212ef500207e5a2ea52aa0b7137d0f2",
+          "txHash": "0xa52472b89c3a75b35b462c7dc3ea88ca6339243942b08d0ae046d164630a6687",
           "index": 0
         },
         "depType": "code"
       },
-      "occupiedCapacityShannons": "22944500000000"
+      "occupiedCapacityShannons": "23165300000000"
     },
     "entry-lock": {
-      "codeHash": "0x48ce84d836d7999013d9af50cf78abcf15ddd816c49ac20551d1ee0e5a769ded",
+      "codeHash": "0x863d2629646bfdbb158ea6a2171ac7321158e3058589160ab2266591bd3d220b",
       "hashType": "data1",
       "binaryBytes": null,
       "cellDep": {
         "outPoint": {
-          "txHash": "0xb536d389344447adb6bcddda348a87e0432fc117f4c5419b08bc5bedd0296e41",
+          "txHash": "0x86cb7a8ebac06ec26099e7da062764a64be61b4fa763c4509f82adc18f3400be",
           "index": 1
         },
         "depType": "code"
@@ -66,17 +66,17 @@
       "occupiedCapacityShannons": "7750100000000"
     },
     "settlement-type": {
-      "codeHash": "0x3114256db914c9f0d23d2807514069c83a1fe21c7c93f3e4a0f91c75c1beed2f",
+      "codeHash": "0xa68543719429b2fd95244b5d7d8ae0b706fee0cb826a375416c260d503cf9207",
       "hashType": "data1",
       "binaryBytes": null,
       "cellDep": {
         "outPoint": {
-          "txHash": "0x41169f0ddebfa99108e4fcb591bd247e5212ef500207e5a2ea52aa0b7137d0f2",
+          "txHash": "0xa52472b89c3a75b35b462c7dc3ea88ca6339243942b08d0ae046d164630a6687",
           "index": 1
         },
         "depType": "code"
       },
-      "occupiedCapacityShannons": "15326900000000"
+      "occupiedCapacityShannons": "15560500000000"
     }
   }
 }

@@ -82,6 +82,36 @@ Order:
    part that still carries `dao-lock`.
 5. **Verify**: `tools/verify-deployment.mjs` must report 5/5 and exit 0.
 
+## Task 5: redeploy — done 2026-09-22
+
+Reclaim first, as the sequencing above required: liquid went 128,812 to
+667,120 CKB, exactly the 538,308 of the four superseded cells.
+
+Redeployed in two parts, sequentially, at 545,164 CKB total:
+
+| contract | code hash | out point |
+|---|---|---|
+| round-type | `0x6134e439…` | `0x86cb7a8e…:0` |
+| entry-shard-type | `0x60052a7b…` | `0xa52472b8…:0` |
+| entry-lock | `0x863d2629…` | `0x86cb7a8e…:1` |
+| dao-lock | `0x0cb1229a…` | `0xb536d389…:2` *(unchanged, carried forward)* |
+| settlement-type | `0xa6854371…` | `0xa52472b8…:1` |
+
+`tools/verify-deployment.mjs` reports **5/5, exit 0**.
+
+**The manifest tool needed a partial-redeploy mode, and it is a real gap
+rather than a convenience.** The redeploy overwrote the info files, so
+`dao-lock`'s recipe no longer existed anywhere except the previous manifest,
+and the tool required every script to come from an info file. `--base` now
+carries unchanged scripts forward and **reports each one on stderr**, because
+silently inheriting an out point is exactly how a manifest comes to describe a
+deployment that is not there. Gate 4 will hit this again: any change to a
+shared crate moves some binaries and not others.
+
+Client re-checked against the new deployment in Chromium: manifest parsed,
+node reached at epoch 13871, discovery clean with zero console errors and zero
+error boxes, no rounds — expected, since round creation is gate 3.
+
 ## Not yet done
 
 - Task 5 (redeploy) — needs Phill, since it signs.
