@@ -7,6 +7,16 @@
     "settlement_funding": 160,
     "shard_data": 101
   },
+  "capacity": {
+    "claim_occupied_ckb": {
+      "joyid_lock_55": 222,
+      "secp_lock_53": 220
+    },
+    "entry_cell_overhead_ckb": 237,
+    "memento_occupied_ckb": {
+      "secp_lock_53": 193
+    }
+  },
   "cell_encodings": {
     "round_config": {
       "commitment": "619190161d9c1672846cb1fa0185be208e3774dc2e2ef272040b75876ed90c7d",
@@ -149,6 +159,26 @@
       "seed_entry_nonce": 9,
       "witness_hex": "020000005b087093bd3a07460a4d3d5827cfcdd5a01a808fff1317f3c8d5cd89e93778f3000000001739af5f60229cbefc25a7d7b27da93c1a7ee153189a8244e6a1eede841d477c010000000000000000e40b54020000000a000000000000000a00000000000000635552d615f0c2fa17cdc68307dc154c957e3d60ca614356ae489470de8b03ef5b087093bd3a07460a4d3d5827cfcdd5a01a808fff1317f3c8d5cd89e93778f3000000001739af5f60229cbefc25a7d7b27da93c1a7ee153189a8244e6a1eede841d477c010000000000000000e40b54020000000b000000000000000b00000000000000ef28b677015404f9ee466b950d880f6d78709ef1726845d8e8cccd3fcaa38e832100000001d60f5032d7193c3c884bf7231e79dfae4b3debe109d9649f5586642cf244d4e641000000025ab0596a1625fda9e1aef311023cbf42d2db0d221eddcba992dea3eb769bd1e7d0cf2f697f5f03ef19d4738fcd3791299b483c6b40403f5f00dd8a60500fca20"
     }
+  },
+  "prize_schedule_v1": {
+    "commitment": "80d36ae29136e1694e7cce5ba375acdd7e977cc95b07d6d3f8028e4b7a4d4973",
+    "hex": "01050000002800000000000000190000000000000014000000000000000a000000000000000500000000000000",
+    "places_at": {
+      "1": 1,
+      "100": 5,
+      "20": 5,
+      "3": 3,
+      "5": 5,
+      "7": 5,
+      "8": 5
+    },
+    "thresholds": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ]
   },
   "prize_schedule_v2": {
     "commitment": "4f1bbc41b4295bb60d89fc19eb7b5754e2b29e3f939f7b7d43cc52e2e12dcdb0",

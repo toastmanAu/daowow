@@ -209,6 +209,38 @@ fn gen_vectors() {
             json!(demo_schedule.weights_for(tickets).unwrap().len()),
         );
     }
+    // The v1 wire, so the client's decoder is pinned to Rust on both paths
+    // rather than only on v2. v1 IS v2 with thresholds [1..n].
+    let v1_schedule = daowow_core::schedule::PrizeSchedule::new(&[40, 25, 20, 10, 5]).unwrap();
+    let mut v1_places = serde_json::Map::new();
+    for tickets in [1u64, 3, 5, 7, 8, 20, 100] {
+        v1_places.insert(
+            tickets.to_string(),
+            json!(v1_schedule.weights_for(tickets).unwrap().len()),
+        );
+    }
+    let prize_schedule_v1 = json!({
+        "hex": hex(&v1_schedule.encode()),
+        "commitment": hex(&v1_schedule.commitment()),
+        "thresholds": v1_schedule.thresholds(),
+        "places_at": v1_places,
+    });
+
+    // Capacity oracles for the entry quote. Both lock sizes matter: a JoyID
+    // lock has 22-byte args and secp has 20, so a claim cell is 222 or 220
+    // CKB. The client must compute from the CONNECTED wallet's lock rather
+    // than assume either.
+    let capacity = json!({
+        "claim_occupied_ckb": {
+            "joyid_lock_55": daowow_core::claim::claim_occupied_capacity(32 + 1 + 22) / 100_000_000,
+            "secp_lock_53": daowow_core::claim::claim_occupied_capacity(32 + 1 + 20) / 100_000_000,
+        },
+        "memento_occupied_ckb": {
+            "secp_lock_53": daowow_core::memento::memento_occupied_capacity(32 + 1 + 20) / 100_000_000,
+        },
+        "entry_cell_overhead_ckb": 8 + ENTRY_DATA_SIZE as u64 + 33 + 64,
+    });
+
     let prize_schedule_v2 = json!({
         "note": "demo schedule; v1 wire is unchanged and lives in the v1 tests",
         "hex": hex(&demo_schedule.encode()),
@@ -382,7 +414,9 @@ fn gen_vectors() {
         "canonical_sizes": sizes,
         "mmr_witness": mmr_witness,
         "entry_encoding": entry_encoding,
+        "prize_schedule_v1": prize_schedule_v1,
         "prize_schedule_v2": prize_schedule_v2,
+        "capacity": capacity,
         "cell_encodings": cell_encodings,
     });
 
