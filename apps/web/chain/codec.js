@@ -73,12 +73,39 @@ function decodeEntryShardDataV1(bytes) {
   });
 }
 
+function encodeEntryShardDataV1(shard) {
+  const out = new Uint8Array(SHARD_DATA_SIZE);
+  const d = new DataView(out.buffer);
+  out.set(unhexBytes(shard.roundId), 0);
+  d.setUint32(32, Number(shard.shardId), true);
+  out[36] = Number(shard.state);
+  d.setBigUint64(37, BigInt(shard.sequence), true);
+  d.setBigUint64(45, BigInt(shard.entryCount), true);
+  d.setBigUint64(53, BigInt(shard.ticketCount), true);
+  d.setBigUint64(61, BigInt(shard.principalTotal), true);
+  out.set(unhexBytes(shard.accumulatorRoot), 69);
+  return out;
+}
+
+function unhexBytes(value) {
+  const body = typeof value === "string"
+    ? (value.startsWith("0x") ? value.slice(2) : value)
+    : null;
+  if (body === null) {
+    if (value instanceof Uint8Array) return value;
+    throw new Error("expected hex or bytes");
+  }
+  if (body.length !== 64) throw new Error("expected a 32-byte hex value");
+  return Uint8Array.from(body.match(/../g).map((b) => parseInt(b, 16)));
+}
+
 const api = {
   decodeRoundConfigV1,
   decodeEntryShardDataV1,
   SHARD_STATE,
   ROUND_CONFIG_SIZE,
   SHARD_DATA_SIZE,
+  encodeEntryShardDataV1,
 };
 if (typeof module !== "undefined" && module.exports) module.exports = api;
 if (typeof window !== "undefined") window.DaowowCodec = api;
