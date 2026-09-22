@@ -218,6 +218,50 @@ fn gen_vectors() {
         "places_at": places_at,
     });
 
+    // Entry, ticket and claim oracles for the browser's entry path. One
+    // canonical entry with distinct non-zero values per field, so a decoder or
+    // encoder reading a neighbouring offset produces a visibly wrong result.
+    let oracle_entry = EntryDataV1 {
+        round_id: ckb_hash256_one(b"VECTOR-ENTRY-ROUND"),
+        shard_id: 3,
+        participant_lock_hash: ckb_hash256_one(b"VECTOR-ENTRY-PARTICIPANT"),
+        ticket_count: 7,
+        principal: 70_000_000_000,
+        position_base: 11,
+        entry_nonce: 13,
+        entropy_commitment: ckb_hash256_one(b"VECTOR-ENTRY-COMMIT"),
+    };
+    let oracle_commitment = ckb_hash256_one(b"VECTOR-CLAIM-CONFIG");
+    let oracle_claim = daowow_core::claim::ClaimArgs {
+        commitment: oracle_commitment,
+        shard_id: oracle_entry.shard_id,
+        position: oracle_entry.position_base,
+    };
+    let entry_encoding = json!({
+        "entry": {
+            "hex": hex(&oracle_entry.encode()),
+            "leaf": hex(&daowow_core::leaf::entry_leaf(&oracle_entry)),
+            "fields": {
+                "round_id": hex(&oracle_entry.round_id),
+                "shard_id": oracle_entry.shard_id,
+                "participant_lock_hash": hex(&oracle_entry.participant_lock_hash),
+                "ticket_count": oracle_entry.ticket_count.to_string(),
+                "principal": oracle_entry.principal.to_string(),
+                "position_base": oracle_entry.position_base.to_string(),
+                "entry_nonce": oracle_entry.entry_nonce.to_string(),
+                "entropy_commitment": hex(&oracle_entry.entropy_commitment),
+            },
+        },
+        "claim": {
+            "config_commitment": hex(&oracle_commitment),
+            "shard_id": oracle_claim.shard_id,
+            "position": oracle_claim.position.to_string(),
+            "ticket_id": hex(&oracle_claim.ticket_id()),
+            "args_hex": hex(&oracle_claim.encode()),
+            "initial_state_hex": hex(&daowow_core::claim::initial_state_bytes(&oracle_claim)),
+        },
+    });
+
     let v = json!({
         "meta": {
             "hash": "blake2b-256 personalization ckb-default-hash",
@@ -267,6 +311,7 @@ fn gen_vectors() {
             "rejection_sample_prize0_n1000000": { "position": pos, "retry": retry },
         },
         "canonical_sizes": sizes,
+        "entry_encoding": entry_encoding,
         "prize_schedule_v2": prize_schedule_v2,
         "cell_encodings": cell_encodings,
     });
