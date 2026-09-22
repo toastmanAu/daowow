@@ -262,6 +262,75 @@ fn gen_vectors() {
         },
     });
 
+    // MMR append witness oracles for the browser. Two cases, because the
+    // empty shard is the one a client hits first and its old peak list is the
+    // single byte 0x00 rather than an absent field.
+    let peak_bytes = |host: &daowow_core::accumulator::mmr::host::MmrHost| {
+        let mut out = vec![host.peaks().len() as u8];
+        for peak in host.peaks() {
+            out.extend_from_slice(peak);
+        }
+        out
+    };
+    let witness_entry = |nonce: u64| EntryDataV1 {
+        round_id: ckb_hash256_one(b"VECTOR-WITNESS-ROUND"),
+        shard_id: 0,
+        participant_lock_hash: ckb_hash256_one(b"VECTOR-WITNESS-PARTICIPANT"),
+        ticket_count: 1,
+        principal: 10_000_000_000,
+        position_base: nonce,
+        entry_nonce: nonce,
+        entropy_commitment: ckb_hash256_one(&[nonce as u8]),
+    };
+
+    // From an empty shard: append two entries.
+    let mut h0 = daowow_core::accumulator::mmr::host::MmrHost::new();
+    let empty_old = peak_bytes(&h0);
+    let empty_entries = [witness_entry(0), witness_entry(1)];
+    for e in &empty_entries {
+        h0.append(&daowow_core::leaf::entry_leaf(e)).unwrap();
+    }
+    let empty_new = peak_bytes(&h0);
+
+    // From a shard that already holds one entry: append two more, so the old
+    // peak list is non-empty and the client cannot pass an empty one by luck.
+    let mut h1 = daowow_core::accumulator::mmr::host::MmrHost::new();
+    h1.append(&daowow_core::leaf::entry_leaf(&witness_entry(9)))
+        .unwrap();
+    let seeded_old = peak_bytes(&h1);
+    let seeded_root_before = h1.root().unwrap();
+    let seeded_entries = [witness_entry(10), witness_entry(11)];
+    for e in &seeded_entries {
+        h1.append(&daowow_core::leaf::entry_leaf(e)).unwrap();
+    }
+    let seeded_new = peak_bytes(&h1);
+
+    let mmr_witness = json!({
+        "from_empty": {
+            "old_peaks_hex": hex(&empty_old),
+            "new_peaks_hex": hex(&empty_new),
+            "root_after": hex(&h0.root().unwrap()),
+            "witness_hex": hex(&daowow_core::witness::encode_shard_append_witness_mmr(
+                &empty_entries, &empty_old, &empty_new)),
+        },
+        "from_one_entry": {
+            "seed_entry_nonce": 9,
+            "root_before": hex(&seeded_root_before),
+            "old_peaks_hex": hex(&seeded_old),
+            "new_peaks_hex": hex(&seeded_new),
+            "root_after": hex(&h1.root().unwrap()),
+            "witness_hex": hex(&daowow_core::witness::encode_shard_append_witness_mmr(
+                &seeded_entries, &seeded_old, &seeded_new)),
+        },
+        "entry_leaves": {
+            "0": hex(&daowow_core::leaf::entry_leaf(&witness_entry(0))),
+            "1": hex(&daowow_core::leaf::entry_leaf(&witness_entry(1))),
+            "9": hex(&daowow_core::leaf::entry_leaf(&witness_entry(9))),
+            "10": hex(&daowow_core::leaf::entry_leaf(&witness_entry(10))),
+            "11": hex(&daowow_core::leaf::entry_leaf(&witness_entry(11))),
+        },
+    });
+
     let v = json!({
         "meta": {
             "hash": "blake2b-256 personalization ckb-default-hash",
@@ -311,6 +380,7 @@ fn gen_vectors() {
             "rejection_sample_prize0_n1000000": { "position": pos, "retry": retry },
         },
         "canonical_sizes": sizes,
+        "mmr_witness": mmr_witness,
         "entry_encoding": entry_encoding,
         "prize_schedule_v2": prize_schedule_v2,
         "cell_encodings": cell_encodings,
