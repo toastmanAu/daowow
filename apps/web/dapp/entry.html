@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DAOWOW — enter the round</title>
+<meta http-equiv="Content-Security-Policy" content="
+  default-src 'none';
+  script-src 'self';
+  style-src 'self';
+  img-src 'self' data:;
+  connect-src 'self' http://192.168.68.134:8114 https://testnet.ckb.dev;
+  form-action 'none';
+  base-uri 'none'">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext y='26' font-size='28'%3E%E2%97%8E%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="dapp.css">
+</head>
+<body>
+<header class="site-header">
+  <span class="brand"><span class="brand-symbol">◎</span>DAO<span class="brand-light">WOW</span></span>
+  <a class="nav-link" href="how-it-works.html">How it works</a>
+  <button id="connect" class="wallet-button" type="button">Connect wallet</button>
+</header>
+
+<main>
+  <p class="banner">
+    <strong>Testnet.</strong>
+    <span>Nothing is signed until you confirm the exact total below.</span>
+  </p>
+
+  <div id="round" aria-live="polite">
+    <div class="card"><p class="empty">Loading round…</p></div>
+  </div>
+
+  <section class="card" id="entry" hidden>
+    <h2>Enter</h2>
+
+    <div class="field">
+      <label for="tickets">Tickets</label>
+      <input id="tickets" type="number" inputmode="numeric" min="1" value="1">
+      <p class="sub" id="ticket-note"></p>
+    </div>
+
+    <h3 class="section-heading">What this commits</h3>
+    <dl class="quote" id="quote"></dl>
+
+    <h3 class="section-heading">Payout</h3>
+    <p class="payout-summary" id="payout-summary"></p>
+    <ol class="payout" id="payout"></ol>
+
+    <p class="confirm-line">
+      <label><input type="checkbox" id="agree">
+        I understand the total above is committed for the round's duration.</label>
+    </p>
+    <button id="submit" class="primary-button" type="button" disabled>
+      Connect a wallet to enter
+    </button>
+    <p class="sub" id="status"></p>
+  </section>
+</main>
+
+<footer>
+  <span>network <span class="mono" id="net">…</span></span>
+  <span>node <span class="mono" id="rpc">…</span></span>
+  <span>tip epoch <span class="mono" id="epoch">…</span></span>
+</footer>
+
+<!-- Classic scripts, evaluated before the deferred module, each publishing
+     itself on window. core must precede entry-codec, codec before discovery. -->
+<script src="../core.js"></script>
+<script src="../chain/codec.js"></script>
+<script src="../chain/manifest.js"></script>
+<script src="../chain/rpc.js"></script>
+<script src="../chain/discovery.js"></script>
+<script src="../chain/schedule.js"></script>
+<script src="../chain/quote.js"></script>
+<script src="../chain/entry-codec.js"></script>
+<script src="../chain/mmr-witness.js"></script>
+<script src="../chain/entry-tx.js"></script>
+<script src="../chain/contention.js"></script>
+<script src="entry-view.js"></script>
+<script type="module" src="entry.js"></script>
+</body>
+</html>

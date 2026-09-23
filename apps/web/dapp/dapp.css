@@ -64,3 +64,33 @@ footer .mono { color: var(--paper); }
   main, footer { padding-left: 16px; padding-right: 16px; }
   .card { padding: 24px 20px; } .card h2 { font-size: 26px; }
 }
+
+/* Entry view */
+.nav-link { margin-left: 24px; color: var(--muted); font-size: 14px; text-decoration: none; }
+.nav-link:hover { color: var(--paper); text-decoration: underline; text-underline-offset: 6px; }
+.section-heading { font-size: 14px; color: var(--muted); font-weight: 600;
+  margin: 24px 0 12px; letter-spacing: .02em; }
+.field { display: flex; flex-direction: column; gap: 8px; max-width: 220px; }
+.field label { font-size: 14px; font-weight: 600; }
+.field input { font: inherit; font-size: 24px; font-weight: 600; padding: 12px 16px;
+  border-radius: 8px; border: 1px solid var(--line); background: hsl(221 55% 20%);
+  color: var(--paper); }
+.sub { font-size: 12px; color: var(--muted); margin: 0; }
+.quote { margin: 0; display: grid; gap: 12px; }
+.quote > div { display: grid; grid-template-columns: 1fr auto; gap: 4px 24px; align-items: baseline; }
+.quote dt { font-size: 14px; }
+.quote dd { margin: 0; font-variant-numeric: tabular-nums; font-weight: 600; text-align: right; }
+.quote .note { grid-column: 1 / -1; font-size: 12px; color: var(--muted); }
+.quote .total { border-top: 1px solid var(--line); padding-top: 12px; }
+.quote .total dd { font-size: 20px; color: var(--amber); }
+.payout-summary { font-size: 14px; margin-bottom: 12px; }
+.payout { list-style: none; padding: 0; margin: 0; display: grid; gap: 6px; font-size: 13px; }
+.payout li { display: grid; grid-template-columns: auto 1fr auto; gap: 12px;
+  color: var(--muted); }
+.payout li.open { color: var(--paper); }
+.payout li.unreachable { opacity: .45; }
+.confirm-line { font-size: 13px; margin: 24px 0 16px; }
+.confirm-line input { margin-right: 8px; }
+.primary-button { width: 100%; padding: 16px 24px; min-height: 56px; color: var(--ink);
+  background: var(--amber); border: 0; border-radius: 8px; font-weight: 600; font-size: 16px; }
+.primary-button:hover:not(:disabled) { background: hsl(39 100% 70%); }
