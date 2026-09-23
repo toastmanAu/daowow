@@ -31,6 +31,16 @@ const unhex = (s) => {
   return out;
 };
 
+// The one place raw RPC shapes are converted. The indexer speaks
+// `{tx_hash, index: "0x0"}`; every module downstream — buildEntryTx, the CCC
+// adapter, refund-tx — speaks `{txHash, index: 0}`. Letting the raw shape
+// travel reaches CCC as `txHash: undefined`, which builds a transaction
+// against nothing and says so only at broadcast.
+const outPointOf = (cell) => Object.freeze({
+  txHash: cell.out_point.tx_hash,
+  index: Number(cell.out_point.index),
+});
+
 // `nowEpoch` is the chain's current absolute epoch number. Both window bounds
 // in the config are absolute epoch numbers too.
 function deriveRoundState(config, shards, nowEpoch) {
@@ -81,7 +91,7 @@ async function findRounds(rpc, manifest) {
     if (data.length !== ROUND_CONFIG_SIZE) continue; // not a round config cell
     rounds.push(Object.freeze({
       config: decodeRoundConfigV1(data),
-      outPoint: cell.out_point,
+      outPoint: outPointOf(cell),
     }));
   }
   return rounds;
@@ -102,7 +112,13 @@ async function findShards(rpc, manifest, roundId) {
     if (data.length !== SHARD_DATA_SIZE) continue;
     const shard = decodeEntryShardDataV1(data);
     if (shard.roundId !== roundId) continue;
-    shards.push(Object.freeze({ ...shard, outPoint: cell.out_point }));
+    // capacity travels with the shard because an append must give the
+    // successor cell exactly the capacity the head held.
+    shards.push(Object.freeze({
+      ...shard,
+      capacity: BigInt(cell.output.capacity),
+      outPoint: outPointOf(cell),
+    }));
   }
   shards.sort((a, b) => a.shardId - b.shardId);
   return shards;

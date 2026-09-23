@@ -7,7 +7,8 @@ const { test } = require("node:test");
 const assert = require("node:assert");
 const fs = require("node:fs");
 const path = require("node:path");
-const { deriveRoundState, ROUND_STATE, findRounds } = require("../chain/discovery.js");
+const { deriveRoundState, ROUND_STATE, findRounds, findShards } =
+  require("../chain/discovery.js");
 const { createRpc } = require("../chain/rpc.js");
 const { loadManifest } = require("../chain/manifest.js");
 
@@ -137,3 +138,46 @@ test("decodes a round cell captured from a real devnet chain", () => {
 function unhexBytes(s) {
   return Uint8Array.from(s.match(/../g).map((b) => parseInt(b, 16)));
 }
+
+// --- the shape handed downstream ------------------------------------------
+// findRounds/findShards are the only place raw RPC enters the client. The RPC
+// speaks `{tx_hash, index: "0x0"}`; buildEntryTx and the CCC adapter speak
+// `{txHash, index: 0}`. Passing the raw shape through reaches CCC as
+// `txHash: undefined` and builds a transaction against nothing, silent until
+// broadcast. So the boundary normalizes, and that is pinned here.
+const pagingRpc = (objects) => {
+  const pages = [
+    { jsonrpc: "2.0", id: 1, result: { objects, last_cursor: "0x" } },
+    { jsonrpc: "2.0", id: 1, result: { objects: [], last_cursor: "0x" } },
+  ];
+  let n = 0;
+  return createRpc("http://node.invalid", {
+    fetchImpl: async () => ({ ok: true, json: async () => pages[Math.min(n++, 1)] }),
+  });
+};
+
+test("discovery hands downstream a camelCase out point with a numeric index", async () => {
+  const rpc = pagingRpc([{
+    out_point: { tx_hash: "0x" + "ab".repeat(32), index: "0x2" },
+    output: { capacity: "0x9502f9000", lock: {}, type: {} },
+    output_data: "0x" + V.cell_encodings.round_config.hex,
+  }]);
+  const [round] = await findRounds(rpc, loadManifest(REAL_MANIFEST));
+  assert.strictEqual(round.outPoint.txHash, "0x" + "ab".repeat(32));
+  assert.strictEqual(round.outPoint.index, 2, "hex index decoded to a number");
+});
+
+test("a shard carries the capacity its successor must preserve", async () => {
+  // buildEntryTx reads shard.capacity for the successor cell. Without it the
+  // successor is built with an undefined capacity and the append is refused.
+  const rpc = pagingRpc([{
+    out_point: { tx_hash: "0x" + "cd".repeat(32), index: "0x1" },
+    output: { capacity: "0x9502f9000", lock: {}, type: {} },
+    output_data: "0x" + V.cell_encodings.shard_data.hex,
+  }]);
+  const [shardCell] = await findShards(
+    rpc, loadManifest(REAL_MANIFEST), V.cell_encodings.shard_data.fields.round_id);
+  assert.strictEqual(shardCell.capacity, 0x9502f9000n);
+  assert.strictEqual(shardCell.outPoint.txHash, "0x" + "cd".repeat(32));
+  assert.strictEqual(shardCell.outPoint.index, 1);
+});

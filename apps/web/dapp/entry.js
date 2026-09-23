@@ -183,7 +183,7 @@ async function init() {
 // getting a length prefix wrong here is the exact class of bug the vendored
 // library exists to avoid.
 async function fetchSchedule(rpc, round) {
-  const created = await rpc.call("get_transaction", [round.outPoint.tx_hash]);
+  const created = await rpc.call("get_transaction", [round.outPoint.txHash]);
   const raw = created?.transaction?.witnesses?.[0];
   if (!raw) throw new Error("the round creation transaction carries no witness");
   const args = ccc.WitnessArgs.fromBytes(ccc.bytesFrom(raw));
