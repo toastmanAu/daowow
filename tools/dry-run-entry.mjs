@@ -25,6 +25,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
+import { depsProvide } from "./lock-deps.mjs";
 import { fileURLToPath } from "node:url";
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -220,6 +221,29 @@ if (built.tx.witnesses.length !== built.tx.inputs.length) {
   );
 }
 console.log("\n  witness/input balance holds — funding will append, not displace");
+
+// The shard head's own LOCK needs a dep, and buildEntryTx owns that one. (The
+// entrant's lock dep comes from the wallet's prepareTransaction, so it cannot
+// be checked here.) A missing lock dep is ScriptNotFound at broadcast and
+// nothing local catches it — the round-creation transaction was refused for
+// exactly this, on its own funding cell.
+if (!unsent) {
+  const asRpcShape = built.tx.cellDeps.map((d) => ({
+    out_point: {
+      tx_hash: d.outPoint.txHash,
+      index: "0x" + Number(d.outPoint.index).toString(16),
+    },
+    dep_type: d.depType === "depGroup" ? "dep_group" : "code",
+  }));
+  const headCell = await rpc.call("get_live_cell", [
+    { tx_hash: head.outPoint.txHash, index: "0x" + head.outPoint.index.toString(16) },
+    false,
+  ]);
+  const provided = await depsProvide(rpc, asRpcShape, headCell.cell.output.lock);
+  console.log(provided
+    ? "  the shard head's lock has a cell dep — no ScriptNotFound on input 0"
+    : "  WARNING: the shard head's lock has NO cell dep; this would be refused");
+}
 
 if (outFile) {
   fs.writeFileSync(outFile, JSON.stringify(built, (_, v) =>

@@ -28,6 +28,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ccc } from "../apps/web/vendor/ccc-joyid.min.mjs";
+import { resolveLockDep } from "./lock-deps.mjs";
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const require_ = (p) => {
@@ -209,9 +210,29 @@ if (change < 61n * CKB) {
   );
 }
 
+// The FUNDING CELL'S OWN LOCK needs a dep too. A lock runs when its cell is
+// spent, and the node wants that lock's code as an explicit cell dep even when
+// nothing else runs — omit it and the node says `ScriptNotFound` on
+// Inputs[0].Lock at broadcast, with nothing earlier able to catch it. This
+// repository's feedback log records the same trap on 2026-09-17.
+//
+// Resolved from the chain rather than hardcoded, and preferring the dep GROUP:
+// secp256k1_blake160_sighash_all also loads the secp256k1_data table from a
+// second cell, and bundling both is what the group is for.
+const operatorLockDep = await resolveLockDep(
+  { call: rpc }, operatorLock);
+if (!operatorLockDep) {
+  throw new Error(
+    `no cell dep on this chain provides the funding cell's lock ` +
+    `(code_hash ${operatorLock.code_hash}); the transaction would be refused ` +
+    "with ScriptNotFound on Inputs[0].Lock",
+  );
+}
+
 const tx = {
   version: "0x0",
   cell_deps: [
+    operatorLockDep,
     { out_point: { tx_hash: scripts["round-type"].cellDep.outPoint.txHash,
                    index: "0x" + scripts["round-type"].cellDep.outPoint.index.toString(16) },
       dep_type: "code" },
@@ -271,6 +292,7 @@ console.log(`tickets             min ${DEMO.minimumTickets}, max ${DEMO.maximumT
 console.log(`payout thresholds   ${DEMO.thresholds.join(", ")}`);
 console.log(`entry window        epoch ${entryStart} to ${entryEnd}, aggregate by ${aggregationDeadline}`);
 console.log(`\ncapacity            config ${configCapacity / CKB} + shard ${shardCapacity / CKB} + fee 0.1, change ${change / CKB} CKB`);
+console.log(`funding lock dep    ${operatorLockDep.out_point.tx_hash.slice(0, 18)}…:${Number(operatorLockDep.out_point.index)} (${operatorLockDep.dep_type})`);
 console.log(`\nwrote ${outFile} in ckb-cli's tx-file format. Do NOT run \`tx init\`:`);
 console.log("it creates an EMPTY file and overwrites this one.\n");
 console.log("  # 1. review");

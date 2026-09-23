@@ -34,6 +34,7 @@ import path from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { ccc } from "../apps/web/vendor/ccc-joyid.min.mjs";
+import { depsProvide } from "./lock-deps.mjs";
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const require_ = createRequire(path.join(ROOT, "tools/"));
@@ -188,6 +189,45 @@ if (!args.outputType) {
         `${cfg.entryStart}..${cfg.entryEnd}`);
     }
   }
+}
+
+// 4. every input's lock has a cell dep.
+//
+// A lock only runs on a SPEND, so nothing before broadcast exercises this and
+// the node's answer is a bare `ScriptNotFound` naming a code hash. Checking it
+// needs a node, so it is skipped rather than guessed at when one is not
+// reachable — a check that silently passes when it could not run is worse than
+// no check.
+const rpcUrl = process.env.CKB_URL ?? "http://192.168.68.134:8114";
+const rpc = { call: async (m, prm) => {
+  const r = await fetch(rpcUrl, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id: 1, jsonrpc: "2.0", method: m, params: prm }),
+  });
+  const b = await r.json();
+  if (b.error) throw new Error(JSON.stringify(b.error));
+  return b.result;
+} };
+try {
+  for (const [i, input] of (tx.inputs ?? []).entries()) {
+    const cell = await rpc.call("get_live_cell", [input.previous_output, false]);
+    if (cell.status !== "live") {
+      fail.push(`input ${i} is ${cell.status}, not live — something already spent it`);
+      continue;
+    }
+    const lockScript = cell.cell.output.lock;
+    if (await depsProvide(rpc, tx.cell_deps ?? [], lockScript)) {
+      ok.push(`input ${i}'s lock has a cell dep providing it`);
+    } else {
+      fail.push(
+        `input ${i}'s lock (code_hash ${lockScript.code_hash.slice(0, 18)}…) has ` +
+        "NO cell dep providing it; the node will refuse this with " +
+        `ScriptNotFound on Inputs[${i}].Lock`,
+      );
+    }
+  }
+} catch (e) {
+  ok.push(`cell-dep check SKIPPED: could not reach ${rpcUrl} (${e.message})`);
 }
 
 for (const line of ok) console.log(`  ok    ${line}`);

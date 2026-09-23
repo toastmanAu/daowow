@@ -181,6 +181,57 @@ refuses creation with `ROUND_ERROR_CONFIG` when `creation_schedule` returns
 `None`, so a dropped schedule is a rejected transaction, never a round on chain
 that cannot pay out.
 
+## `ScriptNotFound` on the funding cell's own lock
+
+The send was refused:
+
+```
+Verification failed Script(TransactionScriptError { source: Inputs[0].Lock,
+  cause: ScriptNotFound: code_hash: Byte32(0x9bd7e06f…) })
+```
+
+The transaction carried deps for `round-type` and `entry-shard-type` — the two
+scripts it creates — and none for the lock on the cell it SPENDS. **A lock runs
+when its cell is consumed, and the node needs that lock's code as an explicit
+cell dep even on a spend where nothing else runs.**
+
+This repository's own feedback log records the identical trap on 2026-09-17,
+from the other direction: `ckb-testtool` makes every deployed binary available
+with no cell-dep bookkeeping at all, so a green mock suite says nothing about
+it. Knowing the lesson did not prevent repeating it — the generator only
+thought about the scripts it was creating.
+
+`tools/lock-deps.mjs` resolves the dep from the chain rather than a table of
+magic out points, so it works on devnet, testnet and mainnet alike. **It prefers
+dep GROUPS, and that ordering is load-bearing rather than tidy:**
+`secp256k1_blake160_sighash_all` is a bare code cell in genesis tx0, but the
+lock also loads the `secp256k1_data` table from a second cell, and bundling both
+is the entire reason the group in genesis tx1 exists. A first version returned
+the code cell because it came first in the scan — a dep that satisfies
+`ScriptNotFound` and then fails inside the lock instead.
+
+Resolved on this node to `0xf8de3bb4…:0 (dep_group)`.
+
+`check-signed-round.mjs` now refuses a transaction whose inputs' locks have no
+dep, resolving dep groups to check. Control: removing the dep group from the
+signed file produces
+
+```
+  FAIL  input 0's lock (code_hash 0x9bd7e06f3ecf4be0…) has NO cell dep providing
+        it; the node will refuse this with ScriptNotFound on Inputs[0].Lock
+```
+
+— the same code hash the node named. The check needs a node, so it reports
+SKIPPED rather than passing when one is unreachable; a check that silently
+passes when it could not run is worse than no check.
+
+The dry run gained the same check for the shard head's lock, which is the one
+`buildEntryTx` owns. The entrant's own lock dep comes from the wallet's
+`prepareTransaction`, so it stays unverified until a real signature exists.
+
+**Adding a cell dep changes the raw transaction, so the previous signature is
+void.** `create-round.json` is regenerated and must be signed again.
+
 ## `tx send` needs `--skip-check`, and that is not a shortcut
 
 ckb-cli refuses the transaction with:
