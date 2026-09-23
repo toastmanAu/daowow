@@ -13,9 +13,21 @@
 // hash to the commitment the config cell carries, and the signature slot must
 // be filled.
 //
+// ckb-cli signs in TWO STAGES. `tx sign-inputs --add-signatures` does NOT
+// touch witness 0; it records the signature in the file's `signatures` map and
+// leaves the witness as written, with its lock still zero-filled. `tx send`
+// assembles the final witnesses from that map. So "is it signed" is a question
+// about the map, and whether the assembled witness will keep the schedule is a
+// question this file answers cryptographically rather than by trust: it
+// recomputes the RFC 0019 sighash-all digest over the witness AS STORED — the
+// one carrying the schedule — and recovers the public key from the signature.
+// If the recovered lock hash matches the signer, the signature commits to the
+// schedule, and an assembly step that dropped it would invalidate the
+// signature the node checks.
+//
 // It never signs and never sends.
 //
-// Usage: node tools/check-signed-round.mjs <tx-file.json>
+// Usage: node tools/check-signed-round.mjs <tx-file.json> [--lock-arg 0x..]
 
 import fs from "node:fs";
 import path from "node:path";
@@ -54,14 +66,90 @@ try {
   process.exit(1);
 }
 
-// 1. the signature
+// 1. the signature, in whichever of the two places it can live
+const lockArgAt = process.argv.indexOf("--lock-arg");
+const expectedLockArg = (lockArgAt === -1
+  ? "0xa776bf02d19cafa3749d906cc2c9ab1cf1e80ff7"
+  : process.argv[lockArgAt + 1]).toLowerCase();
+
+const recorded = Object.entries(doc.signatures ?? {})
+  .find(([arg]) => arg.toLowerCase() === expectedLockArg);
 const lock = args.lock ? ccc.bytesFrom(args.lock) : null;
-if (!lock || lock.length === 0) {
-  fail.push("witness 0 has no lock field — the transaction is not signed");
-} else if (lock.every((b) => b === 0)) {
-  fail.push(`witness 0's lock is still ${lock.length} zero bytes — not signed yet`);
+const witnessSigned = lock && lock.length > 0 && !lock.every((b) => b === 0);
+
+let signature = null;
+if (recorded && recorded[1].length > 0) {
+  signature = recorded[1][0];
+  ok.push(`signature recorded for ${expectedLockArg.slice(0, 12)}… ` +
+    "(ckb-cli assembles it into witness 0 at send)");
+} else if (witnessSigned) {
+  signature = ccc.hexFrom(lock);
+  ok.push(`signature already in witness 0, ${lock.length} bytes`);
 } else {
-  ok.push(`signature present, ${lock.length} bytes`);
+  fail.push(
+    "no signature anywhere: witness 0's lock is zeros and the signatures map " +
+    `has no entry for ${expectedLockArg}. Run tx sign-inputs --add-signatures.`,
+  );
+}
+
+// 2. does that signature actually commit to THIS witness, schedule included?
+//
+// RFC 0019: blake2b("ckb-default-hash") over tx_hash, then each witness of the
+// group length-prefixed, with the signing witness's lock zero-filled to its
+// final length. One input and one witness here, so the stream is short — and
+// the witness as stored already carries a 65-byte zero lock, so it IS the
+// zeroed form.
+if (signature) {
+  const ccctx = ccc.Transaction.from({
+    version: Number(tx.version ?? 0),
+    cellDeps: tx.cell_deps.map((d) => ({
+      outPoint: { txHash: d.out_point.tx_hash, index: Number(d.out_point.index) },
+      depType: d.dep_type === "dep_group" ? "depGroup" : "code",
+    })),
+    headerDeps: tx.header_deps ?? [],
+    inputs: tx.inputs.map((i) => ({
+      previousOutput: {
+        txHash: i.previous_output.tx_hash, index: Number(i.previous_output.index),
+      },
+      since: BigInt(i.since ?? 0),
+    })),
+    outputs: tx.outputs.map((o) => ({
+      capacity: BigInt(o.capacity),
+      lock: { codeHash: o.lock.code_hash, hashType: o.lock.hash_type, args: o.lock.args },
+      type: o.type
+        ? { codeHash: o.type.code_hash, hashType: o.type.hash_type, args: o.type.args }
+        : undefined,
+    })),
+    outputsData: tx.outputs_data,
+    witnesses: tx.witnesses,
+  });
+  const zeroed = ccc.hexFrom(ccc.WitnessArgs.from({
+    lock: "0x" + "00".repeat(65),
+    outputType: args.outputType ?? undefined,
+    inputType: args.inputType ?? undefined,
+  }).toBytes());
+  const witnessBytes = ccc.bytesFrom(zeroed);
+  const len = new Uint8Array(8);
+  new DataView(len.buffer).setBigUint64(0, BigInt(witnessBytes.length), true);
+  const digest = ccc.hashCkb(ccc.bytesConcat(
+    ccc.bytesFrom(ccctx.hash()), len, witnessBytes));
+
+  try {
+    const pubkey = ccc.recoverMessageSecp256k1(digest, signature);
+    const recovered = ccc.hashCkb(ccc.bytesFrom(pubkey)).slice(0, 42).toLowerCase();
+    if (recovered === expectedLockArg) {
+      ok.push("signature VERIFIED against the witness carrying the schedule — " +
+        "any assembly that drops it would invalidate this signature");
+    } else {
+      fail.push(
+        `the signature does not recover to ${expectedLockArg} over this ` +
+        `witness (got ${recovered}). It was signed over different bytes, so ` +
+        "the node will refuse it.",
+      );
+    }
+  } catch (e) {
+    fail.push(`could not recover a public key from the signature: ${e.message}`);
+  }
 }
 
 // 2. the schedule survived

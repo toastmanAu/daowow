@@ -147,17 +147,54 @@ computed with the lock zero-filled to its final length and every other field
 intact, so writing the signature into that slot is the correct operation and
 preserves `output_type`.
 
-Whether ckb-cli actually does that is **not yet known**, so it is a checked step
-rather than an assumption. `tools/check-signed-round.mjs` runs between
-`sign-inputs` and `send` and re-derives everything from the signed bytes: the
-schedule must still be present, it must still hash to the commitment the config
-cell carries, and the lock must no longer be zeros. Against the unsigned file it
-reports the schedule intact and the signature missing, which is the distinction
-that matters.
+**ckb-cli signs in two stages, and it does the right thing.** `tx sign-inputs
+--add-signatures` does not touch witness 0 at all: it records the signature in
+the file's `signatures` map and leaves the witness as written, lock still
+zero-filled. `tx send` assembles the final witnesses from that map. So the
+first version of the checker reported "not signed yet" over a file that was
+signed — it was looking in the wrong place.
 
-If it reports the schedule dropped, do not send — the signature would have to be
-produced by something that fills the lock in place, because re-inserting
-`output_type` after signing invalidates the signature that committed to it.
+That it does the right thing is now **proven rather than assumed.**
+`check-signed-round.mjs` recomputes the RFC 0019 sighash-all digest over the
+witness as stored — the one carrying the schedule — and recovers the public key
+from the signature:
+
+```
+  ok  signature recorded for 0xa776bf02d1… (ckb-cli assembles it into witness 0 at send)
+  ok  signature VERIFIED against the witness carrying the schedule —
+      any assembly that drops it would invalidate this signature
+  ok  schedule intact: v2, 5 places, thresholds 1, 8, 20, 50, 100
+  ok  commitment matches the config cell
+```
+
+The recovery matching the signer's lock hash means ckb-cli computed the digest
+over `output_type` too. An assembly step that dropped the schedule would
+therefore produce a signature the node rejects — the failure mode is closed by
+the signature itself, not by our checking.
+
+**Positive control**, per the 2026-09-12 lesson that a verifier which cannot
+fail proves nothing: flipping one byte of the schedule region breaks both the
+recovery (`got 0x504c92e8…`) and the commitment comparison. The verifier bites.
+
+And it would have failed closed anyway. `contracts/round-type/src/main.rs:70`
+refuses creation with `ROUND_ERROR_CONFIG` when `creation_schedule` returns
+`None`, so a dropped schedule is a rejected transaction, never a round on chain
+that cannot pay out.
+
+## `tx send` needs `--skip-check`, and that is not a shortcut
+
+ckb-cli refuses the transaction with:
+
+```
+Output(no.2) invalid lock script code_hash: 0x60052a7b…, hash_type: data1, args.length: 1
+```
+
+That is the **entry shard cell**, and its lock is correct: `entry-shard-type` in
+its public-lock mode, one zero byte of args — the same mode
+`is_public_settlement_lock` documents and the same lock `buildEntryTx` gives
+every successor. ckb-cli only knows how to classify sighash and multisig locks
+and refuses what it cannot name. The check is ckb-cli's own; the node still
+validates every script in full.
 
 ## To run the live leg
 
@@ -173,7 +210,7 @@ ckb-cli --url http://192.168.68.134:8114 tx sign-inputs --tx-file create-round.j
 # 2. Check the schedule survived signing. This fails closed.
 node tools/check-signed-round.mjs create-round.json
 
-ckb-cli --url http://192.168.68.134:8114 tx send --tx-file create-round.json
+ckb-cli --url http://192.168.68.134:8114 tx send --tx-file create-round.json --skip-check
 
 # 3. Confirm the dApp sees the committed round, with no --from-tx this time
 node tools/dry-run-entry.mjs deployments/dev-testnet-manifest.json --tickets 1
