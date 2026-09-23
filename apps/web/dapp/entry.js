@@ -16,7 +16,15 @@ const chain = () => ({
   ...window.DaowowSchedule,
   ...window.DaowowQuote,
   ...window.DaowowEntryView,
+  ...window.DaowowEntryTx,
+  ...window.DaowowContention,
+  ...window.DaowowShardPeaks,
+  scriptHash: window.DaowowRefundTx.scriptHash,
 });
+
+// The connected wallet, held here rather than on `window` so a page script
+// cannot reach the signing capabilities by reading a global.
+const walletState = { session: null };
 
 // Errors are rendered as TEXT. Messages can carry a node's words or a URL the
 // visitor supplied, and interpolating either into innerHTML is HTML injection
@@ -200,14 +208,17 @@ async function fetchSchedule(rpc, round) {
   return bytes;
 }
 
-function wireEntry({ c, round, sched, sold }) {
+function wireEntry({ c, round, sched, sold, manifest, rpc, nowEpoch }) {
   const ticketsInput = el("tickets");
   const agree = el("agree");
   const submit = el("submit");
+  const status = el("status");
   const cap = round.config.maximumTickets;
+  let tickets = 0n;
+
+  const say = (text) => { status.textContent = text; };
 
   const refresh = () => {
-    let tickets;
     try {
       tickets = BigInt(ticketsInput.value || "0");
       if (tickets <= 0n) throw new Error("at least one ticket");
@@ -222,16 +233,71 @@ function wireEntry({ c, round, sched, sold }) {
     el("ticket-note").textContent = "";
     const quote = c.quoteEntry({
       config: round.config, schedule: sched,
-      lockScript: window.__daowowLock ?? { args: "0x" + "00".repeat(20) },
+      lockScript: walletState.session?.lockScript ?? { args: "0x" + "00".repeat(20) },
       tickets, feeShannons: 0n,
     });
     renderQuote(c.describeQuote(quote));
     renderPayout(c.describePayout(sched, sold + tickets, cap));
-    submit.disabled = !(agree.checked && window.__daowowLock);
-    submit.textContent = window.__daowowLock
+    submit.disabled = !(agree.checked && walletState.session);
+    submit.textContent = walletState.session
       ? `Enter for ${c.formatCkb(quote.total)} CKB`
       : "Connect a wallet to enter";
   };
+
+  // The shard head, read fresh. Never cached: a cached head is exactly how a
+  // client builds an append against a cell another entry already consumed,
+  // and the peaks belong to the head that is current NOW.
+  const readHead = async () => {
+    const shards = await c.findShards(rpc, manifest, round.config.roundId);
+    const head = shards[0];
+    if (!head) throw new Error("this round's entry shard is no longer on chain");
+    return { ...head, peaks: await c.readShardPeaks(rpc, head) };
+  };
+
+  submit.addEventListener("click", async () => {
+    const session = walletState.session;
+    if (!session || submit.disabled) return;
+    submit.disabled = true;
+    el("submit-error").textContent = "";
+    try {
+      say("Reading the current shard head…");
+      const { txHash, attempts } = await c.submitEntryWithRetry({
+        readHead,
+        buildAndSign: async (head) => {
+          const built = c.buildEntryTx({
+            manifest, config: round.config, schedule: sched, shard: head,
+            lock: session.lockScript,
+            participantLockHash: c.scriptHash(session.lockScript),
+            tickets, nowEpoch, configCellOutPoint: round.outPoint,
+          });
+          // D6: the wallet is invoked only now, after the visitor confirmed a
+          // total this page computed from chain data. JoyID shows a hash; the
+          // numbers they actually approved are the ones above.
+          say("Approve the entry in your wallet…");
+          return await session.signEntry(built.tx);
+        },
+        broadcast: async (signed) => {
+          say("Broadcasting…");
+          return await session.broadcast(signed);
+        },
+      });
+      // Committed is NOT claimed here. The node accepted the transaction into
+      // its pool; that is all a send return value means, and saying more would
+      // be asserting something the chain has not yet said.
+      say(
+        `Sent${attempts > 1 ? ` after ${attempts} attempts` : ""}. ` +
+        `Transaction ${txHash}. It is in the node's pool and is not committed ` +
+        `until it appears in a block.`,
+      );
+    } catch (e) {
+      // Contention that exhausted its retries, a rejection, or a wallet
+      // refusal. All three leave the visitor's funds where they were.
+      say("");
+      showError(el("submit-error"), "The entry was not sent.", e.message);
+      submit.disabled = false;
+      return;
+    }
+  });
 
   ticketsInput.addEventListener("input", refresh);
   agree.addEventListener("change", refresh);
@@ -246,7 +312,7 @@ function wireWallet() {
     try {
       wallet ??= createWallet({ rpcUrl: el("rpc").textContent });
       const session = await wallet.connect();
-      window.__daowowLock = session.lockScript;
+      walletState.session = session;
       button.textContent = `${session.address.slice(0, 10)}…`;
       el("tickets").dispatchEvent(new Event("input"));
     } catch (e) {

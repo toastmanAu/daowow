@@ -82,12 +82,17 @@ export function assertWitnessIntact(tx, expectedWitnessZero) {
 }
 
 /**
- * Fund, sign and send an entry. Returns the transaction hash.
+ * Fund and sign an entry, returning the signed transaction WITHOUT sending it.
+ *
+ * Signing and broadcasting are separate because losing the race for the shard
+ * head is a broadcast-time outcome: the retry loop in contention.js needs to
+ * see the send fail on its own so it can re-read the head and rebuild. A
+ * combined call would bury that failure inside the signing step.
  *
  * `signer` is a CCC signer — the JoyID one in the browser. Nothing here reads
  * or stores key material; signing happens inside the wallet.
  */
-export async function signAndSendEntry(signer, description, { feeRate = 1200 } = {}) {
+export async function prepareAndSignEntry(signer, description, { feeRate = 1200 } = {}) {
   const tx = toCccTransaction(description);
   const witnessBefore = tx.witnesses[0];
   if (tx.witnesses.length !== tx.inputs.length) {
@@ -108,5 +113,22 @@ export async function signAndSendEntry(signer, description, { feeRate = 1200 } =
 
   assertWitnessIntact(tx, witnessBefore);
 
-  return await signer.sendTransaction(tx);
+  return await signer.signTransaction(tx);
+}
+
+/**
+ * Send an already-signed entry. Returns the transaction hash.
+ *
+ * This is where contention surfaces: the node refuses an input another entry
+ * already took, and contention.js classifies that refusal.
+ */
+export async function broadcastEntry(signer, signedTx) {
+  return await signer.client.sendTransaction(signedTx);
+}
+
+/**
+ * Fund, sign and send in one step. Returns the transaction hash.
+ */
+export async function signAndSendEntry(signer, description, options = {}) {
+  return await broadcastEntry(signer, await prepareAndSignEntry(signer, description, options));
 }

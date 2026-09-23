@@ -56,6 +56,9 @@
       Connect a wallet to enter
     </button>
     <p class="sub" id="status"></p>
+    <!-- Errors get their own block: showError appends a div, which a <p>
+         cannot legally contain. -->
+    <div id="submit-error"></div>
   </section>
 </main>
 
@@ -78,6 +81,8 @@
 <script src="../chain/mmr-witness.js"></script>
 <script src="../chain/entry-tx.js"></script>
 <script src="../chain/contention.js"></script>
+<script src="../chain/shard-peaks.js"></script>
+<script src="../chain/refund-tx.js"></script>
 <script src="entry-view.js"></script>
 <script type="module" src="entry.js"></script>
 </body>
