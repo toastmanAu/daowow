@@ -12,6 +12,11 @@
 // u64 fields are returned as BigInt. Shannon amounts exceed 2^53, so Number
 // would silently round them.
 
+// core carries the CKB blake2b the contract uses. Resolved the dual way these
+// files export themselves: require under node, window in the browser, where
+// core.js is loaded first.
+const core = typeof require === "function" ? require("../core.js") : window.DaowowCore;
+
 const ROUND_CONFIG_SIZE = 358;
 const SHARD_DATA_SIZE = 101;
 
@@ -35,6 +40,14 @@ function decodeRoundConfigV1(bytes) {
   return Object.freeze({
     version: d.getUint32(0, true),
     roundId: hex(bytes, 4, 32),
+    // Not a stored field — it is blake2b("DAOWOW_CONFIG_V2" || these bytes),
+    // per encoding.rs:103. Carried here because it identifies the round
+    // everywhere downstream: the shard's type args, the entry-lock args, every
+    // claim's args. Deriving it at each call site is how one of them ends up
+    // computing it differently.
+    commitment: core.hex(core.ckbHash256([
+      new TextEncoder().encode("DAOWOW_CONFIG_V2"), bytes,
+    ])).replace(/^0x/, ""),
     ticketPrice: d.getBigUint64(36, true),
     minimumTickets: d.getBigUint64(44, true),
     maximumTickets: d.getBigUint64(52, true), // 0 means uncapped

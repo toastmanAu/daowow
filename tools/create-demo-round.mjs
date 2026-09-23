@@ -15,9 +15,14 @@
 // repository: Phill signs, no key material comes near this code.
 //
 // Usage:
-//   node tools/create-demo-round.mjs <manifest.json> <funding-outpoint> [--out FILE]
+//   node tools/create-demo-round.mjs <manifest.json> <funding-outpoint>
+//       [--out FILE] [--epochs N]
 //     funding-outpoint is txhash:index, a plain cell under the operator lock
 //     big enough to cover the round's cells plus a fee.
+//     --epochs is how many epochs the entry window stays open (default 6,
+//     roughly a day on testnet). It is NOT part of the approved round shape;
+//     it exists so a demo is not run against a clock. Aggregation is always
+//     given two further epochs.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -58,6 +63,9 @@ if (!manifestPath || !fundingRef) {
 }
 const outAt = rest.indexOf("--out");
 const outFile = outAt === -1 ? "create-round.json" : rest[outAt + 1];
+const epochsAt = rest.indexOf("--epochs");
+const entryEpochs = epochsAt === -1 ? 6n : BigInt(rest[epochsAt + 1]);
+if (entryEpochs < 1n) throw new Error("--epochs must be at least 1");
 
 const manifest = require_(path.relative(ROOT, manifestPath));
 const scripts = manifest.scripts;
@@ -97,8 +105,8 @@ const tip = await rpc("get_tip_header", []);
 // the epoch NUMBER.
 const nowEpoch = BigInt(tip.epoch) & 0xffffffn;
 const entryStart = nowEpoch;
-const entryEnd = nowEpoch + 2n;
-const aggregationDeadline = nowEpoch + 4n;
+const entryEnd = nowEpoch + entryEpochs;
+const aggregationDeadline = entryEnd + 2n;
 
 // --- the round id and config ----------------------------------------------
 const roundId = ccc.hashCkb(

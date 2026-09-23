@@ -117,6 +117,9 @@ async function findShards(rpc, manifest, roundId) {
     shards.push(Object.freeze({
       ...shard,
       capacity: BigInt(cell.output.capacity),
+      // The head's own type args, so buildEntryTx can check that the
+      // successor it derives from the config matches the cell being spent.
+      typeArgs: cell.output.type ? cell.output.type.args : null,
       outPoint: outPointOf(cell),
     }));
   }

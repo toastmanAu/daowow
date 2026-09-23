@@ -73,3 +73,17 @@ test("encodeRoundConfigV1 round-trips the Rust oracle byte for byte", () => {
   // And the commitment the whole protocol keys on must survive the round trip.
   assert.strictEqual(reencoded.length, 358);
 });
+
+// The config commitment is a FUNCTION of the config bytes, and everything
+// downstream identifies the round by it: the shard's type args, the
+// entry-lock args, every claim's args. buildEntryTx reads config.commitment,
+// and a decoder that omits it hands `undefined` to a hex parser — which is how
+// the live dry run found this, after discovery, the schedule check and the
+// quote had all passed.
+//
+// Pinned to the Rust oracle rather than to our own output: the commitment is
+// what the CONTRACT computes, so reproducing it is the only thing that counts.
+test("a decoded round config carries the commitment Rust computes", () => {
+  const cfg = decodeRoundConfigV1(unhex(V.cell_encodings.round_config.hex));
+  assert.strictEqual(cfg.commitment, V.cell_encodings.round_config.commitment);
+});

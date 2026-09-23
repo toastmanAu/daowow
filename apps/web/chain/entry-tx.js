@@ -137,13 +137,27 @@ function buildEntryTx({
   const outputsData = [];
 
   // 0: the shard successor, keeping its own type script and public lock.
+  //
+  // The args are derived from the CONFIG, not copied from the head. That is
+  // deliberate — the config is the authenticated source — but it means the two
+  // can disagree, and if they do the head's type script appears in the inputs
+  // and vanishes from the outputs, which the contract reports as BadState
+  // without saying why. When the head tells us its own args, check them.
+  const successorTypeArgs = hex(new Uint8Array(
+    [...commitmentBytes, ...core.u32le(Number(shard.shardId))]));
+  if (shard.typeArgs && shard.typeArgs.toLowerCase() !== successorTypeArgs.toLowerCase()) {
+    throw new Error(
+      "this shard cell does not belong to this round: its type args are " +
+      `${shard.typeArgs} and the round's config commits to ${successorTypeArgs}`,
+    );
+  }
   outputs.push({
     capacity: shard.capacity,
     lock: { codeHash: shardScript.codeHash, hashType: shardScript.hashType, args: "0x00" },
     type: {
       codeHash: shardScript.codeHash,
       hashType: shardScript.hashType,
-      args: hex(new Uint8Array([...commitmentBytes, ...core.u32le(Number(shard.shardId))])),
+      args: successorTypeArgs,
     },
   });
   outputsData.push(hex(codec.encodeEntryShardDataV1(after)).slice(2));

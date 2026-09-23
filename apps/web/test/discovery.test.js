@@ -172,7 +172,10 @@ test("a shard carries the capacity its successor must preserve", async () => {
   // successor is built with an undefined capacity and the append is refused.
   const rpc = pagingRpc([{
     out_point: { tx_hash: "0x" + "cd".repeat(32), index: "0x1" },
-    output: { capacity: "0x9502f9000", lock: {}, type: {} },
+    output: {
+      capacity: "0x9502f9000", lock: {},
+      type: { code_hash: "0x00", hash_type: "type", args: "0x" + "77".repeat(36) },
+    },
     output_data: "0x" + V.cell_encodings.shard_data.hex,
   }]);
   const [shardCell] = await findShards(
@@ -180,4 +183,6 @@ test("a shard carries the capacity its successor must preserve", async () => {
   assert.strictEqual(shardCell.capacity, 0x9502f9000n);
   assert.strictEqual(shardCell.outPoint.txHash, "0x" + "cd".repeat(32));
   assert.strictEqual(shardCell.outPoint.index, 1);
+  // buildEntryTx checks the successor it derives against the cell being spent.
+  assert.strictEqual(shardCell.typeArgs, "0x" + "77".repeat(36));
 });

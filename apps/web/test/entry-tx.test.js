@@ -200,3 +200,32 @@ test("peaks that do not fit the shard are refused with a usable message", () => 
     nowEpoch: 1005n, configCellOutPoint: CONFIG_DEP,
   }), /accumulator root/i);
 });
+
+// The successor's type args are derived from config.commitment, NOT copied
+// from the head being spent. So the two can disagree — a config cell paired
+// with a shard from a different round, or a commitment computed differently
+// somewhere — and the result is a type script that appears and disappears in
+// the same script group. The contract calls that BadState and says nothing
+// about why. When the head tells us its own args, check them.
+const MATCHING_SHARD_TYPE_ARGS = "0x" + config.commitment + "00000000";
+
+test("a shard whose type args disagree with the config is refused locally", () => {
+  assert.throws(() => buildEntryTx({
+    manifest: MANIFEST, config,
+    schedule: decodeSchedule(unhex(V.prize_schedule_v2.hex)),
+    shard: { ...shard, typeArgs: "0x" + "99".repeat(32) + "00000000" },
+    lock, participantLockHash: "33".repeat(32), tickets: 1n,
+    nowEpoch: 1005n, configCellOutPoint: CONFIG_DEP,
+  }), /does not belong to this round/);
+});
+
+test("a shard reporting matching type args builds, and the successor keeps them", () => {
+  const { tx } = buildEntryTx({
+    manifest: MANIFEST, config,
+    schedule: decodeSchedule(unhex(V.prize_schedule_v2.hex)),
+    shard: { ...shard, typeArgs: MATCHING_SHARD_TYPE_ARGS },
+    lock, participantLockHash: "33".repeat(32), tickets: 1n,
+    nowEpoch: 1005n, configCellOutPoint: CONFIG_DEP,
+  });
+  assert.strictEqual(tx.outputs[0].type.args, MATCHING_SHARD_TYPE_ARGS);
+});
