@@ -73,6 +73,38 @@ function decodeEntryShardDataV1(bytes) {
   });
 }
 
+function encodeRoundConfigV1(config) {
+  const out = new Uint8Array(ROUND_CONFIG_SIZE);
+  const d = new DataView(out.buffer);
+  d.setUint32(0, Number(config.version), true);
+  out.set(unhexBytes(config.roundId), 4);
+  d.setBigUint64(36, BigInt(config.ticketPrice), true);
+  d.setBigUint64(44, BigInt(config.minimumTickets), true);
+  d.setBigUint64(52, BigInt(config.maximumTickets), true);
+  d.setBigUint64(60, BigInt(config.entryStart), true);
+  d.setBigUint64(68, BigInt(config.entryEnd), true);
+  d.setBigUint64(76, BigInt(config.aggregationDeadline), true);
+  d.setUint32(84, Number(config.daoTermPeriods), true);
+  d.setUint32(88, Number(config.entryShardCount), true);
+  out.set(unhexBytes(config.prizeScheduleHash), 92);
+  out.set(unhexBytes(config.feePolicyHash), 124);
+  out.set(unhexBytes(config.keeperPolicyHash), 156);
+  d.setUint32(188, Number(config.flags), true);
+  out[192] = Number(config.accumulatorId);
+  // Five ScriptRefs of 33 bytes each: 32-byte code hash then a one-byte hash
+  // type, in this exact order, filling 193..358.
+  const refs = [
+    config.entryLock, config.daoLock, config.settlementType,
+    config.entryShardType, config.daoType,
+  ];
+  refs.forEach((ref, i) => {
+    const at = 193 + i * 33;
+    out.set(unhexBytes(ref.codeHash), at);
+    out[at + 32] = Number(ref.hashType);
+  });
+  return out;
+}
+
 function encodeEntryShardDataV1(shard) {
   const out = new Uint8Array(SHARD_DATA_SIZE);
   const d = new DataView(out.buffer);
@@ -99,13 +131,17 @@ function unhexBytes(value) {
   return Uint8Array.from(body.match(/../g).map((b) => parseInt(b, 16)));
 }
 
+const HASH_TYPE_CODE = Object.freeze({ data: 0, type: 1, data1: 2, data2: 4 });
+
 const api = {
+  HASH_TYPE_CODE,
   decodeRoundConfigV1,
   decodeEntryShardDataV1,
   SHARD_STATE,
   ROUND_CONFIG_SIZE,
   SHARD_DATA_SIZE,
   encodeEntryShardDataV1,
+  encodeRoundConfigV1,
 };
 if (typeof module !== "undefined" && module.exports) module.exports = api;
 if (typeof window !== "undefined") window.DaowowCodec = api;

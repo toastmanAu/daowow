@@ -62,3 +62,14 @@ test("a wrong-length cell is refused, never best-effort decoded", () => {
   assert.throws(() => decodeRoundConfigV1(unhex(o.hex).slice(0, 357)), /358/);
   assert.throws(() => decodeEntryShardDataV1(new Uint8Array(100)), /101/);
 });
+
+test("encodeRoundConfigV1 round-trips the Rust oracle byte for byte", () => {
+  const { encodeRoundConfigV1 } = require("../chain/codec.js");
+  const o = V.cell_encodings.round_config;
+  const decoded = decodeRoundConfigV1(unhex(o.hex));
+  const reencoded = encodeRoundConfigV1(decoded);
+  const hex = Array.from(reencoded, (x) => x.toString(16).padStart(2, "0")).join("");
+  assert.strictEqual(hex, o.hex);
+  // And the commitment the whole protocol keys on must survive the round trip.
+  assert.strictEqual(reencoded.length, 358);
+});
