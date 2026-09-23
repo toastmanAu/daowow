@@ -68,7 +68,9 @@ const { ccc } = await import("../apps/web/vendor/ccc-joyid.min.mjs");
 // itself rather than invented — so anything the pipeline builds against them
 // is what it would build against the committed round.
 function rpcServingUnsentTx(file, tipEpoch) {
-  const raw = JSON.parse(fs.readFileSync(file, "utf8"));
+  const doc = JSON.parse(fs.readFileSync(file, "utf8"));
+  // create-demo-round.mjs writes ckb-cli's wrapper; a bare transaction also works.
+  const raw = doc.transaction ?? doc;
   const txHash = ccc.Transaction.fromLumosSkeleton
     ? null : null; // not a lumos skeleton; build from the ckb-cli shape below
   const tx = ccc.Transaction.from({

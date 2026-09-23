@@ -237,12 +237,30 @@ const tx = {
     { capacity: "0x" + change.toString(16), lock: operatorLock, type: null },
   ],
   outputs_data: [hex(configBytes), hex(shardData), "0x"],
-  // creation_schedule reads the committed schedule from
-  // WitnessArgs.output_type of the creation transaction's first witness.
-  witnesses: [ccc.hexFrom(ccc.WitnessArgs.from({ outputType: hex(schedule) }).toBytes())],
+  // creation_schedule loads witness 0 and reads WitnessArgs.output_type
+  // (daowow-contracts-common/src/lib.rs:66).
+  //
+  // That is the SAME witness the signature goes in, so this carries a 65-byte
+  // zero lock placeholder alongside the schedule — exactly the shape the
+  // integration harness builds (tests/integration/tests/common/mod.rs:171).
+  // Signing writes the real signature into that slot under RFC 0019, which
+  // sizes the digest against a zero-filled lock of the final length. Omitting
+  // the placeholder leaves a signer to invent the field and, with it, the
+  // chance of rebuilding the witness from scratch and dropping the schedule.
+  witnesses: [ccc.hexFrom(ccc.WitnessArgs.from({
+    lock: "0x" + "00".repeat(65),
+    outputType: hex(schedule),
+  }).toBytes())],
 };
 
-fs.writeFileSync(outFile, JSON.stringify(tx, null, 2));
+// ckb-cli's own tx-file format. NOT a bare transaction: `ckb-cli tx init`
+// CREATES an empty file and would overwrite this one, so the flow goes
+// straight to sign-inputs. Writing the wrapper here is what makes that safe.
+fs.writeFileSync(outFile, JSON.stringify({
+  transaction: tx,
+  multisig_configs: {},
+  signatures: {},
+}, null, 2));
 
 console.log("STAND-IN for gate 3's operator flow. Nothing has been signed.\n");
 console.log(`round id            ${roundId}`);
@@ -253,5 +271,13 @@ console.log(`tickets             min ${DEMO.minimumTickets}, max ${DEMO.maximumT
 console.log(`payout thresholds   ${DEMO.thresholds.join(", ")}`);
 console.log(`entry window        epoch ${entryStart} to ${entryEnd}, aggregate by ${aggregationDeadline}`);
 console.log(`\ncapacity            config ${configCapacity / CKB} + shard ${shardCapacity / CKB} + fee 0.1, change ${change / CKB} CKB`);
-console.log(`\nwrote ${outFile}. Review it, then sign and send with ckb-cli:`);
-console.log(`  ckb-cli --url ${manifest.rpcUrl} tx init --tx-file ${outFile}   # see docs/deploy-dev-testnet.md`);
+console.log(`\nwrote ${outFile} in ckb-cli's tx-file format. Do NOT run \`tx init\`:`);
+console.log("it creates an EMPTY file and overwrites this one.\n");
+console.log("  # 1. review");
+console.log(`  ckb-cli --url ${manifest.rpcUrl} tx info --tx-file ${outFile}`);
+console.log("  # 2. sign (prompts for your password)");
+console.log(`  ckb-cli --url ${manifest.rpcUrl} tx sign-inputs --tx-file ${outFile} \\`);
+console.log("      --from-account 0xa776bf02d19cafa3749d906cc2c9ab1cf1e80ff7 --add-signatures");
+console.log("  # 3. CHECK THE SCHEDULE SURVIVED SIGNING, then send");
+console.log(`  node tools/check-signed-round.mjs ${outFile}`);
+console.log(`  ckb-cli --url ${manifest.rpcUrl} tx send --tx-file ${outFile}`);

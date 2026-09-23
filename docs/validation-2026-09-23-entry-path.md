@@ -111,19 +111,74 @@ a working fix look broken, and would equally make a broken fix look fine.
 - `audit-wallet-cells.mjs` and `reclaim-cells.sh` still disagree about
   `dao-lock` (carried over from 2026-09-20).
 
+## `ckb-cli tx init` destroys a prepared transaction
+
+The first attempt to create the round ran the command this document told Phill
+to run, reported success, and produced no round. **`ckb-cli tx init` CREATES an
+empty transaction file.** It does not load one. It overwrote the prepared
+transaction with `{"transaction": {…all empty…}}` and exited 0.
+
+The instruction was wrong in `tools/create-demo-round.mjs`'s own output and
+repeated here. `docs/deploy-dev-testnet.md` is not wrong — there `tx init`
+begins a transaction that `add-input`/`add-output` then build, which is what
+the subcommand is for. It is only wrong for a transaction that already exists.
+
+`create-demo-round.mjs` now writes ckb-cli's tx-file format directly, so the
+flow goes straight to `sign-inputs` with no `tx init` at all. `ckb-cli tx info`
+reads the result and resolves it correctly: 121,956.739 CKB in, three outputs,
+0.1 CKB fee.
+
+## The witness the signature shares with the schedule
+
+Fixing that surfaced a second problem in the same file, and this one would have
+been much harder to see.
+
+`creation_schedule` loads **witness 0** and reads `WitnessArgs.output_type`
+(`crates/daowow-contracts-common/src/lib.rs:66`). Witness 0 is also where the
+signature goes. The generator was writing a `WitnessArgs` with `output_type`
+and **no `lock` field at all**, leaving a signer to invent that field — and a
+signer that rebuilds the witness rather than filling its lock in place would
+drop the schedule.
+
+It now carries a 65-byte zero lock placeholder beside the schedule, which is
+exactly the shape the integration harness builds
+(`tests/integration/tests/common/mod.rs:171`). Under RFC 0019 the digest is
+computed with the lock zero-filled to its final length and every other field
+intact, so writing the signature into that slot is the correct operation and
+preserves `output_type`.
+
+Whether ckb-cli actually does that is **not yet known**, so it is a checked step
+rather than an assumption. `tools/check-signed-round.mjs` runs between
+`sign-inputs` and `send` and re-derives everything from the signed bytes: the
+schedule must still be present, it must still hash to the commitment the config
+cell carries, and the lock must no longer be zeros. Against the unsigned file it
+reports the schedule intact and the signature missing, which is the distinction
+that matters.
+
+If it reports the schedule dropped, do not send — the signature would have to be
+produced by something that fills the lock in place, because re-inserting
+`output_type` after signing invalidates the signature that committed to it.
+
 ## To run the live leg
 
 ```bash
-# 1. Create the round (Phill signs; the window is 6 epochs, ~a day)
+# 1. Create the round. Do NOT run `tx init` — it would overwrite this file.
 node tools/create-demo-round.mjs deployments/dev-testnet-manifest.json \
   0x86cb7a8ebac06ec26099e7da062764a64be61b4fa763c4509f82adc18f3400be:2
-ckb-cli --url http://192.168.68.134:8114 tx init --tx-file create-round.json
-#   ... sign-inputs, send — see docs/deploy-dev-testnet.md
 
-# 2. Confirm the dApp sees the committed round, with no --from-tx this time
+ckb-cli --url http://192.168.68.134:8114 tx info --tx-file create-round.json
+ckb-cli --url http://192.168.68.134:8114 tx sign-inputs --tx-file create-round.json \
+    --from-account 0xa776bf02d19cafa3749d906cc2c9ab1cf1e80ff7 --add-signatures
+
+# 2. Check the schedule survived signing. This fails closed.
+node tools/check-signed-round.mjs create-round.json
+
+ckb-cli --url http://192.168.68.134:8114 tx send --tx-file create-round.json
+
+# 3. Confirm the dApp sees the committed round, with no --from-tx this time
 node tools/dry-run-entry.mjs deployments/dev-testnet-manifest.json --tickets 1
 
-# 3. Enter from the browser with JoyID
+# 4. Enter from the browser with JoyID
 python3 -m http.server 8791 --bind 127.0.0.1     # from the repo root
 #   http://127.0.0.1:8791/apps/web/dapp/entry.html
 ```
