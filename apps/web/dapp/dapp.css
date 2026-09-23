@@ -94,3 +94,18 @@ footer .mono { color: var(--paper); }
 .primary-button { width: 100%; padding: 16px 24px; min-height: 56px; color: var(--ink);
   background: var(--amber); border: 0; border-radius: 8px; font-weight: 600; font-size: 16px; }
 .primary-button:hover:not(:disabled) { background: hsl(39 100% 70%); }
+
+/* Prose pages */
+.prose { max-width: 720px; }
+.prose h1 { font-size: 40px; margin: 24px 0 8px; }
+.prose h2 { font-size: 24px; margin: 40px 0 12px; }
+.prose h3 { font-size: 16px; margin: 0 0 8px; }
+.prose p { margin: 0 0 16px; color: hsl(220 30% 88%); }
+.prose .lede { font-size: 20px; line-height: 1.5; color: var(--paper);
+  border-left: 3px solid var(--amber); padding-left: 20px; margin: 24px 0 32px; }
+.prose .aside { font-size: 14px; color: var(--muted); }
+.prose ul { margin: 0 0 16px; padding-left: 20px; color: hsl(220 30% 88%); }
+.prose li { margin-bottom: 6px; }
+.caveat { background: hsl(28 45% 20%); border-left: 3px solid var(--amber);
+  border-radius: 8px; padding: 20px 24px; margin: 24px 0; }
+.caveat p:last-child { margin-bottom: 0; }

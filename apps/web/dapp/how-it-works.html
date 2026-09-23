@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DAOWOW — how it works</title>
+<meta http-equiv="Content-Security-Policy" content="
+  default-src 'none'; script-src 'self'; style-src 'self';
+  img-src 'self' data:; connect-src 'none';
+  form-action 'none'; base-uri 'none'">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext y='26' font-size='28'%3E%E2%97%8E%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="dapp.css">
+</head>
+<body>
+<header class="site-header">
+  <span class="brand"><span class="brand-symbol">◎</span>DAO<span class="brand-light">WOW</span></span>
+  <a class="nav-link" href="entry.html">Enter a round</a>
+</header>
+
+<main class="prose">
+  <h1>How it works</h1>
+
+  <p class="lede">
+    Prizes are funded by Nervos DAO yield on the pooled principal. Entrants get
+    their principal back whether they win or lose. Nobody's stake pays anybody
+    else's prize.
+  </p>
+
+  <p>
+    That is the whole design, and it is the opposite of a conventional lottery.
+    There is no pot of losers' money. What is at stake is the <em>interest</em>
+    the pool earns while it is locked — not the pool itself.
+  </p>
+
+  <h2>Where the prizes come from</h2>
+  <p>
+    Every ticket's principal is deposited into the
+    <strong>Nervos DAO</strong>, the protocol-level savings mechanism built
+    into CKB. A deposit earns yield over 180-epoch cycles, roughly a month
+    each. A round runs for one or two of those cycles.
+  </p>
+  <p>
+    When the round settles, the principal returns to whoever deposited it, and
+    the <em>yield</em> becomes the prize pool. A winner receives a share of
+    that interest. A non-winner receives exactly what they put in.
+  </p>
+  <p class="aside">
+    This also means a round with few entrants has a small pool. Yield is
+    proportional to how much was deposited and for how long — it is not
+    topped up from anywhere.
+  </p>
+
+  <h2>How many places pay</h2>
+  <p>
+    More entrants, more places paid — the way a poker tournament pays more of a
+    larger field. Each round commits to a payout table in advance, and a place
+    only starts paying once the round reaches its threshold.
+  </p>
+  <p>
+    The table is fixed when the round is created and cannot be changed
+    afterwards, by anyone, including whoever created it. The entry page shows
+    the live table: how many places the round pays now, and what would open
+    next.
+  </p>
+  <p class="aside">
+    Paying fewer, larger prizes in a small round is deliberate. A prize below
+    about 61 CKB cannot even be paid into its own cell without being topped
+    up, so spreading a small pool across five places would produce prizes too
+    small to deliver.
+  </p>
+
+  <h2>How winners are chosen</h2>
+  <p>
+    First the entry list is <strong>sealed</strong>: once the round closes, the
+    exact set of tickets is fixed and committed on chain. Only then is the
+    randomness drawn.
+  </p>
+  <p>
+    The randomness comes from the hashes of <strong>four separate blocks</strong>,
+    mined 64, 128, 192 and 256 blocks after the seal was recorded. Nobody —
+    including whoever created the round — can know those hashes when entry
+    closes, because the blocks do not exist yet. Those four hashes are combined
+    with the round's own identity into a single seed, and winning ticket
+    positions are drawn from it.
+  </p>
+  <p>
+    Anyone can recompute the result. The seal, the entropy record and the seed
+    derivation are all public, so the draw can be checked independently rather
+    than trusted.
+  </p>
+  <div class="caveat">
+    <h3>What this is not</h3>
+    <p>
+      This is <strong>not a verifiable random function and not a randomness
+      beacon</strong>. It relies on block hashes that miners produce. A miner
+      who controlled the specific blocks used could in principle discard
+      unfavourable ones and try again — "grinding" the result.
+    </p>
+    <p>
+      Sealing the entry list first means nobody can choose entropy to suit a
+      field they already know, and using four blocks spread across roughly
+      forty minutes makes influence far harder than a single block would. But
+      the honest description is that this raises the cost of manipulation
+      rather than making it impossible.
+    </p>
+  </div>
+
+  <h2>What a ticket actually is</h2>
+  <p>
+    Each ticket mints a <strong>claim NFT</strong> into your own wallet, in the
+    same transaction as the entry. It is a real cell on chain, not a database
+    row, and it carries the ticket's identity: which round, which position.
+  </p>
+  <p>
+    The claim holds the right to that ticket's prize. Your principal and any
+    refund stay bound to you as the depositor and do not travel with it.
+  </p>
+
+  <h2>What it costs beyond the principal</h2>
+  <p>
+    On CKB, storing anything on chain means locking capacity for as long as it
+    exists. A claim NFT needs about <strong>222 CKB</strong> of capacity, and
+    one is minted per ticket. An entry also needs about 237 CKB for its own
+    record.
+  </p>
+  <p>
+    This capacity is <strong>locked, not spent</strong>. It returns to you when
+    the claim is retired at the end of the round. The entry page quotes every
+    component separately, so the total you confirm is the total committed.
+  </p>
+
+  <h2>How long your funds are committed</h2>
+  <p>
+    A round lasts one or two native DAO cycles — roughly 30 to 60 days. Your
+    principal and the capacity above are locked for that whole period. Nervos
+    DAO deposits cannot be withdrawn early without forfeiting the cycle's
+    yield, which is why the duration is fixed when the round is created.
+  </p>
+
+  <h2 id="today">What works today</h2>
+  <div class="caveat">
+    <p>
+      This is a <strong>testnet demonstration</strong>. Testnet CKB has no
+      monetary value.
+    </p>
+    <p>Working in this build:</p>
+    <ul>
+      <li>Connecting a wallet and reading the live round from chain</li>
+      <li>Entering a round, which mints your claim NFTs</li>
+      <li>Refunding an entry the round did not accept</li>
+    </ul>
+    <p>Specified and built in the contracts, but <strong>not yet available in this interface</strong>:</p>
+    <ul>
+      <li>Transferring a claim to someone else</li>
+      <li>Redeeming a prize</li>
+      <li>Retiring a claim and receiving the winner's memento</li>
+      <li>The animated draw reveal</li>
+    </ul>
+    <p>
+      Those arrive in later milestones. Nothing on this page describes a
+      feature as usable here before it is.
+    </p>
+  </div>
+</main>
+
+<footer>
+  <span>Testnet only. No real value.</span>
+</footer>
+</body>
+</html>
