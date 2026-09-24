@@ -72,3 +72,54 @@ test("the payout table is capped by the round's own maximum", () => {
   assert.strictEqual(p.nextThreshold, null,
     "a threshold beyond the round's cap is unreachable and must not be advertised");
 });
+
+// --- what the visitor asked for -------------------------------------------
+// The full-round case was found on a live round the moment its last ticket
+// sold: the page said "only 0 tickets remain in this round", which is
+// arithmetic rather than English, and it is the sentence shown at exactly the
+// point the round is most interesting.
+const { describeTicketRequest } = require("../dapp/entry-view.js");
+
+test("a servable request comes back with its ticket count and no complaint", () => {
+  const r = describeTicketRequest({ value: "3", ticketsSold: 5n, cap: 10n });
+  assert.strictEqual(r.tickets, 3n);
+  assert.strictEqual(r.note, "");
+  assert.strictEqual(r.full, false);
+});
+
+test("a full round says so in words, not as zero remaining", () => {
+  const r = describeTicketRequest({ value: "1", ticketsSold: 10n, cap: 10n });
+  assert.strictEqual(r.tickets, null);
+  assert.strictEqual(r.full, true);
+  assert.match(r.note, /full/);
+  assert.doesNotMatch(r.note, /\b0 tickets\b/, "never phrase a full round as zero remaining");
+});
+
+test("asking for more than remains names how many there are", () => {
+  assert.match(
+    describeTicketRequest({ value: "5", ticketsSold: 8n, cap: 10n }).note,
+    /Only 2 tickets remain/);
+});
+
+test("the last single ticket is singular", () => {
+  // "Only 1 tickets remain" is the kind of thing that makes a money page look
+  // unattended.
+  assert.match(
+    describeTicketRequest({ value: "2", ticketsSold: 9n, cap: 10n }).note,
+    /Only 1 ticket remains/);
+});
+
+test("zero, blank and nonsense are each refused with a usable sentence", () => {
+  for (const value of ["0", "", "   ", "abc", "1.5", "-2"]) {
+    const r = describeTicketRequest({ value, ticketsSold: 0n, cap: 10n });
+    assert.strictEqual(r.tickets, null, `${JSON.stringify(value)} must not parse`);
+    assert.ok(r.note.length > 0 && /[.!]$/.test(r.note),
+      `${JSON.stringify(value)} needs a sentence, got ${JSON.stringify(r.note)}`);
+  }
+});
+
+test("an uncapped round never reports itself full", () => {
+  const r = describeTicketRequest({ value: "1000", ticketsSold: 99999n, cap: 0n });
+  assert.strictEqual(r.tickets, 1000n);
+  assert.strictEqual(r.full, false);
+});

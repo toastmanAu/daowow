@@ -228,18 +228,27 @@ function wireEntry({ c, round, sched, sold, manifest, rpc, nowEpoch, roundBox, s
   const say = (text) => { status.textContent = text; };
 
   const refresh = () => {
-    try {
-      tickets = BigInt(ticketsInput.value || "0");
-      if (tickets <= 0n) throw new Error("at least one ticket");
-      if (cap !== 0n && ticketsSold + tickets > cap) {
-        throw new Error(`only ${cap - ticketsSold} tickets remain in this round`);
-      }
-    } catch (e) {
-      el("ticket-note").textContent = e.message;
+    const asked = c.describeTicketRequest({
+      value: ticketsInput.value, ticketsSold, cap,
+    });
+    el("ticket-note").textContent = asked.note;
+
+    if (asked.tickets === null) {
+      tickets = 0n;
       submit.disabled = true;
+      // The quote is CLEARED rather than left showing the last valid total: a
+      // figure in CKB that no longer corresponds to the input is the one thing
+      // on this page a visitor must never misread.
+      el("quote").textContent = "";
+      submit.textContent = asked.full ? "This round is full" : "Enter a ticket count";
+      // The payout table stays, showing the round AS IT STANDS. It used to
+      // vanish whenever the input was unusable — including on a full round,
+      // which is the moment a visitor most wants to see what it pays.
+      renderPayout(c.describePayout(sched, ticketsSold, cap));
       return;
     }
-    el("ticket-note").textContent = "";
+
+    tickets = asked.tickets;
     const quote = c.quoteEntry({
       config: round.config, schedule: sched,
       lockScript: walletState.session?.lockScript ?? { args: "0x" + "00".repeat(20) },

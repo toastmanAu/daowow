@@ -227,6 +227,65 @@ for it rather than by the suite waiting.
 
 Confirmed in the browser against the live round: **5 of 10 tickets sold**.
 
+## The round filled, and filling it found two more things
+
+Second entry `0xda0b8d0c3605e8996afcdd02c7d5ef869b40dead89fbd8025f36c86b1ea66d9c`,
+**committed** in block `0x2cdfaa7f83e0e935…`. Five more tickets — **the round
+is full at 10 of 10**, and viable, since the minimum is 5.
+
+Its **witness 0 is 210 bytes** where the first entry's was 178. That is not
+cosmetic: the extra 32 bytes are the `old_peaks` list, which was empty for the
+first entry and is not for the second. The non-empty peaks path — supply the
+peaks, bag them against the committed root, replay the append — ran on chain
+for the first time, on a witness a wallet actually signed.
+
+**The refresh was not exercised.** The status line read "It is in the node's
+pool and is not committed until it appears in a block", which is the wording
+from before `confirm.js` existed; that tab predated the fix. The second place
+appearing on screen was the local projection from typing 5 tickets against 5
+sold, not a post-commit re-read. Recorded because a live run that looks like it
+confirmed something it did not is worse than one that confirms nothing.
+
+### A full round said "only 0 tickets remain"
+
+Reachable for the first time the moment the last ticket sold, and it was two
+faults at once:
+
+- the note read **"only 0 tickets remain in this round"** — arithmetic rather
+  than English, at the moment the round is most interesting
+- **the payout table vanished entirely.** It was only drawn for a valid ticket
+  request, so a full round showed no table at all — exactly when a visitor most
+  wants to see what the round pays, on a site whose stated job is explaining
+  the methodology
+
+`describeTicketRequest` in `entry-view.js` now owns the wording, pure and
+tested: full rounds say so in words (and a test forbids phrasing it as zero
+remaining), a partial round names how many are left, and the last single ticket
+is singular rather than "Only 1 tickets remain". Blank, zero, negative and
+non-numeric input each get a sentence.
+
+The payout table is now drawn for the round **as it stands** whenever a request
+cannot be served, so it never disappears. The quote is **cleared** rather than
+left showing the last valid total — a figure in CKB that no longer corresponds
+to the input is the one thing on this page a visitor must never misread. That
+was flagged as cosmetic earlier in this document; the full-round case is what
+made it worth fixing.
+
+The full round now reads:
+
+```
+Round d15f6b5e · open     10 of 10 tickets sold
+This round is full — all 10 tickets are sold.
+[ This round is full ]    (disabled)
+
+Paying 2 places.
+  1st · paying · 40        2nd · paying · 25
+  3rd–5th · not reachable in this round
+```
+
+Two places paying at 40 and 25 percent. The tiered schedule delivered the
+outcome it was specified for, on chain, end to end.
+
 ## What is still unproven, and by whom
 
 - ~~The round-creation transaction has not been accepted by a node.~~ Done.

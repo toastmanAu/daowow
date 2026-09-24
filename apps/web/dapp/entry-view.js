@@ -83,7 +83,45 @@ function describePayout(sched, ticketsSold, maximumTickets) {
   return { placesNow, nextThreshold: next, summary, rows };
 }
 
-const api = { describeQuote, describePayout, formatCkb };
+// What the visitor asked for, and whether the round can serve it.
+//
+// Kept pure and separate from the DOM because the WORDING matters here: a
+// round with every ticket sold said "only 0 tickets remain in this round",
+// which is arithmetic rather than English, and it is the sentence a visitor
+// sees at the exact moment the round is most interesting.
+//
+// `value` is the raw input string. Returns `tickets: null` when the request
+// cannot be served, with `note` saying why.
+function describeTicketRequest({ value, ticketsSold, cap }) {
+  const sold = BigInt(ticketsSold);
+  const full = cap !== 0n && sold >= cap;
+  if (full) {
+    return {
+      tickets: null, full: true,
+      note: `This round is full — all ${cap} tickets are sold.`,
+    };
+  }
+
+  let tickets;
+  try {
+    tickets = BigInt(String(value ?? "").trim() || "0");
+  } catch {
+    return { tickets: null, full: false, note: "Enter a whole number of tickets." };
+  }
+  if (tickets <= 0n) {
+    return { tickets: null, full: false, note: "Enter at least one ticket." };
+  }
+  if (cap !== 0n && sold + tickets > cap) {
+    const left = cap - sold;
+    return {
+      tickets: null, full: false,
+      note: `Only ${left} ticket${left === 1n ? "" : "s"} remain${left === 1n ? "s" : ""} in this round.`,
+    };
+  }
+  return { tickets, full: false, note: "" };
+}
+
+const api = { describeQuote, describePayout, formatCkb, describeTicketRequest };
 if (typeof module !== "undefined" && module.exports) module.exports = api;
 if (typeof window !== "undefined") window.DaowowEntryView = api;
 })();
