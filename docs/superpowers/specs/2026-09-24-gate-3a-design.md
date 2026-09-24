@@ -204,11 +204,23 @@ aggregation window is a trap for anyone driving a round by hand.
 
 ## Open questions for the plan
 
-1. **Should freeze and ledger genesis be one transaction or two?** The contract
-   permits either: genesis consumes a FROZEN shard, and nothing requires that
-   freezing happened in a different transaction. One transaction is cheaper and
-   halves the signing; two are easier to reason about and to recover from. The
-   plan should decide and record why.
+1. ~~Should freeze and ledger genesis be one transaction or two?~~ **Resolved
+   by the contract, not by preference: they cannot be combined.** The claim in
+   the paragraph above was wrong. `AggregationState::new_bound`
+   (`lifecycle.rs:99`) refuses any input shard whose `state` is not already
+   `FROZEN`, and the dispatch in `main.rs:101` routes to `ledger::transition`
+   on data length alone — so a transaction spending an OPEN shard into a ledger
+   cell is decoded as a genesis, fails that guard, and is refused with
+   `SHARD_ERROR_STATE`. Only a prior transaction can set `state` to FROZEN.
+
+   `no_entry_inputs` (`ledger.rs:26`) forces the next pair apart the same way.
+   So the lifecycle is **three transactions, each separated by its own contract
+   rule**: freeze, genesis, then batches. The plan minimises signing effort by
+   driving all three from one command rather than by merging them.
+
+   Neither refusal has a test. A genesis attempted from an OPEN shard, and an
+   aggregate attempted in the genesis transaction, are both structurally
+   impossible and both unpinned.
 2. **Who sponsors the receipt cells?** Each batch mints a ~152 CKB receipt under
    a public lock. At one batch this is noise; the plan should say whether they
    are ever reclaimed, since a public lock means anyone can.
