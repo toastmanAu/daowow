@@ -35,6 +35,7 @@ import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { ccc } from "../apps/web/vendor/ccc-joyid.min.mjs";
 import { depsProvide } from "./lock-deps.mjs";
+import { creationRoundId, validateRoundConfig } from "./round-rules.mjs";
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const require_ = createRequire(path.join(ROOT, "tools/"));
@@ -179,6 +180,26 @@ if (!args.outputType) {
         `config ${cfg.prizeScheduleHash.slice(0, 16)}…)`,
       );
     } else {
+      // The creation rules, both reported by the chain as the same -17.
+      const configIndex = tx.outputs_data.indexOf(configData);
+      const wantId = creationRoundId(tx.inputs[0], configIndex);
+      if (cfg.roundId !== wantId) {
+        fail.push(
+          `the round id is not the creation derivation: config says ` +
+          `${cfg.roundId.slice(0, 16)}…, input 0 with config output ` +
+          `${configIndex} gives ${wantId.slice(0, 16)}…. round-type refuses ` +
+          "this with -17.",
+        );
+      } else {
+        ok.push(`round id matches the creation derivation over input 0`);
+      }
+      const problems = validateRoundConfig(cfg);
+      if (problems.length > 0) {
+        for (const why of problems) fail.push(`config invalid: ${why}`);
+      } else {
+        ok.push("config passes every RoundConfigV1::validate rule");
+      }
+
       const sched = decodeSchedule(scheduleBytes);
       ok.push(`schedule intact: v${sched.version}, ${sched.weights.length} places, ` +
         `thresholds ${sched.thresholds.join(", ")}`);

@@ -232,6 +232,66 @@ The dry run gained the same check for the shard head's lock, which is the one
 **Adding a cell dep changes the raw transaction, so the previous signature is
 void.** `create-round.json` is regenerated and must be signed again.
 
+## `-17` on the config cell: the round id is not free
+
+With the lock dep in place the send got further, and `round-type` itself
+refused it:
+
+```
+Outputs[0].Type, cause: ValidationFailure: error code -17
+```
+
+`-17` is `ROUND_ERROR_CONFIG`, and it covers **every** failure in round-type's
+creation branch, so the node's answer cannot say which rule broke. Two rules
+were candidates; one was violated.
+
+**The round id must equal the Type ID derivation over the funding input:**
+
+```rust
+ckb_hash256(&[CellInput(input 0).as_slice(), &(config_output_index as u64).to_le_bytes()])
+```
+
+(`daowow-contracts-common/src/lib.rs:54`, checked at
+`contracts/round-type/src/main.rs:67`.) That is what makes a round id unique to
+the cell that funded it — a second round cannot claim the same identity without
+spending the same cell. `create-demo-round.mjs` was inventing one from a
+string.
+
+The correct value was derived **three independent ways** before being trusted,
+per the 2026-08-15 lesson that a cross-language derivation must be pinned to
+something other than itself: CCC's `hashTypeId`, a hand-rolled molecule struct
+(`CellInput` is a struct — bare concat, 8 + 32 + 4 = 44 bytes), and Python's
+`blake2b(person=b"ckb-default-hash")`. All three give
+`0xd15f6b5e968ec136…`, and the CCC and hand-rolled `CellInput` bytes match
+byte for byte.
+
+`tests/integration/tests/round_validation.rs:61` derives it the same way, so the
+contract's creation path **was** tested — this tool was simply the only thing
+that did not follow the rule.
+
+## Both creation rules now checked locally
+
+`tools/round-rules.mjs` ports the round-id derivation and `RoundConfigV1::validate`
+(`encoding.rs:192`) so a broadcast is not the thing that discovers a bad config.
+It returns *reasons*, not a boolean, because naming the rule is the entire point
+when the chain says only `-17`. `create-demo-round.mjs` re-derives from the
+FINISHED transaction rather than from the variables that built it — reading what
+is actually being sent is the only way that check could have caught this — and
+`check-signed-round.mjs` runs both.
+
+Controls, one per guard:
+
+- Restoring the invented round id reproduces the transaction the node refused,
+  and the checker names the reason: `config says 7b37556f…, input 0 with config
+  output 0 gives d15f6b5e…`.
+- Setting `entry_start` past `entry_end` yields `the windows are out of order`.
+
+A port drifts, so `apps/web/test/round-rules.test.js` pins each rule to the
+Rust line it came from — including the two guards `encoding.rs:211-214`
+deliberately keeps separate with a review ruling saying not to merge them. Each
+is pinned by a case only it can refuse, so merging them would red a test rather
+than silently make one unreachable.
+
 ## `tx send` needs `--skip-check`, and that is not a shortcut
 
 ckb-cli refuses the transaction with:

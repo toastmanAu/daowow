@@ -110,9 +110,27 @@ const entryEnd = nowEpoch + entryEpochs;
 const aggregationDeadline = entryEnd + 2n;
 
 // --- the round id and config ----------------------------------------------
-const roundId = ccc.hashCkb(
-  ccc.bytesFrom(`daowow-demo-round-${nowEpoch}-${fundingRef}`, "utf8"),
-);
+// THE ROUND ID IS NOT FREE. round-type's creation branch requires it to equal
+//
+//   ckb_hash256(&[CellInput(input 0).as_slice(), &(config_output_index as u64).to_le_bytes()])
+//
+// (daowow-contracts-common/src/lib.rs:54, checked at
+// contracts/round-type/src/main.rs:67). That is the Type ID derivation, and it
+// is what makes a round id unique to the cell that funded it: nobody can mint
+// a second round claiming the same identity without spending the same cell.
+//
+// An invented round id is refused with -17 ROUND_ERROR_CONFIG, which is the
+// same code the config's own validate() failure returns — so the message does
+// not distinguish them.
+const CONFIG_OUTPUT_INDEX = 0;   // the config cell is outputs[0], below
+const fundingInput = ccc.CellInput.from({
+  previousOutput: {
+    txHash: fundingRef.split(":")[0],
+    index: Number(fundingRef.split(":")[1]),
+  },
+  since: 0n,   // matches the `since: "0x0"` the input carries
+});
+const roundId = ccc.hashTypeId(fundingInput, CONFIG_OUTPUT_INDEX);
 
 const fundingCell = await rpc("get_live_cell", [
   {
@@ -277,6 +295,32 @@ const tx = {
 // ckb-cli's own tx-file format. NOT a bare transaction: `ckb-cli tx init`
 // CREATES an empty file and would overwrite this one, so the flow goes
 // straight to sign-inputs. Writing the wrapper here is what makes that safe.
+// Re-derive from the FINISHED transaction rather than from the variables that
+// built it: this is the check that would have caught an invented round id, and
+// it can only do that by reading what is actually being sent.
+{
+  const built = ccc.CellInput.from({
+    previousOutput: {
+      txHash: tx.inputs[0].previous_output.tx_hash,
+      index: Number(tx.inputs[0].previous_output.index),
+    },
+    since: BigInt(tx.inputs[0].since),
+  });
+  const configIndex = tx.outputs.findIndex(
+    (o) => o.type && o.type.code_hash === scripts["round-type"].codeHash);
+  const expected = ccc.hashTypeId(built, configIndex).replace(/^0x/, "");
+  if (expected !== config.roundId) {
+    throw new Error(
+      `round id ${config.roundId} does not match the creation derivation ` +
+      `${expected} over input 0 and config output ${configIndex}; ` +
+      "round-type would refuse this with -17",
+    );
+  }
+  if (tx.outputs[configIndex].type.args !== "0x" + config.roundId) {
+    throw new Error("the round-type script args must be the round id");
+  }
+}
+
 fs.writeFileSync(outFile, JSON.stringify({
   transaction: tx,
   multisig_configs: {},
