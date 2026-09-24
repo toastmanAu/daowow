@@ -152,6 +152,81 @@ on — but a money figure that no longer corresponds to the input is worth
 clearing rather than leaving. Not fixed here; it is a UI change during a live
 validation and belongs in its own commit.
 
+## An entry, from a real wallet
+
+`0x393b0067b86c3f94e6cc36df3dd06dd4e7ffc544adad74ca2a3f37656e352a93`,
+**committed** in block `0x9a36978c803dbf4a…`. Five tickets, entered from JoyID
+through the browser.
+
+| output | capacity | |
+|---|---:|---|
+| 0 | 312 CKB | shard successor |
+| 1 | 50,237 CKB | entry cell — 5 × 10,000 principal + 237 |
+| 2–6 | 222 CKB each | five claim NFTs under the entrant's lock |
+| 7 | 186,266 CKB | change |
+
+Two inputs, and **witness 0 is still 178 bytes**: the append witness survived
+`completeInputsByCapacity` and `completeFeeBy` at index 0, which is the hazard
+`sign-entry.js` asserts against and the one this repository's feedback log
+records most often. The invariant held against a real wallet. The entrant paid
+51,347 CKB, exactly the quote.
+
+### The peaks, recovered from a real shard
+
+This is the design decision that had never been exercised on chain. A shard
+cell commits to its accumulator ROOT only, so a second entrant must obtain the
+peak list some other way — and this client reads `new_peaks` out of the append
+witness that last moved the head rather than replaying every prior entry.
+
+Against the shard as it now stands:
+
+```
+shards      1, 5 tickets sold
+peaks       1 recovered and bagged to the committed root
+ticket   5  0xac3e7f6d…
+ticket   6  0x897eaf31…
+ticket   7  0x783d3864…
+            witnesses 1, append witness 210 bytes
+```
+
+The peaks came out of the live entry transaction's witness and bagged to the
+root the cell carries. Ticket positions continue from 5. The witness grew from
+178 to 210 bytes because `old_peaks` is no longer empty. And at 5 + 3 tickets
+the tiered table opens its second place.
+
+## The page went stale after sending, and now does not
+
+Reported from the live run: after the entry committed, the page still read
+"0 of 10 tickets sold". It was not a missing watch service — the page simply
+never looked again.
+
+`apps/web/chain/confirm.js` adds two waits, and they are two different things:
+
+1. **the transaction reaching `committed`**, which the node reports directly
+2. **the INDEXER catching up to that block**, which it does on its own schedule
+
+Skipping the second is the subtler trap and this repository has met its cousin
+before: `get_cells` against a tip the indexer has not reached answers about the
+world as it was *before* the transaction, **with no error at all**. A client
+that re-reads the instant a send returns renders stale state and looks broken
+in exactly the way it just did.
+
+The refresh re-reads the round from chain rather than doing arithmetic on what
+it just sent — a client that predicts the new state is a client that can be
+wrong about it.
+
+Honesty holds at each step. A send reports "Sent"; only the node's own
+`committed` produces "Committed in block N". A timeout says **this page has
+stopped watching** rather than claiming failure, because the transaction may
+still land and the chain did not stop working. A `rejected` status raises
+immediately instead of being polled through, since the node will not change its
+mind and a spinner would be a lie.
+
+Six tests, with the clock injected so a timeout is reached by the code asking
+for it rather than by the suite waiting.
+
+Confirmed in the browser against the live round: **5 of 10 tickets sold**.
+
 ## What is still unproven, and by whom
 
 - ~~The round-creation transaction has not been accepted by a node.~~ Done.

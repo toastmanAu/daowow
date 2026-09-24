@@ -19,6 +19,7 @@ const chain = () => ({
   ...window.DaowowEntryTx,
   ...window.DaowowContention,
   ...window.DaowowShardPeaks,
+  ...window.DaowowConfirm,
   scriptHash: window.DaowowRefundTx.scriptHash,
 });
 
@@ -79,6 +80,24 @@ function renderPayout(payout) {
     li.append(place, when, share);
     list.append(li);
   }
+}
+
+// Drawing the round card. Extracted because it is drawn TWICE: once on load
+// and again once an entry lands, when the ticket count has moved.
+function renderRoundCard(roundBox, round, state, scheduleBytes) {
+  roundBox.textContent = "";
+  const card = document.createElement("div");
+  card.className = "card";
+  const h = document.createElement("h2");
+  h.textContent = `Round ${round.config.roundId.slice(0, 8)} · ${state.state}`;
+  const line = document.createElement("p");
+  line.className = "sub";
+  line.textContent =
+    `${state.ticketsSold} of ${round.config.maximumTickets || "unlimited"} tickets sold` +
+    ` · ${scheduleBytes.slice(0, 8)}…`;
+  card.append(h, line);
+  roundBox.append(card);
+  return card;
 }
 
 async function init() {
@@ -155,18 +174,7 @@ async function init() {
     sched = null;
   }
 
-  roundBox.textContent = "";
-  const card = document.createElement("div");
-  card.className = "card";
-  const h = document.createElement("h2");
-  h.textContent = `Round ${round.config.roundId.slice(0, 8)} · ${state.state}`;
-  const line = document.createElement("p");
-  line.className = "sub";
-  line.textContent =
-    `${sold} of ${round.config.maximumTickets || "unlimited"} tickets sold` +
-    ` · ${scheduleBytes.slice(0, 8)}…`;
-  card.append(h, line);
-  roundBox.append(card);
+  const card = renderRoundCard(roundBox, round, state, scheduleBytes);
 
   if (!sched) {
     const note = document.createElement("p");
@@ -177,7 +185,7 @@ async function init() {
   }
   if (state.state !== "open") return;
   el("entry").hidden = false;
-  wireEntry({ c, round, sched, sold, manifest, rpc, nowEpoch });
+  wireEntry({ c, round, sched, sold, manifest, rpc, nowEpoch, roundBox, scheduleBytes });
 }
 
 // The config cell commits to the schedule's HASH, not its bytes: the schedule
@@ -208,13 +216,14 @@ async function fetchSchedule(rpc, round) {
   return bytes;
 }
 
-function wireEntry({ c, round, sched, sold, manifest, rpc, nowEpoch }) {
+function wireEntry({ c, round, sched, sold, manifest, rpc, nowEpoch, roundBox, scheduleBytes }) {
   const ticketsInput = el("tickets");
   const agree = el("agree");
   const submit = el("submit");
   const status = el("status");
   const cap = round.config.maximumTickets;
   let tickets = 0n;
+  let ticketsSold = sold;
 
   const say = (text) => { status.textContent = text; };
 
@@ -222,8 +231,8 @@ function wireEntry({ c, round, sched, sold, manifest, rpc, nowEpoch }) {
     try {
       tickets = BigInt(ticketsInput.value || "0");
       if (tickets <= 0n) throw new Error("at least one ticket");
-      if (cap !== 0n && sold + tickets > cap) {
-        throw new Error(`only ${cap - sold} tickets remain in this round`);
+      if (cap !== 0n && ticketsSold + tickets > cap) {
+        throw new Error(`only ${cap - ticketsSold} tickets remain in this round`);
       }
     } catch (e) {
       el("ticket-note").textContent = e.message;
@@ -237,7 +246,7 @@ function wireEntry({ c, round, sched, sold, manifest, rpc, nowEpoch }) {
       tickets, feeShannons: 0n,
     });
     renderQuote(c.describeQuote(quote));
-    renderPayout(c.describePayout(sched, sold + tickets, cap));
+    renderPayout(c.describePayout(sched, ticketsSold + tickets, cap));
     submit.disabled = !(agree.checked && walletState.session);
     submit.textContent = walletState.session
       ? `Enter for ${c.formatCkb(quote.total)} CKB`
@@ -252,6 +261,20 @@ function wireEntry({ c, round, sched, sold, manifest, rpc, nowEpoch }) {
     const head = shards[0];
     if (!head) throw new Error("this round's entry shard is no longer on chain");
     return { ...head, peaks: await c.readShardPeaks(rpc, head) };
+  };
+
+  // Re-read the round from chain and redraw. Everything here comes from the
+  // chain again rather than from arithmetic on what we just sent: a client
+  // that predicts the new state is a client that can be wrong about it.
+  const refreshRound = async () => {
+    const shards = await c.findShards(rpc, manifest, round.config.roundId);
+    const tip = await rpc.call("get_tip_header", []);
+    const epoch = BigInt(tip.epoch) & 0xffffffn;
+    el("epoch").textContent = epoch.toString();
+    const state = c.deriveRoundState(round.config, shards, epoch);
+    ticketsSold = state.ticketsSold;
+    renderRoundCard(roundBox, round, state, scheduleBytes);
+    refresh();
   };
 
   submit.addEventListener("click", async () => {
@@ -282,12 +305,38 @@ function wireEntry({ c, round, sched, sold, manifest, rpc, nowEpoch }) {
         },
       });
       // Committed is NOT claimed here. The node accepted the transaction into
-      // its pool; that is all a send return value means, and saying more would
-      // be asserting something the chain has not yet said.
-      say(
+      // its pool; that is all a send return value means. So the page now
+      // WATCHES it rather than declaring victory and going stale.
+      const sentLine =
         `Sent${attempts > 1 ? ` after ${attempts} attempts` : ""}. ` +
-        `Transaction ${txHash}. It is in the node's pool and is not committed ` +
-        `until it appears in a block.`,
+        `Transaction ${txHash}.`;
+      say(`${sentLine} Waiting for it to be included in a block…`);
+
+      const landed = await c.awaitCommitted(rpc, txHash, {
+        onStatus: (status) => {
+          if (status === "proposed") say(`${sentLine} Proposed; waiting for a block…`);
+        },
+      });
+      if (landed.timedOut) {
+        // Not a failure, and not claimed as one. We stopped watching; the
+        // chain did not stop working.
+        say(
+          `${sentLine} It is still ${landed.status} after three minutes, so ` +
+          "this page has stopped watching. It may yet commit — reload to check.",
+        );
+        submit.disabled = false;
+        return;
+      }
+
+      // The indexer trails the chain. Re-reading before it catches up returns
+      // the world as it was BEFORE this entry, which reads as the page having
+      // done nothing.
+      say(`${sentLine} Committed in block ${landed.blockNumber}. Refreshing…`);
+      await c.awaitIndexer(rpc, landed.blockNumber);
+      await refreshRound();
+      say(
+        `${sentLine} Committed in block ${landed.blockNumber}. ` +
+        `Your ${tickets} ticket${tickets === 1n ? "" : "s"} are in the round.`,
       );
     } catch (e) {
       // Contention that exhausted its retries, a rejection, or a wallet
