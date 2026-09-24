@@ -91,15 +91,70 @@ the new field as broken — it was a **cached `codec.js`**, and a fresh context
 shows both pages clean. Worth recording in both directions: a stale asset makes
 a working fix look broken, and would equally make a broken fix look fine.
 
+## The round is on chain
+
+`0xe4063f93552c36c7e277abaf8da5efdd8d0a97623c457ffd63379c1c68e8bea5`,
+**committed** in block `0x72c2cb00edbc3da1…`. Round `0xd15f6b5e968ec136…`,
+entry epochs 13881..13887, 10,000 CKB a ticket, minimum 5, maximum 10, one
+shard, the tiered schedule.
+
+Four signing attempts, four distinct failures, in the order they surfaced:
+`tx init` wiping the prepared transaction; ckb-cli refusing the shard's
+public-lock mode; `ScriptNotFound` on the funding cell's own lock; and `-17`
+for an invented round id. Every one is now a guard in
+`check-signed-round.mjs`, each with a control that reproduces the original
+failure.
+
+### The dry run against the committed round
+
+```
+rounds      1
+round       d15f6b5e968ec136…  open        entry epochs 13881..13887
+schedule    v2, 5 places, thresholds 1, 8, 20, 50, 100  [commitment verified]
+peaks       0 recovered and bagged to the committed root
+quote       1 ticket → 10,457 CKB
+transaction 2 deps, 1 input, 3 outputs, 178-byte append witness
+            witness/input balance holds — funding will append, not displace
+            the shard head's lock has a cell dep — no ScriptNotFound on input 0
+```
+
+That last line is the entry transaction's version of the bug that cost two
+signing rounds, and it is checked now rather than discovered.
+
+### The browser, against the live round
+
+`entry.html` in a fresh context, zero console errors, zero error boxes:
+
+- **Round d15f6b5e · open**, 0 of 10 tickets sold
+- quote renders four rows totalling **10,457 CKB** for one ticket
+- payout table: 1st **paying**, 2nd **opens at 8 tickets**, 3rd–5th **not
+  reachable in this round** — correct, since the thresholds are 20/50/100 and
+  the cap is 10
+- submit disabled, reading "Connect a wallet to enter"
+
+Recomputing across ticket counts, live:
+
+| tickets | total | places |
+|---|---|---|
+| 1 | 10,457 CKB | 1 |
+| 8 | 81,997 CKB | 2 |
+| 10 | 102,437 CKB | 2 |
+| 11 | refused — "only 10 tickets remain in this round" | |
+| 0 | refused — "at least one ticket" | |
+
+The v2 table is discriminating on a live round: the second place opens at
+exactly 8 tickets, which a v1 schedule could not express.
+
+**One cosmetic finding.** On a refused ticket count the quote keeps displaying
+the last valid total, so "102,437 CKB" sits above "at least one ticket". The
+submit button is disabled and the note explains why, so nothing can be acted
+on — but a money figure that no longer corresponds to the input is worth
+clearing rather than leaving. Not fixed here; it is a UI change during a live
+validation and belongs in its own commit.
+
 ## What is still unproven, and by whom
 
-- **The round-creation transaction has not been accepted by a node.** The dry
-  run proves the dApp can read the round it creates; it does not prove
-  `round-type` accepts the creation. That costs a fee to find out, not
-  principal. Round creation is gate 3's job; `tools/create-demo-round.mjs` is a
-  stand-in and says so at the top of the file.
-- **Nothing has been signed or sent.** No signature path in this repository is
-  automated, by design.
+- ~~The round-creation transaction has not been accepted by a node.~~ Done.
 - **The JoyID leg is untested end to end.** The wallet's `signEntry` and
   `broadcast` are structurally correct and unit-tested against the splice and
   balance hazards, but no real JoyID signature has been produced. The recorded
