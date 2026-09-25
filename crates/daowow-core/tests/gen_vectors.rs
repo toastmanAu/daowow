@@ -241,6 +241,149 @@ fn gen_vectors() {
         "entry_cell_overhead_ckb": 8 + ENTRY_DATA_SIZE as u64 + 33 + 64,
     });
 
+    // Aggregation ledger oracles, for the JavaScript builders in gate 3a.
+    //
+    // A DEDICATED config rather than `oracle_cfg`, and the reason is worth
+    // stating: `oracle_cfg` is ACC_SMT while the client runs ACC_MMR, and
+    // `oracle_shard` is OPEN with `sequence != entry_count`, which
+    // `AggregationState::new_bound` refuses outright. So the ledger fixture
+    // carries its own config and its commitment travels with the vectors,
+    // leaving the JavaScript tests self-contained.
+    let ledger_cfg = RoundConfigV1 {
+        accumulator_id: ACC_MMR,
+        ..oracle_cfg
+    };
+    let ledger_entries = [
+        EntryDataV1 {
+            round_id,
+            shard_id: 0,
+            participant_lock_hash: ckb_hash256_one(b"VECTOR-LEDGER-PARTICIPANT-A"),
+            ticket_count: 3,
+            principal: 3 * ledger_cfg.ticket_price,
+            position_base: 0,
+            entry_nonce: 0,
+            entropy_commitment: [0; 32],
+        },
+        EntryDataV1 {
+            round_id,
+            shard_id: 0,
+            participant_lock_hash: ckb_hash256_one(b"VECTOR-LEDGER-PARTICIPANT-B"),
+            ticket_count: 2,
+            principal: 2 * ledger_cfg.ticket_price,
+            position_base: 3,
+            entry_nonce: 1,
+            entropy_commitment: [0; 32],
+        },
+    ];
+    // The frozen shard the ledger is born from. Replaying the entries is the
+    // only way to get the accumulator root, exactly as a client must.
+    let mut ledger_mmr = mmr::host::MmrHost::new();
+    for entry in &ledger_entries {
+        ledger_mmr.append(&entry_leaf(entry)).unwrap();
+    }
+    let ledger_frozen = EntryShardDataV1 {
+        round_id,
+        shard_id: 0,
+        state: SHARD_STATE_FROZEN,
+        sequence: 2,
+        entry_count: 2,
+        ticket_count: 5,
+        principal_total: 5 * ledger_cfg.ticket_price,
+        accumulator_root: ledger_mmr.root().unwrap(),
+    };
+    // 237 CKB of slack over principal, the real entry-cell overhead.
+    let ledger_capacities: Vec<u64> = ledger_entries
+        .iter()
+        .map(|e| e.principal + 23_700_000_000)
+        .collect();
+    let ledger_proofs: Vec<Vec<u8>> = (0..ledger_entries.len() as u64)
+        .map(|pos| ledger_mmr.membership_proof(pos).unwrap())
+        .collect();
+    let proof_refs: Vec<&[u8]> = ledger_proofs.iter().map(|p| p.as_slice()).collect();
+
+    let ledger_genesis =
+        daowow_core::lifecycle::AggregationState::new(&ledger_cfg, &ledger_frozen).unwrap();
+    let (ledger_after, ledger_batch) = ledger_genesis
+        .accept(
+            &ledger_cfg,
+            &ledger_entries,
+            &ledger_capacities,
+            &proof_refs,
+        )
+        .unwrap();
+
+    let state_json = |s: &daowow_core::lifecycle::AggregationState| {
+        json!({
+            "hex": hex(&s.encode()),
+            "fields": {
+                "accepted_entries": s.accepted_entries().to_string(),
+                "accepted_tickets": s.accepted_tickets().to_string(),
+                "accepted_batches": s.accepted_batches().to_string(),
+                "closed": s.is_closed(),
+            },
+        })
+    };
+    let aggregation_state = json!({
+        "note": "ACC_MMR variant of cell_encodings.round_config; see gen_vectors.rs",
+        "config": {
+            "hex": hex(&ledger_cfg.encode()),
+            "commitment": hex(&ledger_cfg.commitment()),
+        },
+        "frozen": {
+            "hex": hex(&ledger_frozen.encode()),
+            "fields": {
+                "state": ledger_frozen.state,
+                "sequence": ledger_frozen.sequence.to_string(),
+                "entry_count": ledger_frozen.entry_count.to_string(),
+                "ticket_count": ledger_frozen.ticket_count.to_string(),
+                "principal_total": ledger_frozen.principal_total.to_string(),
+                "accumulator_root": hex(&ledger_frozen.accumulator_root),
+            },
+        },
+        "entries": ledger_entries
+            .iter()
+            .zip(&ledger_capacities)
+            .map(|(e, c)| json!({ "hex": hex(&e.encode()), "capacity": c.to_string() }))
+            .collect::<Vec<_>>(),
+        "genesis": state_json(&ledger_genesis),
+        "after_batch": state_json(&ledger_after),
+    });
+    let batch_commitment = json!({
+        "hex": hex(&ledger_batch.encode()),
+        "fields": {
+            "digest": hex(&ledger_batch.digest),
+            "first_nonce": ledger_batch.first_nonce.to_string(),
+            "entry_count": ledger_batch.entry_count.to_string(),
+            "ticket_count": ledger_batch.ticket_count.to_string(),
+            "principal": ledger_batch.principal.to_string(),
+            "input_capacity": ledger_batch.input_capacity.to_string(),
+        },
+    });
+    // The ledger cell sits at input 0, so the entry cells start at 1.
+    let witness_records: Vec<daowow_core::witness::LedgerInputProof<'_>> = ledger_proofs
+        .iter()
+        .enumerate()
+        .map(|(i, p)| daowow_core::witness::LedgerInputProof {
+            input_index: i as u32 + 1,
+            proof: p.as_slice(),
+        })
+        .collect();
+    let ledger_witness = json!({
+        "hex": hex(&daowow_core::witness::encode_ledger_witness(&witness_records).unwrap()),
+        "records": witness_records
+            .iter()
+            .map(|r| json!({ "input_index": r.input_index, "proof": hex(r.proof) }))
+            .collect::<Vec<_>>(),
+    });
+    let batch_id = json!([
+        { "shard_id": 0, "ordinal": 0,
+          "value": daowow_core::lifecycle::batch_id(0, 0).unwrap().to_string() },
+        { "shard_id": 1, "ordinal": 5,
+          "value": daowow_core::lifecycle::batch_id(1, 5).unwrap().to_string() },
+        { "shard_id": 255, "ordinal": 1,
+          "value": daowow_core::lifecycle::batch_id(255, 1).unwrap().to_string() },
+    ]);
+
     let prize_schedule_v2 = json!({
         "note": "demo schedule; v1 wire is unchanged and lives in the v1 tests",
         "hex": hex(&demo_schedule.encode()),
@@ -418,6 +561,10 @@ fn gen_vectors() {
         "prize_schedule_v2": prize_schedule_v2,
         "capacity": capacity,
         "cell_encodings": cell_encodings,
+        "aggregation_state": aggregation_state,
+        "batch_commitment": batch_commitment,
+        "ledger_witness": ledger_witness,
+        "batch_id": batch_id,
     });
 
     let out = concat!(
