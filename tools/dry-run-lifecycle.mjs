@@ -438,6 +438,16 @@ if (outFile) {
   });
   fs.writeFileSync(outFile, JSON.stringify(
     { transaction: toRpc(built.tx), multisig_configs: {}, signatures: {} }, null, 2));
-  console.log(`\nwrote ${outFile} (unsigned; this tool never signs)`);
+  console.log(`\nwrote ${outFile} in ckb-cli's tx-file format (unsigned; this`);
+  console.log("tool never signs). Do NOT run `tx init` — it writes an EMPTY");
+  console.log("file over this one.\n");
+  console.log("  # 1. sign (prompts for your password)");
+  console.log(`  ckb-cli --url ${manifest.rpcUrl} tx sign-inputs --tx-file ${outFile} \\`);
+  console.log(`      --from-account ${OPERATOR_LOCK_ARG} --add-signatures`);
+  console.log("  # 2. verify the signature and every lifecycle rule");
+  console.log(`  node tools/check-signed-lifecycle.mjs ${manifestPath} ${outFile}`);
+  console.log("  # 3. send. --skip-check is required: ckb-cli cannot classify");
+  console.log("  #    the shard/ledger public lock and refuses what it cannot name.");
+  console.log(`  ckb-cli --url ${manifest.rpcUrl} tx send --tx-file ${outFile} --skip-check`);
 }
 if (reasons.length > 0) process.exit(1);
