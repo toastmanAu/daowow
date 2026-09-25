@@ -68,3 +68,26 @@ test("malformed input is refused rather than silently truncated", () => {
   assert.throws(() => encodeClaimArgs({
     commitment: new Uint8Array(31), shardId: 0, position: 0n }), /32/);
 });
+
+// Aggregation reads entry cells back off chain, so the decoder is pinned to the
+// same oracle the encoder is — and to the encoder itself, so the pair cannot
+// drift. An offset error here would put a plausible number in the wrong field.
+test("decodeEntryDataV1 round-trips the canonical entry oracle", () => {
+  const { decodeEntryDataV1 } = require("../chain/entry-codec.js");
+  const o = V.entry_encoding.entry;
+  const decoded = decodeEntryDataV1(unhex(o.hex));
+  assert.strictEqual(hex(encodeEntryDataV1(decoded)), o.hex);
+  assert.strictEqual(decoded.shardId, o.fields.shard_id);
+  assert.strictEqual(decoded.ticketCount, BigInt(o.fields.ticket_count));
+  assert.strictEqual(decoded.principal, BigInt(o.fields.principal));
+  assert.strictEqual(decoded.positionBase, BigInt(o.fields.position_base));
+  assert.strictEqual(decoded.entryNonce, BigInt(o.fields.entry_nonce));
+  assert.strictEqual(hex(decoded.roundId), o.fields.round_id);
+  assert.strictEqual(hex(decoded.participantLockHash), o.fields.participant_lock_hash);
+  assert.strictEqual(hex(decoded.entropyCommitment), o.fields.entropy_commitment);
+});
+
+test("decodeEntryDataV1 refuses a wrong length", () => {
+  const { decodeEntryDataV1 } = require("../chain/entry-codec.js");
+  assert.throws(() => decodeEntryDataV1(new Uint8Array(131)), /132/);
+});

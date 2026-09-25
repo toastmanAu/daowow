@@ -52,6 +52,29 @@ function encodeEntryDataV1(entry) {
   return out;
 }
 
+// Reading an entry cell back off chain, which aggregation must do: a batch is
+// assembled from the entry cells' own data, and every field is checked against
+// the ledger's position before the contract sees it.
+//
+// Offsets mirror core.js's encodeEntry (core.js:196), the same function
+// encodeEntryDataV1 delegates to, so the pair cannot drift apart.
+function decodeEntryDataV1(bytes) {
+  if (!(bytes instanceof Uint8Array) || bytes.length !== ENTRY_DATA_SIZE) {
+    throw new Error(`an entry must be exactly ${ENTRY_DATA_SIZE} bytes`);
+  }
+  const d = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  return Object.freeze({
+    roundId: bytes.slice(0, 32),
+    shardId: d.getUint32(32, true),
+    participantLockHash: bytes.slice(36, 68),
+    ticketCount: d.getBigUint64(68, true),
+    principal: d.getBigUint64(76, true),
+    positionBase: d.getBigUint64(84, true),
+    entryNonce: d.getBigUint64(92, true),
+    entropyCommitment: bytes.slice(100, 132),
+  });
+}
+
 // blake2b("DAOWOW_TICKET_ID_V1", commitment, shard_id LE, position LE).
 // Stable across holder and redemption progress: it is the ticket's identity,
 // not its state.
@@ -87,6 +110,7 @@ function initialClaimState(args) {
 }
 
 const api = {
+  decodeEntryDataV1,
   encodeEntryDataV1, ticketId, encodeClaimArgs, initialClaimState,
   ENTRY_DATA_SIZE, CLAIM_ARGS_SIZE, CLAIM_DATA_SIZE, CLAIM_TAG,
 };
