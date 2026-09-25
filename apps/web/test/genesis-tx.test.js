@@ -35,6 +35,7 @@ const sponsor = {
   outPoint: { txHash: "0x" + "55".repeat(32), index: 1 },
   capacity: 1000n * CKB,
   lock: { codeHash: "0x" + "22".repeat(32), hashType: "type", args: "0x" + "ab".repeat(20) },
+  lockDep: { outPoint: { txHash: "0x" + "77".repeat(32), index: 0 }, depType: "depGroup" },
 };
 const base = () => ({
   manifest: MANIFEST, config: CONFIG, frozenShard,
@@ -132,4 +133,18 @@ test("a sponsor that cannot cover fee plus top-up plus a change floor is refused
   assert.throws(() => buildLedgerGenesisTx({
     ...base(), sponsor: { ...sponsor, capacity: 62n * CKB },
   }), /sponsor|capacity|change/i);
+});
+
+// Found by the dry run on its FIRST live run, which is what it exists for: the
+// sponsor's own lock had no cell dep, so the node would have refused the
+// transaction with ScriptNotFound — the same failure that cost two signing
+// rounds on the round-creation transaction. Required rather than resolved, so
+// it cannot be forgotten again.
+test("the sponsor's lock cell dep is required and lands among the deps", () => {
+  const { tx } = buildLedgerGenesisTx(base());
+  const deps = tx.cellDeps.map((d) => `${d.outPoint.txHash}:${d.outPoint.index}`);
+  assert.ok(deps.includes("0x" + "77".repeat(32) + ":0"),
+    "the sponsor's lock dep must be present, or its input is ScriptNotFound");
+  const { lockDep, ...without } = sponsor;
+  assert.throws(() => buildLedgerGenesisTx({ ...base(), sponsor: without }), /lockDep|ScriptNotFound/);
 });

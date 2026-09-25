@@ -137,6 +137,7 @@ const sponsor = {
   outPoint: { txHash: "0x" + "55".repeat(32), index: 9 },
   capacity: 1000n * CKB,
   lock: { codeHash: "0x" + "22".repeat(32), hashType: "type", args: "0x" + "ab".repeat(20) },
+  lockDep: { outPoint: { txHash: "0x" + "77".repeat(32), index: 0 }, depType: "depGroup" },
 };
 const base = () => ({
   manifest: MANIFEST, config: CONFIG, ledger: ledgerCell, entryCells,
@@ -307,4 +308,18 @@ test("the config cell and the shard code cell are both deps", () => {
   const entryLockDep = MANIFEST.scripts["entry-lock"].outPoint;
   assert.ok(deps.includes(`${entryLockDep.txHash}:${entryLockDep.index}`),
     "entry-lock's code cell must be a dep: it runs on every entry input");
+});
+
+// Found by the dry run on its FIRST live run, which is what it exists for: the
+// sponsor's own lock had no cell dep, so the node would have refused the
+// transaction with ScriptNotFound — the same failure that cost two signing
+// rounds on the round-creation transaction. Required rather than resolved, so
+// it cannot be forgotten again.
+test("the sponsor's lock cell dep is required and lands among the deps", () => {
+  const { tx } = buildAggregateTx(base());
+  const deps = tx.cellDeps.map((d) => `${d.outPoint.txHash}:${d.outPoint.index}`);
+  assert.ok(deps.includes("0x" + "77".repeat(32) + ":0"),
+    "the sponsor's lock dep must be present, or its input is ScriptNotFound");
+  const { lockDep, ...without } = sponsor;
+  assert.throws(() => buildAggregateTx({ ...base(), sponsor: without }), /lockDep|ScriptNotFound/);
 });

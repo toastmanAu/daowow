@@ -213,6 +213,18 @@ function buildAggregateTx({
   if (!configCellOutPoint || !configCellOutPoint.txHash) {
     throw new Error("the round config cell out point is required as a cell dep");
   }
+  // The SPONSOR'S OWN LOCK needs a dep too. A lock runs when its cell is
+  // spent, and the node wants that lock's code as an explicit cell dep even
+  // when nothing else about it is interesting — omitting it is ScriptNotFound
+  // on that input at broadcast. This cost two signing rounds on the round
+  // creation transaction and is required here rather than resolved, so a
+  // caller cannot forget it.
+  if (!sponsor.lockDep || !sponsor.lockDep.outPoint) {
+    throw new Error(
+      "the sponsor's lock cell dep is required (sponsor.lockDep); without it " +
+      "the node refuses the transaction with ScriptNotFound on that input",
+    );
+  }
   const shardScript = manifest.scripts["entry-shard-type"];
   const entryLock = manifest.scripts["entry-lock"];
   const state = ledger.state;
@@ -283,6 +295,7 @@ function buildAggregateTx({
         // catches it.
         { outPoint: entryLock.outPoint, depType: entryLock.depType },
         { outPoint: configCellOutPoint, depType: "code" },
+        sponsor.lockDep,
       ],
       headerDeps: [],
       inputs: [
