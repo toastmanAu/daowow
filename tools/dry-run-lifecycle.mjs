@@ -37,6 +37,7 @@ const { decodeLedgerWitness } = require_("../apps/web/chain/ledger-witness.js");
 const { buildFreezeTx } = require_("../apps/web/chain/freeze-tx.js");
 const { buildLedgerGenesisTx } = require_("../apps/web/chain/genesis-tx.js");
 const { buildAggregateTx } = require_("../apps/web/chain/aggregate-tx.js");
+const { buildCloseTx, closableFrom } = require_("../apps/web/chain/close-tx.js");
 const discovery = require_("../apps/web/chain/discovery.js");
 
 const [manifestPath, ...rest] = process.argv.slice(2);
@@ -171,10 +172,30 @@ const outPointOf = (cell) => ({
 
 let step;
 if (ledgerCell) {
-  step = "aggregate";
-  const s = ledgerCell.state;
-  console.log(`ledger      ${s.acceptedEntries} of ${s.frozen.entryCount} entries ` +
-    `accepted, ${s.acceptedBatches} batch(es), ${s.closed ? "CLOSED" : "open"}`);
+  const st = ledgerCell.state;
+  console.log(`ledger      ${st.acceptedEntries} of ${st.frozen.entryCount} entries ` +
+    `accepted, ${st.acceptedBatches} batch(es), ${st.closed ? "CLOSED" : "open"}`);
+  if (st.closed) {
+    console.log("\nThis ledger is closed. Unaccepted entries can now be refunded, " +
+      "and accepted ones proceed to the draw.");
+    process.exit(0);
+  }
+  // An entry can only be REFUNDED once the ledger is closed, so closing is not
+  // an afterthought: it is what releases the capacity of everything the round
+  // did not accept.
+  const everythingAccepted = st.acceptedEntries === st.frozen.entryCount;
+  const past = nowEpoch >= config.aggregationDeadline;
+  step = (everythingAccepted || past) ? "close" : "aggregate";
+  if (step === "close") {
+    const from = closableFrom(config, st);
+    console.log(`            closable from epoch ${from}` +
+      (everythingAccepted ? " (every entry accepted, so entry_end governs)"
+                          : " (the aggregation deadline has passed)"));
+    if (nowEpoch < from) {
+      console.log(`\nNEXT STEP   close, but not until epoch ${from}; it is ${nowEpoch}.`);
+      process.exit(0);
+    }
+  }
 } else if (shardCell && shardCell.shard.state === 1) {
   step = "genesis";
   console.log(`shard       FROZEN, ${shardCell.shard.entryCount} entries, ` +
@@ -308,6 +329,28 @@ if (step === "freeze") {
     outCapacity: BigInt(built.tx.outputs[0].capacity),
     entryInputCount: 0,
   });
+} else if (step === "close") {
+  built = buildCloseTx({
+    manifest, config,
+    ledger: {
+      outPoint: outPointOf(ledgerCell.cell),
+      capacity: BigInt(ledgerCell.cell.output.capacity),
+      state: ledgerCell.state, typeArgs: ledgerCell.cell.output.type.args,
+    },
+    nowEpoch, configCellOutPoint, sponsor,
+  });
+  const after = ledgerCodec.decodeAggregationState(unhex(built.tx.outputsData[0]));
+  if (!after.closed) reasons.push("the successor ledger is not closed");
+  const before = ledgerCell.state;
+  for (const f of ["acceptedEntries", "acceptedTickets", "acceptedPrincipal",
+                   "acceptedCapacity", "acceptedBatches", "batchesRoot"]) {
+    if (String(after[f]) !== String(before[f])) {
+      reasons.push(`closing must change only the closed flag, but ${f} also moved`);
+    }
+  }
+  const unaccepted = before.frozen.entryCount - before.acceptedEntries;
+  console.log(`            closing fixes the accepted prefix at ` +
+    `${before.acceptedEntries}; ${unaccepted} entr(ies) become refundable`);
 } else {
   // Every entry cell of this round, in nonce order. The accumulator's proofs
   // are not on chain, so the whole shard is replayed to generate them — the

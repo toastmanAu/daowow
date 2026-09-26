@@ -27,18 +27,18 @@
     "header_deps": [],
     "inputs": [
       {
+        "since": "0x2000000000003645",
         "previous_output": {
           "tx_hash": "0xda0b8d0c3605e8996afcdd02c7d5ef869b40dead89fbd8025f36c86b1ea66d9c",
           "index": "0x0"
-        },
-        "since": "0x2000000000003645"
+        }
       },
       {
+        "since": "0x0",
         "previous_output": {
           "tx_hash": "0xe4063f93552c36c7e277abaf8da5efdd8d0a97623c457ffd63379c1c68e8bea5",
           "index": "0x2"
-        },
-        "since": "0x0"
+        }
       }
     ],
     "outputs": [
@@ -75,5 +75,9 @@
     ]
   },
   "multisig_configs": {},
-  "signatures": {}
+  "signatures": {
+    "0xa776bf02d19cafa3749d906cc2c9ab1cf1e80ff7": [
+      "0x9723fa794b7eec924b56b6a28254876a6e0f21514890870a3f6b7169b17690fa35166f9d5546fc2894070c430f877d00e3464d48aaa771b07a4b0c969e4aa62001"
+    ]
+  }
 }
