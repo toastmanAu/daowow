@@ -441,9 +441,13 @@ if (outFile) {
   console.log(`\nwrote ${outFile} in ckb-cli's tx-file format (unsigned; this`);
   console.log("tool never signs). Do NOT run `tx init` — it writes an EMPTY");
   console.log("file over this one.\n");
-  console.log("  # 1. sign (prompts for your password)");
+  console.log("  # 1. sign. --skip-check is REQUIRED on sign-inputs too, not just");
+  console.log("  #    on send: ckb-cli cannot classify the shard/ledger public lock");
+  console.log("  #    (one byte of args) and REFUSES TO SIGN AT ALL without it,");
+  console.log("  #    leaving the witness empty. Sending that gets -2 ERROR_ENCODING");
+  console.log("  #    from the secp lock reading a witness with no signature in it.");
   console.log(`  ckb-cli --url ${manifest.rpcUrl} tx sign-inputs --tx-file ${outFile} \\`);
-  console.log(`      --from-account ${OPERATOR_LOCK_ARG} --add-signatures`);
+  console.log(`      --from-account ${OPERATOR_LOCK_ARG} --add-signatures --skip-check`);
   console.log("  # 2. verify the signature and every lifecycle rule");
   console.log(`  node tools/check-signed-lifecycle.mjs ${manifestPath} ${outFile}`);
   console.log("  # 3. send. --skip-check is required: ckb-cli cannot classify");

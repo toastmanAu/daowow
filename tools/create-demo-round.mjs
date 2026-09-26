@@ -20,9 +20,12 @@
 //     funding-outpoint is txhash:index, a plain cell under the operator lock
 //     big enough to cover the round's cells plus a fee.
 //     --epochs is how many epochs the entry window stays open (default 6,
-//     roughly a day on testnet). It is NOT part of the approved round shape;
-//     it exists so a demo is not run against a clock. Aggregation is always
-//     given two further epochs.
+//     roughly a day on testnet), and --aggregation-epochs how many further
+//     epochs the keeper has to aggregate (default 30, about five days).
+//     Neither is part of the approved round shape; they exist so a demo is not
+//     run against a clock. Two epochs of aggregation, the original hardcoded
+//     value, is a trap: the keeper steps are three hand-signed transactions,
+//     and an entry cannot be released until the ledger is CLOSED.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -67,6 +70,14 @@ const outFile = outAt === -1 ? "create-round.json" : rest[outAt + 1];
 const epochsAt = rest.indexOf("--epochs");
 const entryEpochs = epochsAt === -1 ? 6n : BigInt(rest[epochsAt + 1]);
 if (entryEpochs < 1n) throw new Error("--epochs must be at least 1");
+// The aggregation window, in epochs AFTER entry_end. Two epochs was the
+// original hardcoded value and it is a trap: the keeper steps are three
+// separate transactions, each signed by hand, and the round's entries cannot
+// be released at all until the ledger is closed — which itself needs the
+// deadline to have passed. Thirty epochs is about five days on this testnet.
+const aggAt = rest.indexOf("--aggregation-epochs");
+const aggEpochs = aggAt === -1 ? 30n : BigInt(rest[aggAt + 1]);
+if (aggEpochs < 1n) throw new Error("--aggregation-epochs must be at least 1");
 
 const manifest = require_(path.relative(ROOT, manifestPath));
 const scripts = manifest.scripts;
@@ -107,7 +118,7 @@ const tip = await rpc("get_tip_header", []);
 const nowEpoch = BigInt(tip.epoch) & 0xffffffn;
 const entryStart = nowEpoch;
 const entryEnd = nowEpoch + entryEpochs;
-const aggregationDeadline = entryEnd + 2n;
+const aggregationDeadline = entryEnd + aggEpochs;
 
 // --- the round id and config ----------------------------------------------
 // THE ROUND ID IS NOT FREE. round-type's creation branch requires it to equal
@@ -341,9 +352,12 @@ console.log(`\nwrote ${outFile} in ckb-cli's tx-file format. Do NOT run \`tx ini
 console.log("it creates an EMPTY file and overwrites this one.\n");
 console.log("  # 1. review");
 console.log(`  ckb-cli --url ${manifest.rpcUrl} tx info --tx-file ${outFile}`);
-console.log("  # 2. sign (prompts for your password)");
+console.log("  # 2. sign. --skip-check is REQUIRED on sign-inputs as well as on");
+console.log("  #    send: ckb-cli cannot classify the shard's public lock and");
+console.log("  #    refuses to sign at all without it, leaving an empty witness.");
 console.log(`  ckb-cli --url ${manifest.rpcUrl} tx sign-inputs --tx-file ${outFile} \\`);
-console.log("      --from-account 0xa776bf02d19cafa3749d906cc2c9ab1cf1e80ff7 --add-signatures");
+console.log("      --from-account 0xa776bf02d19cafa3749d906cc2c9ab1cf1e80ff7 \\");
+console.log("      --add-signatures --skip-check");
 console.log("  # 3. verify the signature commits to the schedule");
 console.log(`  node tools/check-signed-round.mjs ${outFile}`);
 console.log("  # 4. send. --skip-check is REQUIRED and is not a shortcut:");
