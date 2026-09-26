@@ -27,6 +27,7 @@ const require_ = createRequire(path.join(ROOT, "tools/"));
 const { genesisState } = require_("../apps/web/chain/genesis-tx.js");
 const { acceptBatch, daoLockArgs, receiptArgs } =
   require_("../apps/web/chain/aggregate-tx.js");
+const { closedState, closableFrom } = require_("../apps/web/chain/close-tx.js");
 const ledgerCodec = require_("../apps/web/chain/ledger-codec.js");
 const core = require_("../apps/web/core.js");
 
@@ -215,6 +216,49 @@ export function checkAggregate({
         }
       });
     }
+  }
+  return bad;
+}
+
+/**
+ * Closing the ledger. A close and a batch are BOTH 207-byte to 207-byte
+ * transitions, so they are told apart by what moved: a close flips `closed` and
+ * carries no entry inputs, a batch leaves it false and carries them.
+ *
+ * Mirrors AggregationState::close (lifecycle.rs:338).
+ */
+export function checkClose({ config, before, after, since, entryInputCount }) {
+  const bad = [];
+  const epoch = BigInt(since) & 0xffffffn;
+  if ((BigInt(since) & ABSOLUTE_EPOCH_FLAG) !== ABSOLUTE_EPOCH_FLAG) {
+    bad.push(
+      "the ledger input's since lacks RFC 0017's absolute-epoch flag, so the " +
+      "node would read it as a block number",
+    );
+  }
+  let expected = null;
+  try {
+    expected = closedState(config, before, epoch);
+  } catch (e) {
+    bad.push(`this ledger cannot be closed: ${e.message}`);
+  }
+  if (expected) {
+    const a = hexRaw(ledgerCodec.encodeAggregationState(expected));
+    const b = hexRaw(ledgerCodec.encodeAggregationState(after));
+    if (a !== b) {
+      bad.push(
+        "the successor is not this ledger with only its closed flag set; " +
+        `closing must preserve every counter (closable from epoch ` +
+        `${closableFrom(config, before)})`,
+      );
+    }
+  }
+  // ledger.rs checks no_entry_inputs on the closing branch too.
+  if (entryInputCount > 0) {
+    bad.push(
+      `the closing transaction carries ${entryInputCount} entry-lock input(s); ` +
+      "no_entry_inputs forbids any",
+    );
   }
   return bad;
 }

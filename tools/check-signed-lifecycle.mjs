@@ -17,7 +17,7 @@ import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { ccc } from "../apps/web/vendor/ccc-joyid.min.mjs";
 import { depsProvide } from "./lock-deps.mjs";
-import { checkFreeze, checkGenesis, checkAggregate } from "./lifecycle-rules.mjs";
+import { checkFreeze, checkGenesis, checkAggregate, checkClose } from "./lifecycle-rules.mjs";
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const require_ = createRequire(path.join(ROOT, "tools/"));
@@ -155,10 +155,44 @@ if (config && protocolIn.length === 1 && protocolOut.length >= 1) {
                    : ok.push("genesis: every rule passes");
   } else if (src.data.length === 207 && dst.data.length === 207) {
     const entryLock = manifest.scripts["entry-lock"];
+    const beforeState = ledgerCodec.decodeAggregationState(src.data);
+    const afterState = ledgerCodec.decodeAggregationState(dst.data);
+    // A close and a batch are both 207 to 207. Told apart by what MOVED: a
+    // close flips the closed flag and carries no entry inputs; a batch leaves
+    // it false and carries them.
+    if (!beforeState.closed && afterState.closed) {
+      const count = resolved.filter(
+        (c) => c.output.lock.code_hash === entryLock.codeHash).length;
+      const reasons = checkClose({
+        config, before: beforeState, after: afterState,
+        since: BigInt(tx.inputs[src.i].since), entryInputCount: count,
+      });
+      reasons.length ? reasons.forEach((r) => fail.push(`close: ${r}`))
+                     : ok.push("close: every rule passes");
+      const unaccepted = beforeState.frozen.entryCount - beforeState.acceptedEntries;
+      ok.push(`close: fixes the accepted prefix at ${beforeState.acceptedEntries}; ` +
+        `${unaccepted} entr(ies) become refundable`);
+      reportAndExit();
+    }
     const entryInputs = resolved
       .map((c, i) => ({ c, i }))
       .filter((x) => x.c.output.lock.code_hash === entryLock.codeHash);
-    const before = ledgerCodec.decodeAggregationState(src.data);
+    // A 207-to-207 transition that neither flips `closed` nor carries entry
+    // cells changes nothing. The contract refuses it, and reaching the batch
+    // path with no entries would crash on a witness that is not there — which
+    // is how this case was found, as a crash instead of a verdict.
+    if (entryInputs.length === 0) {
+      if (beforeState.closed) {
+        fail.push("this ledger is already closed; it can only be passed through unchanged");
+      } else {
+        fail.push(
+          "this transition changes nothing: the ledger is not closed, stays " +
+          "open, and no entry cells are being accepted",
+        );
+      }
+      reportAndExit();
+    }
+    const before = beforeState;
     const daoIdx = tx.outputs.findIndex(
       (o) => o.lock.code_hash.replace(/^0x/, "") === config.daoLock.codeHash);
     const receiptIdx = tx.outputs.findIndex(
@@ -205,20 +239,24 @@ if (config && protocolIn.length === 1 && protocolOut.length >= 1) {
 }
 
 // --- capacity conservation ------------------------------------------------
-const inCap = resolved.reduce((s, c) => s + BigInt(c.output.capacity), 0n);
-const outCap = tx.outputs.reduce((s, o) => s + BigInt(o.capacity), 0n);
-if (outCap > inCap) {
-  fail.push(`outputs exceed inputs by ${(outCap - inCap)} shannons`);
-} else if (inCap === outCap) {
-  fail.push("the fee is zero; the pool refuses such a transaction before any script runs");
-} else {
-  ok.push(`fee ${inCap - outCap} shannons`);
+function reportAndExit() {
+  const inCap = resolved.reduce((s, c) => s + BigInt(c.output.capacity), 0n);
+  const outCap = tx.outputs.reduce((s, o) => s + BigInt(o.capacity), 0n);
+  if (outCap > inCap) {
+    fail.push(`outputs exceed inputs by ${outCap - inCap} shannons`);
+  } else if (inCap === outCap) {
+    fail.push("the fee is zero; the pool refuses such a transaction before any script runs");
+  } else {
+    ok.push(`fee ${inCap - outCap} shannons`);
+  }
+  for (const line of ok) console.log(`  ok    ${line}`);
+  for (const line of fail) console.log(`  FAIL  ${line}`);
+  if (fail.length > 0) {
+    console.log(`\nDo NOT send ${file}.`);
+    process.exit(1);
+  }
+  console.log(`\n${file} passes every check. Safe to send with --skip-check.`);
+  process.exit(0);
 }
 
-for (const line of ok) console.log(`  ok    ${line}`);
-for (const line of fail) console.log(`  FAIL  ${line}`);
-if (fail.length > 0) {
-  console.log(`\nDo NOT send ${file}.`);
-  process.exit(1);
-}
-console.log(`\n${file} passes every check. Safe to send with --skip-check.`);
+reportAndExit();
