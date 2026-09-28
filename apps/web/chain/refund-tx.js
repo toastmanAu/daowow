@@ -105,11 +105,18 @@ function buildRefundTx({
       "contract reads the accepted prefix from there and refuses without it",
     );
   }
-  if (!sponsor || !sponsor.lockDep) {
+  // TWO funding modes. With an explicit sponsor the transaction is complete and
+  // a CLI can sign it as-is. Without one the WALLET funds it: CCC adds an input
+  // and a change output, and prepareTransaction adds that lock's own cell dep.
+  //
+  // Omitting the sponsor is safe here for a reason specific to refunds: the
+  // change lands under the participant's own lock, which is the same lock the
+  // refund pays, so entry-lock's `returned >= required` still holds. It would
+  // NOT be safe for a transaction whose change went anywhere else.
+  if (sponsor && !sponsor.lockDep) {
     throw new Error(
-      "a fee sponsor with its lock cell dep is required: the FULL entry " +
-      "capacity must return to the participant, so the fee cannot come out of " +
-      "the refund",
+      "the sponsor's lock cell dep is required (sponsor.lockDep); without it " +
+      "the node refuses the transaction with ScriptNotFound on that input",
     );
   }
 
@@ -148,13 +155,17 @@ function buildRefundTx({
   const proof = host.membershipProof(nonce);
 
   const entryLock = manifest.scripts["entry-lock"];
-  const fee = BigInt(sponsor.feeShannons ?? 10000000n);
-  const change = BigInt(sponsor.capacity) - fee;
-  if (change < 61n * 100000000n) {
-    throw new Error(
-      `the sponsor holds ${BigInt(sponsor.capacity) / 100000000n} CKB, which ` +
-      "cannot cover the fee and leave a change cell above the 61 CKB floor",
-    );
+  let fee = 0n;
+  let change = 0n;
+  if (sponsor) {
+    fee = BigInt(sponsor.feeShannons ?? 10000000n);
+    change = BigInt(sponsor.capacity) - fee;
+    if (change < 61n * 100000000n) {
+      throw new Error(
+        `the sponsor holds ${BigInt(sponsor.capacity) / 100000000n} CKB, which ` +
+        "cannot cover the fee and leave a change cell above the 61 CKB floor",
+      );
+    }
   }
 
   return {
@@ -165,7 +176,7 @@ function buildRefundTx({
         // The closed ledger. Without it excluded_membership returns false and
         // the spend is refused with no hint that a dep is missing.
         { outPoint: ledgerCell.outPoint, depType: "code" },
-        sponsor.lockDep,
+        ...(sponsor ? [sponsor.lockDep] : []),
       ],
       headerDeps: [],
       inputs: [
@@ -173,20 +184,20 @@ function buildRefundTx({
           previousOutput: entryCell.outPoint,
           since: ABSOLUTE_EPOCH_FLAG | BigInt(nowEpoch),
         },
-        { previousOutput: sponsor.outPoint, since: 0n },
+        ...(sponsor ? [{ previousOutput: sponsor.outPoint, since: 0n }] : []),
       ],
       // Exactly the entry's capacity, as a plain cell. Deducting a fee here
       // would fail with ENTRY_ERROR_REFUND_DESTINATION.
       outputs: [
         { capacity: BigInt(entryCell.capacity), lock: participantLock, type: null },
-        { capacity: change, lock: sponsor.lock, type: null },
+        ...(sponsor ? [{ capacity: change, lock: sponsor.lock, type: null }] : []),
       ],
-      outputsData: ["0x", "0x"],
+      outputsData: sponsor ? ["0x", "0x"] : ["0x"],
       // The proof goes at the ENTRY's input index, which is 0.
       witnesses: [
         "0x" + Array.from(encodeAggregationWitness(proof),
           (x) => x.toString(16).padStart(2, "0")).join(""),
-        "0x",
+        ...(sponsor ? ["0x"] : []),
       ],
     },
     refunded: BigInt(entryCell.capacity),

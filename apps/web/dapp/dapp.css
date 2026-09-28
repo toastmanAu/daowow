@@ -109,3 +109,22 @@ footer .mono { color: var(--paper); }
 .caveat { background: hsl(28 45% 20%); border-left: 3px solid var(--amber);
   border-radius: 8px; padding: 20px 24px; margin: 24px 0; }
 .caveat p:last-child { margin-bottom: 0; }
+
+/* --- the refund list ---------------------------------------------------- */
+.entries { list-style: none; padding: 0; margin: 0; display: grid; gap: 12px; }
+.entries li {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 16px;
+  display: grid;
+  gap: 8px;
+}
+.entries li.unreachable { opacity: 0.62; }
+.entry-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 16px;
+  font-weight: 600;
+}
+.entries li .primary-button { justify-self: start; }

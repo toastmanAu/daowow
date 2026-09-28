@@ -186,3 +186,80 @@ test("a shard carries the capacity its successor must preserve", async () => {
   // buildEntryTx checks the successor it derives against the cell being spent.
   assert.strictEqual(shardCell.typeArgs, "0x" + "77".repeat(36));
 });
+
+// --- the refund path's discovery ------------------------------------------
+// findLedger must tell a ledger cell from a shard cell, and they SHARE a type
+// script and its args — only the data length distinguishes them, exactly as the
+// contract's own dispatch does it. A helper that matched on args alone would
+// return the shard and every refund built from it would be nonsense.
+const { findLedger, findEntries } = require("../chain/discovery.js");
+const AV = V.aggregation_state;
+
+const ledgerManifest = () => loadManifest(REAL_MANIFEST);
+const shardCodeHash = () => ledgerManifest().scripts["entry-shard-type"].codeHash;
+const entryCodeHash = () => ledgerManifest().scripts["entry-lock"].codeHash;
+const COMMITMENT = AV.config.commitment;
+
+test("findLedger returns the 207-byte cell and skips the 101-byte shard", () => {
+  const rpc = pagingRpc([
+    { out_point: { tx_hash: "0x" + "aa".repeat(32), index: "0x0" },
+      output: { capacity: "0x9502f9000", lock: {},
+                type: { code_hash: shardCodeHash(), hash_type: "data1",
+                        args: "0x" + COMMITMENT + "00000000" } },
+      output_data: "0x" + V.cell_encodings.shard_data.hex },
+    { out_point: { tx_hash: "0x" + "bb".repeat(32), index: "0x1" },
+      output: { capacity: "0x9502f9000", lock: {},
+                type: { code_hash: shardCodeHash(), hash_type: "data1",
+                        args: "0x" + COMMITMENT + "00000000" } },
+      output_data: "0x" + AV.genesis.hex },
+  ]);
+  return findLedger(rpc, ledgerManifest(), COMMITMENT).then((found) => {
+    assert.ok(found, "the ledger must be found");
+    assert.strictEqual(found.outPoint.txHash, "0x" + "bb".repeat(32));
+    assert.strictEqual(found.state.acceptedEntries, 0n);
+  });
+});
+
+test("findLedger ignores a ledger belonging to another round", async () => {
+  const rpc = pagingRpc([
+    { out_point: { tx_hash: "0x" + "cc".repeat(32), index: "0x0" },
+      output: { capacity: "0x9502f9000", lock: {},
+                type: { code_hash: shardCodeHash(), hash_type: "data1",
+                        args: "0x" + "99".repeat(32) + "00000000" } },
+      output_data: "0x" + AV.genesis.hex },
+  ]);
+  assert.strictEqual(await findLedger(rpc, ledgerManifest(), COMMITMENT), null);
+});
+
+test("findEntries orders by nonce and can filter to one participant", async () => {
+  // A refund needs EVERY entry of the shard to replay the accumulator, and the
+  // page needs only the connected wallet's to display — so both modes matter.
+  const mine = "11".repeat(32);
+  const theirs = "22".repeat(32);
+  const cell = (participant, hex, idx) => ({
+    out_point: { tx_hash: "0x" + "dd".repeat(32), index: "0x" + idx.toString(16) },
+    output: { capacity: "0x9502f9000",
+              lock: { code_hash: entryCodeHash(), hash_type: "data1",
+                      args: "0x" + participant + COMMITMENT } },
+    output_data: "0x" + hex,
+  });
+  const e0 = AV.entries[0].hex, e1 = AV.entries[1].hex;
+  const rpc = () => pagingRpc([cell(theirs, e1, 1), cell(mine, e0, 0)]);
+  const all = await findEntries(rpc(), ledgerManifest(), COMMITMENT);
+  assert.deepStrictEqual(all.map((x) => Number(x.entry.entryNonce)), [0, 1],
+    "sorted by nonce regardless of the order the indexer returned them");
+  const filtered = await findEntries(rpc(), ledgerManifest(), COMMITMENT, mine);
+  assert.strictEqual(filtered.length, 1);
+  assert.strictEqual(filtered[0].participantLockHash, mine);
+});
+
+test("findEntries skips an entry-lock cell from another round", async () => {
+  const rpc = pagingRpc([{
+    out_point: { tx_hash: "0x" + "ee".repeat(32), index: "0x0" },
+    output: { capacity: "0x9502f9000",
+              lock: { code_hash: entryCodeHash(), hash_type: "data1",
+                      args: "0x" + "11".repeat(32) + "99".repeat(32) } },
+    output_data: "0x" + AV.entries[0].hex,
+  }]);
+  assert.deepStrictEqual(await findEntries(rpc, ledgerManifest(), COMMITMENT), []);
+});

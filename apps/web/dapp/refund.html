@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DAOWOW — refund an entry</title>
+<meta http-equiv="Content-Security-Policy" content="
+  default-src 'none';
+  script-src 'self';
+  style-src 'self';
+  img-src 'self' data:;
+  connect-src 'self' http://192.168.68.134:8114 https://testnet.ckb.dev;
+  form-action 'none';
+  base-uri 'none'">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext y='26' font-size='28'%3E%E2%97%8E%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="dapp.css">
+</head>
+<body>
+<header class="site-header">
+  <span class="brand"><span class="brand-symbol">◎</span>DAO<span class="brand-light">WOW</span></span>
+  <a class="nav-link" href="entry.html">Enter a round</a>
+  <a class="nav-link" href="how-it-works.html">How it works</a>
+  <button id="connect" class="wallet-button" type="button">Connect wallet</button>
+</header>
+
+<main>
+  <h1>Refund an entry</h1>
+  <p class="sub">
+    A round that never accepted your entry returns its full deposit. Nothing is
+    deducted: the protocol requires the whole amount back, so the network fee
+    comes from your wallet separately rather than out of the refund.
+  </p>
+
+  <div id="round"></div>
+
+  <section id="entries" hidden>
+    <h2 class="section-heading">Your entries</h2>
+    <p class="sub" id="entries-note"></p>
+    <ul class="entries" id="entry-list"></ul>
+  </section>
+
+  <p class="sub" id="status"></p>
+  <div id="refund-error"></div>
+</main>
+
+<footer>
+  <span>network <span class="mono" id="net">…</span></span>
+  <span>node <span class="mono" id="rpc">…</span></span>
+  <span>tip epoch <span class="mono" id="epoch">…</span></span>
+</footer>
+
+<!-- Classic scripts, evaluated before the deferred module, each publishing
+     itself on window. core must precede entry-codec and codec; codec and
+     ledger-codec before discovery, which now reads both. -->
+<script src="../core.js"></script>
+<script src="../chain/codec.js"></script>
+<script src="../chain/entry-codec.js"></script>
+<script src="../chain/ledger-codec.js"></script>
+<script src="../chain/manifest.js"></script>
+<script src="../chain/rpc.js"></script>
+<script src="../chain/discovery.js"></script>
+<script src="../chain/refund-tx.js"></script>
+<script src="../chain/confirm.js"></script>
+<script type="module" src="refund.js"></script>
+</body>
+</html>

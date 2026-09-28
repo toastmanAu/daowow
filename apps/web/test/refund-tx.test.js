@@ -189,9 +189,34 @@ test("the FULL entry capacity returns, with the fee taken from the sponsor", () 
   assert.strictEqual(inputs - outputs, fee);
 });
 
-test("a sponsor is required, because the refund cannot fund its own fee", () => {
+test("without a sponsor the transaction is left for the WALLET to fund", () => {
+  // Two funding modes. A CLI passes a sponsor and gets a complete transaction;
+  // the browser omits it and CCC adds the fee input and a change output.
+  //
+  // Omitting it is safe here for a reason specific to refunds: the change lands
+  // under the participant's OWN lock, which is the same lock the refund pays,
+  // so entry-lock's `returned >= required` still holds. It would not be safe
+  // for a transaction whose change went anywhere else.
   const { sponsor: _drop, ...without } = base();
-  assert.throws(() => buildRefundTx(without), /sponsor/);
+  const { tx, fee } = buildRefundTx(without);
+  assert.strictEqual(tx.inputs.length, 1, "only the entry; the wallet adds the rest");
+  assert.strictEqual(tx.outputs.length, 1, "only the refund; the wallet adds change");
+  assert.strictEqual(tx.witnesses.length, tx.inputs.length,
+    "balanced at handover, so CCC's splices append rather than displace");
+  assert.strictEqual(BigInt(tx.outputs[0].capacity), entryCell.capacity);
+  assert.strictEqual(fee, 0n, "the wallet decides the fee, so none is claimed here");
+  // The sponsor's lock dep is absent because the wallet's prepareTransaction
+  // adds its own; the ledger and entry-lock deps are still ours to supply.
+  const deps = tx.cellDeps.map((d) => `${d.outPoint.txHash}:${d.outPoint.index}`);
+  assert.ok(deps.includes(`${ledgerCell.outPoint.txHash}:0`));
+});
+
+test("a sponsor without its lock cell dep is still refused", () => {
+  // Passing a sponsor is a promise to supply its dep. Omitting the sponsor
+  // entirely delegates to the wallet; omitting only the dep is an error.
+  const { lockDep: _d, ...noDep } = sponsor;
+  assert.throws(() => buildRefundTx({ ...base(), sponsor: noDep }),
+    /lockDep|ScriptNotFound/);
 });
 
 test("no output is under the round's dao-lock", () => {

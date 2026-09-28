@@ -15,6 +15,12 @@
 const { decodeRoundConfigV1, decodeEntryShardDataV1, SHARD_STATE,
   ROUND_CONFIG_SIZE, SHARD_DATA_SIZE } =
   typeof require === "function" ? require("./codec.js") : window.DaowowCodec;
+const { decodeAggregationState, AGGREGATION_STATE_SIZE } =
+  typeof require === "function"
+    ? require("./ledger-codec.js") : window.DaowowLedgerCodec;
+const { decodeEntryDataV1, ENTRY_DATA_SIZE } =
+  typeof require === "function"
+    ? require("./entry-codec.js") : window.DaowowEntryCodec;
 
 const ROUND_STATE = Object.freeze({
   PENDING: "pending",
@@ -127,7 +133,67 @@ async function findShards(rpc, manifest, roundId) {
   return shards;
 }
 
-const api = { findRounds, findShards, deriveRoundState, ROUND_STATE };
+// The aggregation ledger for a round's shard, or null. Found the way the
+// contract's own dispatch tells cells apart: the shard cell and the ledger cell
+// SHARE a type script and its args, so only the DATA LENGTH distinguishes them.
+async function findLedger(rpc, manifest, commitment, shardId = 0) {
+  const shardType = manifest.scripts["entry-shard-type"];
+  const wantArgs = commitment.replace(/^0x/, "").toLowerCase();
+  for await (const cell of rpc.getCells({
+    script: { code_hash: shardType.codeHash, hash_type: shardType.hashType, args: "0x" },
+    script_type: "type",
+    script_search_mode: "prefix",
+  })) {
+    const args = (cell.output.type?.args ?? "").replace(/^0x/, "").toLowerCase();
+    if (args.length !== 72 || args.slice(0, 64) !== wantArgs) continue;
+    const data = unhex(cell.output_data ?? "0x");
+    if (data.length !== AGGREGATION_STATE_SIZE) continue;
+    const state = decodeAggregationState(data);
+    if (Number(state.frozen.shardId) !== Number(shardId)) continue;
+    return Object.freeze({
+      state,
+      capacity: BigInt(cell.output.capacity),
+      outPoint: outPointOf(cell),
+    });
+  }
+  return null;
+}
+
+// Every entry cell of a round, in nonce order. entry-lock args are
+// participantLockHash ‖ commitment, so passing a participant filters to theirs
+// while omitting it returns the whole shard — which a refund needs anyway,
+// because the exclusion proof requires replaying every entry.
+async function findEntries(rpc, manifest, commitment, participantLockHash = null) {
+  const entryLock = manifest.scripts["entry-lock"];
+  const wantCommitment = commitment.replace(/^0x/, "").toLowerCase();
+  const wantParticipant = participantLockHash
+    ? participantLockHash.replace(/^0x/, "").toLowerCase()
+    : null;
+  const found = [];
+  for await (const cell of rpc.getCells({
+    script: { code_hash: entryLock.codeHash, hash_type: entryLock.hashType, args: "0x" },
+    script_type: "lock",
+    script_search_mode: "prefix",
+  })) {
+    const args = (cell.output.lock.args ?? "").replace(/^0x/, "").toLowerCase();
+    if (args.length !== 128 || args.slice(64) !== wantCommitment) continue;
+    if (wantParticipant && args.slice(0, 64) !== wantParticipant) continue;
+    const data = unhex(cell.output_data ?? "0x");
+    if (data.length !== ENTRY_DATA_SIZE) continue;
+    found.push(Object.freeze({
+      entry: decodeEntryDataV1(data),
+      participantLockHash: args.slice(0, 64),
+      capacity: BigInt(cell.output.capacity),
+      outPoint: outPointOf(cell),
+    }));
+  }
+  found.sort((a, b) => Number(a.entry.entryNonce - b.entry.entryNonce));
+  return found;
+}
+
+const api = {
+  findRounds, findShards, findLedger, findEntries, deriveRoundState, ROUND_STATE,
+};
 if (typeof module !== "undefined" && module.exports) module.exports = api;
 if (typeof window !== "undefined") window.DaowowDiscovery = api;
 })();
