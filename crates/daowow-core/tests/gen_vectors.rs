@@ -479,6 +479,91 @@ fn gen_vectors() {
         entropy_record
     );
 
+    // Computed-draw oracles, shaped like the LIVE demo round: two entries of
+    // five tickets under the demo schedule, so 10 tickets and two paying
+    // places. The draw is a client capability — nothing writes winners to a
+    // cell — so this vector is the only thing a JS port can be checked against.
+    //
+    // A dedicated config whose prize_schedule_hash IS the demo schedule's
+    // commitment: ComputedDraw refuses a schedule its config does not commit
+    // to, and every other fixture here commits to a placeholder hash.
+    let build_draw = |minimum_tickets: u64| {
+        let cfg = RoundConfigV1 {
+            prize_schedule_hash: demo_schedule.commitment(),
+            minimum_tickets,
+            // The oracle's cap of 200, not 10: a minimum of 50 against a cap of
+            // 10 is a round that can NEVER draw, which validate() refuses
+            // outright. The failed variant here is a round that simply did not
+            // sell enough, which is the case worth pinning.
+            accumulator_id: ACC_MMR,
+            ..oracle_cfg
+        };
+        let entries = [(0u64, 0u64, b"VECTOR-DRAW-A".as_slice()), (1, 5, b"VECTOR-DRAW-B".as_slice())]
+            .map(|(nonce, base, who)| EntryDataV1 {
+                round_id,
+                shard_id: 0,
+                participant_lock_hash: ckb_hash256_one(who),
+                ticket_count: 5,
+                principal: 5 * cfg.ticket_price,
+                position_base: base,
+                entry_nonce: nonce,
+                entropy_commitment: [0; 32],
+            });
+        let mut host = mmr::host::MmrHost::new();
+        for e in &entries {
+            host.append(&entry_leaf(e)).unwrap();
+        }
+        let frozen = EntryShardDataV1 {
+            round_id,
+            shard_id: 0,
+            state: SHARD_STATE_FROZEN,
+            sequence: 2,
+            entry_count: 2,
+            ticket_count: 10,
+            principal_total: 10 * cfg.ticket_price,
+            accumulator_root: host.root().unwrap(),
+        };
+        let caps: Vec<u64> = entries.iter().map(|e| e.principal + 23_700_000_000).collect();
+        let proofs: Vec<Vec<u8>> = (0..2u64).map(|p| host.membership_proof(p).unwrap()).collect();
+        let refs: Vec<&[u8]> = proofs.iter().map(|p| p.as_slice()).collect();
+        let (accepted, _) = daowow_core::lifecycle::AggregationState::new(&cfg, &frozen)
+            .unwrap()
+            .accept(&cfg, &entries, &caps, &refs)
+            .unwrap();
+        let closed = accepted
+            .close(&cfg, daowow_core::epoch::absolute_epoch_since(cfg.entry_end).unwrap())
+            .unwrap();
+        let seal = daowow_core::seal::RoundSeal::new(&cfg, &[closed]).unwrap();
+        let record = daowow_core::seal::EntropyRecord::new(
+            seal,
+            seal_inclusion,
+            inclusion_hash,
+            chain_hashes,
+        )
+        .unwrap();
+        let draw =
+            daowow_core::computed_draw::ComputedDraw::new(&cfg, &record, &demo_schedule).unwrap();
+        json!({
+            "config": hex(&cfg.encode()),
+            "commitment": hex(&cfg.commitment()),
+            "schedule": hex(&demo_schedule.encode()),
+            "record": hex(&record.encode()),
+            "seed": hex(&draw.seed()),
+            "total_tickets": draw.total_tickets().to_string(),
+            "success": draw.is_success(),
+            "positions": draw.positions().iter()
+                .map(|(prize, pos)| json!([prize.to_string(), pos.to_string()]))
+                .collect::<Vec<_>>(),
+            "min_viable_pool": demo_schedule.min_viable_pool(10).unwrap().to_string(),
+        })
+    };
+    // Viable: 10 tickets clears a minimum of 5 and opens two places.
+    let computed_draw = build_draw(5);
+    // Failed: 10 tickets is below a minimum of 50. A failed round still has a
+    // seed — it is derived regardless — but it draws NOTHING, and the wording
+    // must not imply a draw happened.
+    let computed_draw_failed = build_draw(50);
+
     let prize_schedule_v2 = json!({
         "note": "demo schedule; v1 wire is unchanged and lives in the v1 tests",
         "hex": hex(&demo_schedule.encode()),
@@ -664,6 +749,8 @@ fn gen_vectors() {
         "entropy_record": entropy_record_json,
         "entropy_heights": entropy_heights,
         "settlement_funding": settlement_funding_json,
+        "computed_draw": computed_draw,
+        "computed_draw_failed": computed_draw_failed,
     });
 
     let out = concat!(
