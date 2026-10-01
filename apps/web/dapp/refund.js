@@ -15,6 +15,7 @@ const chain = () => ({
   ...window.DaowowDiscovery,
   ...window.DaowowRefundTx,
   ...window.DaowowConfirm,
+  ...window.DaowowShardHistory,
 });
 
 // Held here rather than on `window` so a page script cannot reach the signing
@@ -239,13 +240,24 @@ async function init() {
   const commitment = round.config.commitment;
   let ledger = null;
   let allEntries = [];
+  let replaySet = [];
   try {
     ledger = await c.findLedger(rpc, manifest, commitment);
-    // EVERY entry of the shard, not only the connected wallet's: the exclusion
-    // proof is a membership proof against the frozen accumulator, and that
-    // means replaying the whole shard. The accumulator's root is on chain and
-    // its proof paths are not.
+    // The entry CELLS still on chain, for display: these are what can be
+    // refunded.
     allEntries = await c.findEntries(rpc, manifest, commitment);
+    // And, separately, the shard's FULL entry history for the replay.
+    //
+    // THE LIVE CELL SET IS NOT THE REPLAY SET. The accumulator is append-only,
+    // so the frozen root commits to every entry the shard ever took — but a
+    // refund SPENDS a cell, so the live set shrinks while the root does not.
+    // Replaying the survivors builds a different tree and every proof from it
+    // is refused. Found on a live round: the first refund worked and the second
+    // failed because the first had spent the cell the replay needed.
+    if (ledger) {
+      replaySet = await c.readShardEntries(
+        rpc, ledger.outPoint, ledger.state.frozen.entryCount);
+    }
   } catch (e) {
     showError(roundBox, "Could not read the round's ledger or entries.", e.message);
     return;
@@ -254,7 +266,7 @@ async function init() {
   renderRound(roundBox, round, ledger);
   renderEntries({
     c, round, ledger, entries: allEntries,
-    allEntries: allEntries.map((x) => x.entry),
+    allEntries: replaySet,
     nowEpoch, manifest, rpc,
   });
 }

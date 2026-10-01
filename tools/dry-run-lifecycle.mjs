@@ -38,6 +38,7 @@ const { buildFreezeTx } = require_("../apps/web/chain/freeze-tx.js");
 const { buildLedgerGenesisTx } = require_("../apps/web/chain/genesis-tx.js");
 const { buildAggregateTx } = require_("../apps/web/chain/aggregate-tx.js");
 const { buildCloseTx, closableFrom } = require_("../apps/web/chain/close-tx.js");
+const { readShardEntries } = require_("../apps/web/chain/shard-history.js");
 const discovery = require_("../apps/web/chain/discovery.js");
 
 const [manifestPath, ...rest] = process.argv.slice(2);
@@ -352,9 +353,7 @@ if (step === "freeze") {
   console.log(`            closing fixes the accepted prefix at ` +
     `${before.acceptedEntries}; ${unaccepted} entr(ies) become refundable`);
 } else {
-  // Every entry cell of this round, in nonce order. The accumulator's proofs
-  // are not on chain, so the whole shard is replayed to generate them — the
-  // second time this client has paid that cost, after the peaks on entry.
+  // The entry CELLS available to batch now.
   const entryLock = manifest.scripts["entry-lock"];
   const found = [];
   for await (const cell of rpc.getCells({
@@ -369,8 +368,17 @@ if (step === "freeze") {
                  entry: decodeEntryDataV1(data) });
   }
   found.sort((a, b) => Number(a.entry.entryNonce - b.entry.entryNonce));
-  console.log(`entry cells ${found.length} found, nonces ` +
+  console.log(`entry cells ${found.length} live, nonces ` +
     `${found.map((c) => c.entry.entryNonce).join(", ")}`);
+
+  // And the shard's FULL history for the replay, which is NOT the live set:
+  // the accumulator is append-only, so a refunded entry leaves the live set
+  // while the frozen root still counts it. Replaying the survivors builds a
+  // different tree and every membership proof from it is refused.
+  const replaySet = await readShardEntries(
+    rpc, outPointOf(ledgerCell.cell), ledgerCell.state.frozen.entryCount);
+  console.log(`history     ${replaySet.length} entries recovered from the ` +
+    "shard's transaction chain for the accumulator replay");
 
   const state = ledgerCell.state;
   const pending = found.filter((c) => c.entry.entryNonce >= state.acceptedEntries);
@@ -387,7 +395,7 @@ if (step === "freeze") {
       state, typeArgs: ledgerCell.cell.output.type.args,
     },
     entryCells: batchCells,
-    allEntries: found.map((c) => c.entry),
+    allEntries: replaySet,
     configCellOutPoint, sponsor,
   });
   console.log(`batch       ${batchCells.length} entr(ies), id ${built.batchId}, ` +
