@@ -69,7 +69,7 @@ record. The participant-reveal model was superseded by the computed draw, and
 are stale and the spec says so rather than implementing a ghost.
 
 One cell carries all of it, evolving under one type script and one set of args:
-**ledger (207 bytes) → seal (212) → entropy record (348)**.
+**ledger (207 bytes) → seal (212) → entropy record (349)**.
 
 ### The seal
 
@@ -84,8 +84,15 @@ which is why close had to exist before this.
 
 ### Entropy finalisation, and its two sharp edges
 
-Input the seal, output an `EntropyRecord`: the seal's bytes, then the
-inclusion height, the inclusion hash, and three more hashes.
+Input the seal, output an `EntropyRecord`: its OWN version byte `4`, then the
+seal's full bytes — which begin with the seal's own version byte `3` — then the
+inclusion height, the inclusion hash, and three more hashes. **349 bytes at one
+shard.** An earlier draft of this spec said 348 by forgetting that leading byte;
+the Rust vector caught it before any code was written against it.
+
+The record cell occupies **460 CKB** against the seal's 323, so this step needs
+a **137 CKB top-up** — the third lifecycle step after genesis (6) and seal (5)
+to grow its own cell, and by far the largest.
 
 **The `since` is a RELATIVE BLOCK NUMBER, not an epoch.** `entropy.rs:52`
 requires `since >> 56 == 0x80` and the low bits `>= 256`. Every other `since`

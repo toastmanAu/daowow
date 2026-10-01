@@ -384,6 +384,101 @@ fn gen_vectors() {
           "value": daowow_core::lifecycle::batch_id(255, 1).unwrap().to_string() },
     ]);
 
+    // Gate 3b/3c oracles: the seal, the entropy record, the four scheduled
+    // heights, and the settlement funding cell.
+    //
+    // The seal is built from the SAME ledger fixture as `aggregation_state`,
+    // closed. RoundSeal::new refuses any ledger that is not closed and bound to
+    // the commitment, which is why gate 3a needed `close` before this could
+    // exist. Every ledger here accepted all its entries, so entry_end governs
+    // the close rather than the aggregation deadline (lifecycle.rs:341).
+    let closed_ledger = ledger_after
+        .close(
+            &ledger_cfg,
+            daowow_core::epoch::absolute_epoch_since(ledger_cfg.entry_end).unwrap(),
+        )
+        .unwrap();
+    let round_seal = daowow_core::seal::RoundSeal::new(&ledger_cfg, &[closed_ledger]).unwrap();
+    // A round number would hide arithmetic mistakes in the +64..+256 offsets.
+    let seal_inclusion: u64 = 1_234_567;
+    let inclusion_hash = ckb_hash256_one(b"VECTOR-SEAL-INCLUSION");
+    let chain_hashes = [
+        ckb_hash256_one(b"VECTOR-ENTROPY-64"),
+        ckb_hash256_one(b"VECTOR-ENTROPY-128"),
+        ckb_hash256_one(b"VECTOR-ENTROPY-192"),
+    ];
+    let entropy_record = daowow_core::seal::EntropyRecord::new(
+        round_seal.clone(),
+        seal_inclusion,
+        inclusion_hash,
+        chain_hashes,
+    )
+    .unwrap();
+    let round_seal_json = json!({
+        "hex": hex(&round_seal.encode()),
+        "shard_count": ledger_cfg.entry_shard_count,
+        "ledger_hex": hex(&closed_ledger.encode()),
+    });
+    let entropy_record_json = json!({
+        "hex": hex(&entropy_record.encode()),
+        "inclusion_height": seal_inclusion.to_string(),
+        "inclusion_hash": hex(&inclusion_hash),
+        "entropy_hashes": chain_hashes.iter().map(|h| hex(h)).collect::<Vec<_>>(),
+    });
+    let entropy_heights = json!([1_000u64, seal_inclusion, 9_007_199_254_740_000u64]
+        .iter()
+        .map(|&inclusion| {
+            let heights = daowow_core::seal::RoundSeal::entropy_heights(inclusion).unwrap();
+            json!({
+                "inclusion": inclusion.to_string(),
+                "heights": heights.iter().map(|h| h.to_string()).collect::<Vec<_>>(),
+            })
+        })
+        .collect::<Vec<_>>());
+
+    // Distinct non-zero values in every field, so a decoder reading a
+    // neighbouring offset produces a visibly wrong result — the same reason
+    // oracle_entry does it.
+    let settlement_funding = SettlementFundingDataV3 {
+        round_id: ckb_hash256_one(b"VECTOR-FUNDING-ROUND"),
+        batch_id: 0x0102_0304_0506_0708,
+        realized_total: 547_400_000_000 + 1_111,
+        principal_liability: 500_000_000_000,
+        prize_pool: 2_222_222,
+        payout_cursor: 3,
+        liability_count: 7,
+        liabilities_root: ckb_hash256_one(b"VECTOR-LIABILITIES-ROOT"),
+        prize_count: 2,
+        prize_root: ckb_hash256_one(b"VECTOR-PRIZE-ROOT"),
+        prize_paid: 444_444,
+    };
+    let settlement_funding_json = json!({
+        "hex": hex(&settlement_funding.encode()),
+        "fields": {
+            "round_id": hex(&settlement_funding.round_id),
+            "batch_id": settlement_funding.batch_id.to_string(),
+            "realized_total": settlement_funding.realized_total.to_string(),
+            "principal_liability": settlement_funding.principal_liability.to_string(),
+            "prize_pool": settlement_funding.prize_pool.to_string(),
+            "payout_cursor": settlement_funding.payout_cursor.to_string(),
+            "liability_count": settlement_funding.liability_count.to_string(),
+            "liabilities_root": hex(&settlement_funding.liabilities_root),
+            "prize_count": settlement_funding.prize_count.to_string(),
+            "prize_root": hex(&settlement_funding.prize_root),
+            "prize_paid": settlement_funding.prize_paid.to_string(),
+        },
+    });
+    // The decoder must accept what the encoder wrote, or the JS would be pinned
+    // to bytes the contract itself cannot read.
+    assert_eq!(
+        SettlementFundingDataV3::decode(&settlement_funding.encode()).unwrap(),
+        settlement_funding
+    );
+    assert_eq!(
+        daowow_core::seal::EntropyRecord::decode(&entropy_record.encode(), &ledger_cfg).unwrap(),
+        entropy_record
+    );
+
     let prize_schedule_v2 = json!({
         "note": "demo schedule; v1 wire is unchanged and lives in the v1 tests",
         "hex": hex(&demo_schedule.encode()),
@@ -565,6 +660,10 @@ fn gen_vectors() {
         "batch_commitment": batch_commitment,
         "ledger_witness": ledger_witness,
         "batch_id": batch_id,
+        "round_seal": round_seal_json,
+        "entropy_record": entropy_record_json,
+        "entropy_heights": entropy_heights,
+        "settlement_funding": settlement_funding_json,
     });
 
     let out = concat!(
