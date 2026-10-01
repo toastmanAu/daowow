@@ -198,3 +198,102 @@ for (const [name, mutate, pattern] of aggCases) {
       `no reason matched ${pattern}; got ${JSON.stringify(reasons)}`);
   });
 }
+
+// --- gate 3b: the seal and the entropy record ------------------------------
+const { decodeRoundSeal, decodeEntropyRecord } = require("../chain/seal-codec.js");
+const SEALED = decodeRoundSeal(unhex(V.round_seal.hex), 1);
+const CLOSED_LEDGER = SEALED.ledgers[0];
+const REC = decodeEntropyRecord(unhex(V.entropy_record.hex), 1);
+const INC = BigInt(V.entropy_record.inclusion_height);
+const incHeader = { number: "0x" + INC.toString(16), hash: "0x" + V.entropy_record.inclusion_hash };
+const entHeaders = [64n, 128n, 192n].map((o, i) => ({
+  number: "0x" + (INC + o).toString(16), hash: "0x" + V.entropy_record.entropy_hashes[i],
+}));
+const REL256 = 0x8000000000000100n;
+
+const sealBase = () => ({
+  config: CONFIG, before: CLOSED_LEDGER, otherLedgers: [], after: SEALED, shardId: 0,
+  inCapacity: 318n * CKB, outCapacity: 323n * CKB, entryInputCount: 0,
+});
+
+test("a correct seal reports no reasons", async () => {
+  const { checkSeal } = await load();
+  assert.deepStrictEqual(checkSeal(sealBase()), []);
+});
+
+const sealCases = [
+  ["shard zero only (seal.rs:17)", { shardId: 1 }, /only shard zero/],
+  ["the ledger must be closed (seal.rs, RoundSeal::new)",
+   { before: { ...CLOSED_LEDGER, closed: false } }, /still open/],
+  ["the seal must be what RoundSeal::new computes",
+   { after: { ...SEALED, ledgers: [{ ...CLOSED_LEDGER, acceptedBatches: 9n }] } }, /RoundSeal::new/],
+  ["out_cap must not fall below in_cap", { inCapacity: 400n * CKB, outCapacity: 323n * CKB }, /less capacity/],
+  ["the seal cell must clear its 323 CKB floor", { inCapacity: 100n * CKB, outCapacity: 200n * CKB }, /323 CKB floor/],
+  ["no entry-lock inputs", { entryInputCount: 1 }, /no_entry_inputs/],
+];
+for (const [name, patch, pattern] of sealCases) {
+  test(`seal: ${name}`, async () => {
+    const { checkSeal } = await load();
+    const reasons = checkSeal({ ...sealBase(), ...patch });
+    assert.ok(reasons.some((r) => pattern.test(r)),
+      `no reason matched ${pattern}; got ${JSON.stringify(reasons)}`);
+  });
+}
+
+const entBase = () => ({
+  config: CONFIG, seal: SEALED, record: REC, since: REL256,
+  headerDeps: [incHeader.hash, ...entHeaders.map((h) => h.hash)],
+  inclusionHeader: incHeader, entropyHeaders: entHeaders,
+  inCapacity: 323n * CKB, outCapacity: 460n * CKB, entryInputCount: 0,
+});
+
+test("a correct entropy finalisation reports no reasons", async () => {
+  const { checkEntropy } = await load();
+  assert.deepStrictEqual(checkEntropy(entBase()), []);
+});
+
+const entCases = [
+  // The two unprecedented rules, each on its own case so neither hides the other.
+  ["the since must be a RELATIVE BLOCK NUMBER, not the familiar 0x20 epoch (entropy.rs:52)",
+   { since: 0x2000000000000100n }, /0x80, a RELATIVE BLOCK NUMBER/],
+  ["the since must be at least 256 blocks (entropy.rs:52)",
+   { since: 0x80000000000000ffn }, /at least 256 blocks deep/],
+  ["exactly four header deps — a fifth is refused (entropy.rs:72)",
+   { headerDeps: [incHeader.hash, ...entHeaders.map((h) => h.hash), incHeader.hash] }, /exactly four/],
+  ["header dep 0 is the seal's own block",
+   { headerDeps: [entHeaders[0].hash, ...entHeaders.map((h) => h.hash)] }, /header dep 0/],
+  // The header dep LISTS the same hash it was handed, so the naming check
+  // passes and only the height can refuse it. A first version swapped two
+  // headers, which tripped the naming check as well — and its message ("does
+  // not name the block at +64") matched the /\+64/ pattern, so deleting the
+  // height check left the test green.
+  ["each entropy header is at its scheduled height",
+   { entropyHeaders: [{ ...entHeaders[0], number: "0x" + (INC + 65n).toString(16) },
+                      entHeaders[1], entHeaders[2]] },
+   /is at height \d+, not \d+/],
+  ["each header dep names the scheduled block",
+   { headerDeps: [incHeader.hash, entHeaders[1].hash, entHeaders[0].hash, entHeaders[2].hash] },
+   /does not name the block/],
+  ["the record must be what entropy.rs computes",
+   { record: { ...REC, entropyHashes: [...REC.entropyHashes].reverse() } }, /entropy\.rs computes/],
+  ["the record cell must clear its 460 CKB floor",
+   { inCapacity: 100n * CKB, outCapacity: 323n * CKB }, /460 CKB floor/],
+  ["no entry-lock inputs", { entryInputCount: 1 }, /no_entry_inputs/],
+];
+for (const [name, patch, pattern] of entCases) {
+  test(`entropy: ${name}`, async () => {
+    const { checkEntropy } = await load();
+    const reasons = checkEntropy({ ...entBase(), ...patch });
+    assert.ok(reasons.some((r) => pattern.test(r)),
+      `no reason matched ${pattern}; got ${JSON.stringify(reasons)}`);
+  });
+}
+
+test("entropy: a since failing BOTH rules reports BOTH", async () => {
+  // One `if` in the contract, two reasons here: the familiar 0x20 flag with too
+  // few blocks is two separate mistakes and the operator should hear about both.
+  const { checkEntropy } = await load();
+  const reasons = checkEntropy({ ...entBase(), since: 0x2000000000000010n });
+  assert.ok(reasons.some((r) => /RELATIVE BLOCK NUMBER/.test(r)));
+  assert.ok(reasons.some((r) => /at least 256/.test(r)));
+});

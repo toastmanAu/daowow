@@ -262,3 +262,129 @@ export function checkClose({ config, before, after, since, entryInputCount }) {
   }
   return bad;
 }
+
+// --- gate 3b: the seal and the entropy record ------------------------------
+
+const { sealOf } = require_("../apps/web/chain/seal-tx.js");
+const sealCodec = require_("../apps/web/chain/seal-codec.js");
+const { entropyHeights, RELATIVE_BLOCK_FLAG, MIN_RELATIVE_BLOCKS } =
+  require_("../apps/web/chain/entropy-tx.js");
+
+const stripHex = (h) => String(h ?? "").replace(/^0x/, "").toLowerCase();
+
+/**
+ * Sealing (contracts/entry-shard-type/src/seal.rs). `before` is the CLOSED
+ * ledger being spent, `otherLedgers` the closed ledgers of every other shard
+ * (cell deps), `after` the decoded seal in the output.
+ */
+export function checkSeal({
+  config, before, otherLedgers = [], after, shardId,
+  inCapacity, outCapacity, entryInputCount,
+}) {
+  const bad = [];
+  if (Number(shardId) !== 0) {
+    bad.push(`only shard zero's ledger can become the seal (seal.rs:17); this is shard ${shardId}`);
+  }
+  let expected = null;
+  try {
+    expected = sealOf(config, [before, ...otherLedgers]);
+  } catch (e) {
+    bad.push(`these ledgers cannot be sealed: ${e.message}`);
+  }
+  if (expected) {
+    const want = hexRaw(sealCodec.encodeRoundSeal(expected));
+    const got = hexRaw(sealCodec.encodeRoundSeal(after));
+    if (want !== got) {
+      bad.push("the seal cell's data is not what RoundSeal::new computes from these ledgers");
+    }
+  }
+  const floor = (8n + BigInt(sealCodec.sealSize(config.entryShardCount)) + 34n + 69n) * CKB;
+  if (BigInt(outCapacity) < BigInt(inCapacity)) {
+    bad.push("the seal cell holds less capacity than the ledger it replaces");
+  }
+  if (BigInt(outCapacity) < floor) {
+    bad.push(`the seal cell holds ${BigInt(outCapacity) / CKB} CKB, below its own ${floor / CKB} CKB floor`);
+  }
+  if (entryInputCount > 0) {
+    bad.push(`the sealing transaction carries ${entryInputCount} entry-lock input(s); no_entry_inputs forbids any`);
+  }
+  return bad;
+}
+
+/**
+ * Entropy finalisation (contracts/entry-shard-type/src/entropy.rs). Every input
+ * is the transaction's own: the since on the seal input, the header deps as
+ * listed, the headers the node reported for them, and the record as written.
+ *
+ * The since's metric flag and its 256-block bound are ONE `if` in the contract
+ * and TWO reasons here, so a transaction failing both is told about both.
+ */
+export function checkEntropy({
+  config, seal, record, since, headerDeps, inclusionHeader, entropyHeaders,
+  inCapacity, outCapacity, entryInputCount,
+}) {
+  const bad = [];
+  const raw = BigInt(since);
+  if (raw >> 56n !== RELATIVE_BLOCK_FLAG >> 56n) {
+    bad.push(
+      `the seal input's since has top byte 0x${(raw >> 56n).toString(16)}; entropy.rs:52 ` +
+      "requires 0x80, a RELATIVE BLOCK NUMBER — not the absolute epoch (0x20) used everywhere else",
+    );
+  }
+  if ((raw & 0x00ffffffffffffffn) < MIN_RELATIVE_BLOCKS) {
+    bad.push(
+      `the seal input's since is ${raw & 0x00ffffffffffffffn} blocks; the seal must be at least 256 blocks deep`,
+    );
+  }
+
+  // Exactly four header deps: the seal's block, then +64, +128, +192.
+  if (!Array.isArray(headerDeps) || headerDeps.length !== 4) {
+    bad.push(
+      `the transaction carries ${headerDeps?.length ?? 0} header dep(s); entropy.rs ` +
+      "requires exactly four, and refuses a fifth",
+    );
+  }
+  const inclusionHeight = BigInt(inclusionHeader.number);
+  if (stripHex(headerDeps?.[0]) !== stripHex(inclusionHeader.hash)) {
+    bad.push("header dep 0 is not the block the seal was committed in");
+  }
+  const schedule = entropyHeights(inclusionHeight);
+  ["+64", "+128", "+192"].forEach((label, i) => {
+    const h = entropyHeaders?.[i];
+    if (!h) {
+      bad.push(`no header supplied for the block at ${label}`);
+      return;
+    }
+    if (BigInt(h.number) !== schedule[i]) {
+      bad.push(`header dep ${i + 1} is at height ${BigInt(h.number)}, not ${schedule[i]} (${label})`);
+    }
+    if (stripHex(headerDeps?.[i + 1]) !== stripHex(h.hash)) {
+      bad.push(`header dep ${i + 1} does not name the block at ${label}`);
+    }
+  });
+
+  // The record the contract will recompute, from the seal being spent and the
+  // headers actually listed.
+  const expected = sealCodec.encodeEntropyRecord({
+    seal,
+    inclusionHeight,
+    inclusionHash: stripHex(inclusionHeader.hash),
+    entropyHashes: (entropyHeaders ?? []).map((h) => stripHex(h.hash)),
+  });
+  if (entropyHeaders?.length === 3
+      && hexRaw(expected) !== hexRaw(sealCodec.encodeEntropyRecord(record))) {
+    bad.push("the record cell's data is not what entropy.rs computes from this seal and these headers");
+  }
+
+  const floor = (8n + BigInt(sealCodec.recordSize(config.entryShardCount)) + 34n + 69n) * CKB;
+  if (BigInt(outCapacity) < BigInt(inCapacity)) {
+    bad.push("the record cell holds less capacity than the seal it replaces");
+  }
+  if (BigInt(outCapacity) < floor) {
+    bad.push(`the record cell holds ${BigInt(outCapacity) / CKB} CKB, below its own ${floor / CKB} CKB floor`);
+  }
+  if (entryInputCount > 0) {
+    bad.push(`the entropy transaction carries ${entryInputCount} entry-lock input(s); no_entry_inputs forbids any`);
+  }
+  return bad;
+}
