@@ -12,15 +12,19 @@
 // Resolved the same dual way this file exports itself: require() under
 // node's test runner, window in the browser, where require does not exist at
 // all and a bare require() call would throw before anything rendered.
-const { decodeRoundConfigV1, decodeEntryShardDataV1, SHARD_STATE,
-  ROUND_CONFIG_SIZE, SHARD_DATA_SIZE } =
+const codec = () =>
   typeof require === "function" ? require("./codec.js") : window.DaowowCodec;
-const { decodeAggregationState, AGGREGATION_STATE_SIZE } =
-  typeof require === "function"
-    ? require("./ledger-codec.js") : window.DaowowLedgerCodec;
-const { decodeEntryDataV1, ENTRY_DATA_SIZE } =
-  typeof require === "function"
-    ? require("./entry-codec.js") : window.DaowowEntryCodec;
+// Resolved LAZILY, not destructured at load time, and that is load-bearing.
+// These files are classic scripts sharing one global scope, so a destructure at
+// load fails whenever this file is evaluated before the one it names — and
+// because the failure happens inside the IIFE, `window.DaowowDiscovery` is
+// never assigned at all. The symptom arrives much later as
+// `c.findRounds is not a function`, which says nothing about load order.
+// Resolving on first use makes the order irrelevant.
+const ledgerCodec = () =>
+  typeof require === "function" ? require("./ledger-codec.js") : window.DaowowLedgerCodec;
+const entryCodec = () =>
+  typeof require === "function" ? require("./entry-codec.js") : window.DaowowEntryCodec;
 
 const ROUND_STATE = Object.freeze({
   PENDING: "pending",
@@ -51,7 +55,7 @@ const outPointOf = (cell) => Object.freeze({
 // in the config are absolute epoch numbers too.
 function deriveRoundState(config, shards, nowEpoch) {
   const ticketsSold = shards.reduce((n, s) => n + s.ticketCount, 0n);
-  const frozen = shards.length > 0 && shards.every((s) => s.state === SHARD_STATE.FROZEN);
+  const frozen = shards.length > 0 && shards.every((s) => s.state === codec().SHARD_STATE.FROZEN);
 
   let state;
   if (frozen) {
@@ -94,9 +98,9 @@ async function findRounds(rpc, manifest) {
     script_search_mode: "prefix",
   })) {
     const data = unhex(cell.output_data ?? "0x");
-    if (data.length !== ROUND_CONFIG_SIZE) continue; // not a round config cell
+    if (data.length !== codec().ROUND_CONFIG_SIZE) continue; // not a round config cell
     rounds.push(Object.freeze({
-      config: decodeRoundConfigV1(data),
+      config: codec().decodeRoundConfigV1(data),
       outPoint: outPointOf(cell),
     }));
   }
@@ -115,8 +119,8 @@ async function findShards(rpc, manifest, roundId) {
     script_search_mode: "prefix",
   })) {
     const data = unhex(cell.output_data ?? "0x");
-    if (data.length !== SHARD_DATA_SIZE) continue;
-    const shard = decodeEntryShardDataV1(data);
+    if (data.length !== codec().SHARD_DATA_SIZE) continue;
+    const shard = codec().decodeEntryShardDataV1(data);
     if (shard.roundId !== roundId) continue;
     // capacity travels with the shard because an append must give the
     // successor cell exactly the capacity the head held.
@@ -147,8 +151,9 @@ async function findLedger(rpc, manifest, commitment, shardId = 0) {
     const args = (cell.output.type?.args ?? "").replace(/^0x/, "").toLowerCase();
     if (args.length !== 72 || args.slice(0, 64) !== wantArgs) continue;
     const data = unhex(cell.output_data ?? "0x");
-    if (data.length !== AGGREGATION_STATE_SIZE) continue;
-    const state = decodeAggregationState(data);
+    const lc = ledgerCodec();
+    if (data.length !== lc.AGGREGATION_STATE_SIZE) continue;
+    const state = lc.decodeAggregationState(data);
     if (Number(state.frozen.shardId) !== Number(shardId)) continue;
     return Object.freeze({
       state,
@@ -179,9 +184,10 @@ async function findEntries(rpc, manifest, commitment, participantLockHash = null
     if (args.length !== 128 || args.slice(64) !== wantCommitment) continue;
     if (wantParticipant && args.slice(0, 64) !== wantParticipant) continue;
     const data = unhex(cell.output_data ?? "0x");
-    if (data.length !== ENTRY_DATA_SIZE) continue;
+    const ec = entryCodec();
+    if (data.length !== ec.ENTRY_DATA_SIZE) continue;
     found.push(Object.freeze({
-      entry: decodeEntryDataV1(data),
+      entry: ec.decodeEntryDataV1(data),
       participantLockHash: args.slice(0, 64),
       capacity: BigInt(cell.output.capacity),
       outPoint: outPointOf(cell),
