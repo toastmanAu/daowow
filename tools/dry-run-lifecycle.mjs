@@ -24,7 +24,7 @@ import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { ccc } from "../apps/web/vendor/ccc-joyid.min.mjs";
 import { depsProvide, resolveLockDep } from "./lock-deps.mjs";
-import { checkFreeze, checkGenesis, checkAggregate } from "./lifecycle-rules.mjs";
+import { checkFreeze, checkGenesis, checkAggregate, checkClose, checkSeal, checkEntropy } from "./lifecycle-rules.mjs";
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const require_ = createRequire(path.join(ROOT, "tools/"));
@@ -39,6 +39,11 @@ const { buildLedgerGenesisTx } = require_("../apps/web/chain/genesis-tx.js");
 const { buildAggregateTx } = require_("../apps/web/chain/aggregate-tx.js");
 const { buildCloseTx, closableFrom } = require_("../apps/web/chain/close-tx.js");
 const { readShardEntries } = require_("../apps/web/chain/shard-history.js");
+const sealCodec = require_("../apps/web/chain/seal-codec.js");
+const { buildSealTx } = require_("../apps/web/chain/seal-tx.js");
+const { buildEntropyTx, entropyHeights } = require_("../apps/web/chain/entropy-tx.js");
+const { computeDraw, describeDraw } = require_("../apps/web/chain/draw.js");
+const { decodeSchedule } = require_("../apps/web/chain/schedule.js");
 const discovery = require_("../apps/web/chain/discovery.js");
 
 const [manifestPath, ...rest] = process.argv.slice(2);
@@ -54,6 +59,7 @@ const requestedStep = flag("--step");
 const fromTx = flag("--from-tx");
 const outFile = flag("--out");
 const sponsorRef = flag("--sponsor");
+const roundPrefix = flag("--round");
 
 const manifest = loadManifest(JSON.parse(fs.readFileSync(manifestPath, "utf8")));
 const liveRpc = createRpc(manifest.rpcUrl);
@@ -140,7 +146,22 @@ if (rounds.length === 0) {
   console.log("\nNo round on chain.");
   process.exit(1);
 }
-const round = rounds[0];
+// More than one round can be on chain, and the indexer's order is not a
+// choice anyone made — so a round is picked explicitly when there are several.
+let round = rounds[0];
+if (roundPrefix) {
+  const want = roundPrefix.replace(/^0x/, "").toLowerCase();
+  round = rounds.find((r) => r.config.roundId.startsWith(want));
+  if (!round) {
+    console.log(`\nNo round on chain starts with ${roundPrefix}. On chain: ` +
+      rounds.map((r) => r.config.roundId.slice(0, 10)).join(", "));
+    process.exit(1);
+  }
+} else if (rounds.length > 1) {
+  console.log(`\n${rounds.length} rounds on chain — pass --round <id prefix>: ` +
+    rounds.map((r) => r.config.roundId.slice(0, 10)).join(", "));
+  process.exit(1);
+}
 const config = round.config;
 console.log(`round       ${config.roundId.slice(0, 16)}…`);
 console.log(`            entry epochs ${config.entryStart}..${config.entryEnd}, ` +
@@ -153,6 +174,11 @@ const shardType = manifest.scripts["entry-shard-type"];
 const commitment = config.commitment;
 let shardCell = null;
 let ledgerCell = null;
+// The same cell, further along: a seal (first byte 3) and then an entropy
+// record (first byte 4), told apart by length and first byte exactly as the
+// contract's own dispatch does.
+let sealCell = null;
+let recordCell = null;
 for await (const cell of rpc.getCells({
   script: { code_hash: shardType.codeHash, hash_type: shardType.hashType, args: "0x" },
   script_type: "type", script_search_mode: "prefix",
@@ -164,6 +190,12 @@ for await (const cell of rpc.getCells({
     shardCell = { cell, shard: codec.decodeEntryShardDataV1(data) };
   } else if (data.length === ledgerCodec.AGGREGATION_STATE_SIZE) {
     ledgerCell = { cell, state: ledgerCodec.decodeAggregationState(data) };
+  } else if (data[0] === sealCodec.SEAL_VERSION
+             && data.length === sealCodec.sealSize(config.entryShardCount)) {
+    sealCell = { cell, seal: sealCodec.decodeRoundSeal(data, config.entryShardCount) };
+  } else if (data[0] === sealCodec.RECORD_VERSION
+             && data.length === sealCodec.recordSize(config.entryShardCount)) {
+    recordCell = { cell, record: sealCodec.decodeEntropyRecord(data, config.entryShardCount) };
   }
 }
 
@@ -171,22 +203,77 @@ const outPointOf = (cell) => ({
   txHash: cell.out_point.tx_hash, index: Number(cell.out_point.index),
 });
 
+// The committed prize schedule travels in the round-creation transaction's
+// witness, and is verified against the config before anything uses it.
+async function committedSchedule() {
+  const created = await liveRpc.call("get_transaction", [round.outPoint.txHash]);
+  const args = ccc.WitnessArgs.fromBytes(ccc.bytesFrom(created.transaction.witnesses[0]));
+  const bytes = ccc.bytesFrom(args.outputType);
+  const sched = decodeSchedule(bytes);
+  return sched;
+}
+
+// The block a cell's creating transaction was committed in.
+async function inclusionOf(cell) {
+  const tx = await liveRpc.call("get_transaction", [cell.out_point.tx_hash]);
+  const header = await liveRpc.call("get_header", [tx.tx_status.block_hash]);
+  return { number: header.number, hash: header.hash };
+}
+
 let step;
-if (ledgerCell) {
+let entropyInputs = null;
+if (recordCell) {
+  // Terminal for 3b. The draw is derived, never stored: compute it and say so.
+  const draw = computeDraw({ config, record: recordCell.record, schedule: await committedSchedule() });
+  const text = describeDraw(draw);
+  console.log(`record      entropy FINALISED at seal height ${recordCell.record.inclusionHeight}`);
+  console.log(`\nTHE DRAW    seed ${draw.seed.slice(0, 16)}…`);
+  console.log(`            ${text.summary}`);
+  for (const w of text.winners) console.log(`            place ${w.place}: ticket position ${w.ticket}`);
+  console.log(`\n            ${text.method}`);
+  console.log(`\n            header hashes: ${recordCell.record.inclusionHash.slice(0, 16)}…, ` +
+    recordCell.record.entropyHashes.map((h) => h.slice(0, 16) + "…").join(", "));
+  process.exit(0);
+} else if (sealCell) {
+  step = "entropy";
+  const inclusion = await inclusionOf(sealCell.cell);
+  const height = BigInt(inclusion.number);
+  const [h64, h128, h192, earliest] = entropyHeights(height);
+  const tipNow = BigInt((await liveRpc.call("get_tip_header", [])).number);
+  console.log(`seal        committed at block ${height}`);
+  console.log(`            entropy sendable from ${earliest} (256 blocks, ~34 min)`);
+  // A WAIT, not a failure — and a keeper who does not know that will read it
+  // as one. The +192 header exists before the since is satisfied, so the
+  // since is the binding constraint.
+  if (tipNow < earliest) {
+    console.log(`\nNEXT STEP   entropy, but not until block ${earliest}; it is ${tipNow}, ` +
+      `so ${earliest - tipNow} block(s) to go.`);
+    process.exit(0);
+  }
+  const fetchByNumber = async (n) => {
+    const h = await liveRpc.call("get_header_by_number", ["0x" + n.toString(16)]);
+    if (!h) throw new Error(`the node has no header at height ${n}`);
+    return { number: h.number, hash: h.hash };
+  };
+  entropyInputs = {
+    inclusionHeader: inclusion,
+    entropyHeaders: [await fetchByNumber(h64), await fetchByNumber(h128), await fetchByNumber(h192)],
+  };
+} else if (ledgerCell) {
   const st = ledgerCell.state;
   console.log(`ledger      ${st.acceptedEntries} of ${st.frozen.entryCount} entries ` +
     `accepted, ${st.acceptedBatches} batch(es), ${st.closed ? "CLOSED" : "open"}`);
   if (st.closed) {
-    console.log("\nThis ledger is closed. Unaccepted entries can now be refunded, " +
-      "and accepted ones proceed to the draw.");
-    process.exit(0);
+    // Closed: unaccepted entries are refundable, and the round proceeds to the
+    // seal — which freezes the entry universe the draw is taken over.
+    step = "seal";
   }
   // An entry can only be REFUNDED once the ledger is closed, so closing is not
   // an afterthought: it is what releases the capacity of everything the round
   // did not accept.
   const everythingAccepted = st.acceptedEntries === st.frozen.entryCount;
   const past = nowEpoch >= config.aggregationDeadline;
-  step = (everythingAccepted || past) ? "close" : "aggregate";
+  if (!st.closed) step = (everythingAccepted || past) ? "close" : "aggregate";
   if (step === "close") {
     const from = closableFrom(config, st);
     console.log(`            closable from epoch ${from}` +
@@ -330,6 +417,48 @@ if (step === "freeze") {
     outCapacity: BigInt(built.tx.outputs[0].capacity),
     entryInputCount: 0,
   });
+} else if (step === "seal") {
+  built = buildSealTx({
+    manifest, config,
+    ledger: {
+      outPoint: outPointOf(ledgerCell.cell),
+      capacity: BigInt(ledgerCell.cell.output.capacity),
+      state: ledgerCell.state, typeArgs: ledgerCell.cell.output.type.args,
+    },
+    configCellOutPoint, sponsor,
+  });
+  console.log(`top-up      ${built.topUp / CKB} CKB (the ledger holds ` +
+    `${BigInt(ledgerCell.cell.output.capacity) / CKB}, the seal's floor is ` +
+    `${8 + sealCodec.sealSize(config.entryShardCount) + 34 + 69})`);
+  reasons = checkSeal({
+    config, before: ledgerCell.state, after: built.expectedSeal, shardId: 0,
+    inCapacity: BigInt(ledgerCell.cell.output.capacity),
+    outCapacity: BigInt(built.tx.outputs[0].capacity), entryInputCount: 0,
+  });
+} else if (step === "entropy") {
+  built = buildEntropyTx({
+    manifest, config,
+    sealCell: {
+      outPoint: outPointOf(sealCell.cell),
+      capacity: BigInt(sealCell.cell.output.capacity),
+      data: sealCell.cell.output_data,
+      typeArgs: sealCell.cell.output.type.args,
+    },
+    ...entropyInputs,
+    configCellOutPoint, sponsor,
+  });
+  console.log(`top-up      ${built.topUp / CKB} CKB (the seal holds ` +
+    `${BigInt(sealCell.cell.output.capacity) / CKB}, the record's floor is ` +
+    `${8 + sealCodec.recordSize(config.entryShardCount) + 34 + 69})`);
+  console.log(`headers     ${entropyInputs.inclusionHeader.hash.slice(0, 14)}… @${BigInt(entropyInputs.inclusionHeader.number)}` +
+    entropyInputs.entropyHeaders.map((h) => `, ${h.hash.slice(0, 14)}… @${BigInt(h.number)}`).join(""));
+  reasons = checkEntropy({
+    config, seal: sealCell.seal, record: built.expectedRecord,
+    since: built.tx.inputs[0].since, headerDeps: built.tx.headerDeps,
+    ...entropyInputs,
+    inCapacity: BigInt(sealCell.cell.output.capacity),
+    outCapacity: BigInt(built.tx.outputs[0].capacity), entryInputCount: 0,
+  });
 } else if (step === "close") {
   built = buildCloseTx({
     manifest, config,
@@ -471,7 +600,7 @@ if (outFile) {
                    index: "0x" + Number(d.outPoint.index).toString(16) },
       dep_type: d.depType === "depGroup" ? "dep_group" : "code",
     })),
-    header_deps: [],
+    header_deps: tx.headerDeps ?? [],
     inputs: tx.inputs.map((i) => ({
       previous_output: { tx_hash: i.previousOutput.txHash,
                          index: "0x" + Number(i.previousOutput.index).toString(16) },

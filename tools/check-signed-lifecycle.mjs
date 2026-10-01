@@ -17,7 +17,7 @@ import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { ccc } from "../apps/web/vendor/ccc-joyid.min.mjs";
 import { depsProvide } from "./lock-deps.mjs";
-import { checkFreeze, checkGenesis, checkAggregate, checkClose } from "./lifecycle-rules.mjs";
+import { checkFreeze, checkGenesis, checkAggregate, checkClose, checkSeal, checkEntropy } from "./lifecycle-rules.mjs";
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const require_ = createRequire(path.join(ROOT, "tools/"));
@@ -27,6 +27,8 @@ const codec = require_("../apps/web/chain/codec.js");
 const ledgerCodec = require_("../apps/web/chain/ledger-codec.js");
 const { decodeEntryDataV1 } = require_("../apps/web/chain/entry-codec.js");
 const { decodeLedgerWitness } = require_("../apps/web/chain/ledger-witness.js");
+const sealCodec = require_("../apps/web/chain/seal-codec.js");
+const { entropyHeights } = require_("../apps/web/chain/entropy-tx.js");
 
 const [manifestPath, file] = process.argv.slice(2);
 if (!manifestPath || !file) {
@@ -153,6 +155,82 @@ if (config && protocolIn.length === 1 && protocolOut.length >= 1) {
     });
     reasons.length ? reasons.forEach((r) => fail.push(`genesis: ${r}`))
                    : ok.push("genesis: every rule passes");
+  } else if (src.data.length === 207 && dst.data[0] === sealCodec.SEAL_VERSION) {
+    // 207 to a seal: sealing the closed ledger.
+    const entryLock = manifest.scripts["entry-lock"];
+    // A seal the decoder refuses is a verdict, not a crash. A thrown error here
+    // would end the run with a stack trace and no "Do NOT send" — which reads
+    // as "not caught" and is worse than a wrong answer.
+    let after;
+    try {
+      after = sealCodec.decodeRoundSeal(dst.data, config.entryShardCount);
+    } catch (e) {
+      fail.push(`seal: the seal cell's data does not decode: ${e.message}`);
+      reportAndExit();
+    }
+    const reasons = checkSeal({
+      config,
+      before: ledgerCodec.decodeAggregationState(src.data),
+      after,
+      shardId: parseInt((src.cell.output.type.args ?? "").slice(-8).match(/../g).reverse().join(""), 16),
+      inCapacity: BigInt(src.cell.output.capacity),
+      outCapacity: BigInt(dst.o.capacity),
+      entryInputCount: resolved.filter((c) => c.output.lock.code_hash === entryLock.codeHash).length,
+    });
+    reasons.length ? reasons.forEach((r) => fail.push(`seal: ${r}`))
+                   : ok.push("seal: every rule passes");
+  } else if (src.data[0] === sealCodec.SEAL_VERSION && dst.data[0] === sealCodec.RECORD_VERSION) {
+    // A seal to a record: entropy finalisation.
+    //
+    // The headers are derived INDEPENDENTLY of what the transaction lists — the
+    // seal input's real inclusion block from its creating transaction, and the
+    // scheduled blocks by NUMBER from the node — then compared against the
+    // header deps the transaction carries. Taking them from the header deps
+    // themselves would make the check circular: it would confirm the
+    // transaction agrees with itself.
+    const entryLock = manifest.scripts["entry-lock"];
+    const created = await rpc.call("get_transaction", [tx.inputs[src.i].previous_output.tx_hash]);
+    const incHeader = await rpc.call("get_header", [created.tx_status.block_hash]);
+    const inclusionHeader = { number: incHeader.number, hash: incHeader.hash };
+    const [h64, h128, h192] = entropyHeights(BigInt(incHeader.number));
+    const entropyHeaders = [];
+    for (const n of [h64, h128, h192]) {
+      const h = await rpc.call("get_header_by_number", ["0x" + n.toString(16)]);
+      if (!h) {
+        fail.push(`entropy: the node has no header at height ${n} yet; the draw is not ready`);
+        reportAndExit();
+      }
+      entropyHeaders.push({ number: h.number, hash: h.hash });
+    }
+    let record;
+    try {
+      record = sealCodec.decodeEntropyRecord(dst.data, config.entryShardCount);
+    } catch (e) {
+      fail.push(`entropy: the record cell's data does not decode: ${e.message}`);
+      reportAndExit();
+    }
+    const reasons = checkEntropy({
+      config,
+      seal: sealCodec.decodeRoundSeal(src.data, config.entryShardCount),
+      record,
+      since: BigInt(tx.inputs[src.i].since),
+      headerDeps: tx.header_deps ?? [],
+      inclusionHeader, entropyHeaders,
+      inCapacity: BigInt(src.cell.output.capacity),
+      outCapacity: BigInt(dst.o.capacity),
+      entryInputCount: resolved.filter((c) => c.output.lock.code_hash === entryLock.codeHash).length,
+    });
+    reasons.length ? reasons.forEach((r) => fail.push(`entropy: ${r}`))
+                   : ok.push("entropy: every rule passes");
+    // The binding wait, stated so a premature send is understood as early, not broken.
+    const tipNow = BigInt((await rpc.call("get_tip_header", [])).number);
+    const earliest = BigInt(incHeader.number) + 256n;
+    if (tipNow < earliest) {
+      fail.push(
+        `entropy: the seal is only ${tipNow - BigInt(incHeader.number)} blocks deep; ` +
+        `the node will refuse this until block ${earliest} (${earliest - tipNow} to go)`,
+      );
+    }
   } else if (src.data.length === 207 && dst.data.length === 207) {
     const entryLock = manifest.scripts["entry-lock"];
     const beforeState = ledgerCodec.decodeAggregationState(src.data);
