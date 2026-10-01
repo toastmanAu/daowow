@@ -62,6 +62,8 @@
 <script src="../chain/shard-history.js"></script>
 <script src="../chain/refund-tx.js"></script>
 <script src="../chain/confirm.js"></script>
-<script type="module" src="refund.js"></script>
+<!-- ?v= is a cache buster: ES modules are cached hard enough that a
+     stale copy survived a normal reload and cost a live debugging round. -->
+<script type="module" src="refund.js?v=1bac069e"></script>
 </body>
 </html>

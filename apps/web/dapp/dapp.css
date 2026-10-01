@@ -128,3 +128,4 @@ footer .mono { color: var(--paper); }
   font-weight: 600;
 }
 .entries li .primary-button { justify-self: start; }
+.warn-line { color: var(--warn); font-weight: 600; }

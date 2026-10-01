@@ -44,7 +44,7 @@ const formatCkb = (shannons) => {
   return whole.toLocaleString("en-US");
 };
 
-function renderRound(node, round, ledger) {
+function renderRound(node, round, ledger, replayCount) {
   node.textContent = "";
   const card = document.createElement("div");
   card.className = "card";
@@ -72,6 +72,25 @@ function renderRound(node, round, ledger) {
       `and take part in the draw; the other ${total - accepted} can be refunded.`;
   }
   card.append(h, line);
+
+  if (ledger) {
+    // The accumulator's replay set, stated outright. A refund proves its entry
+    // is in the frozen tree, and that tree includes entries whose CELLS are
+    // already spent — so this count is the frozen entry count, not the number
+    // of cells left. Shown because it is also the number that distinguishes a
+    // working build from a stale cached one, which cost a live debugging round.
+    const replay = document.createElement("p");
+    replay.className = "sub";
+    const want = ledger.state.frozen.entryCount;
+    replay.textContent = replayCount === Number(want)
+      ? `Accumulator replay: ${replayCount} of ${want} entries recovered from ` +
+        "the shard's transaction history."
+      : `Accumulator replay INCOMPLETE: ${replayCount} of ${want} entries ` +
+        "recovered. Refunds will be refused until this matches — if it reads 0 " +
+        "or too few, reload with cache bypassed (Ctrl+Shift+R).";
+    if (replayCount !== Number(want)) replay.classList.add("warn-line");
+    card.append(replay);
+  }
   node.append(card);
 }
 
@@ -263,7 +282,7 @@ async function init() {
     return;
   }
 
-  renderRound(roundBox, round, ledger);
+  renderRound(roundBox, round, ledger, replaySet.length);
   renderEntries({
     c, round, ledger, entries: allEntries,
     allEntries: replaySet,
