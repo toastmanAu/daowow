@@ -555,6 +555,11 @@ built.tx.outputs.forEach((o, i) => {
   const kind = o.type ? `type ${o.type.args.length === 2 + 77 * 2 ? "receipt" : "…"}` : "plain";
   console.log(`    ${i}  ${String(BigInt(o.capacity) / CKB).padStart(8)} CKB  ${kind}`);
 });
+// Shown whenever present: the entropy step needs EXACTLY four, and a count
+// nobody can see is a count nobody checks.
+if ((built.tx.headerDeps ?? []).length > 0) {
+  console.log(`  header deps ${built.tx.headerDeps.length}`);
+}
 console.log(`  witnesses   ${built.tx.witnesses.length}` +
   (step === "aggregate" ? `, proofs ${(built.tx.witnesses[0].length - 2) / 2} bytes at index 0` : ""));
 
