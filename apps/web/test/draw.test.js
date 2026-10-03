@@ -142,3 +142,23 @@ test("the description never overclaims", () => {
     }
   }
 });
+
+// Found on the FIRST real failed draw — round 0xd15f6b5e on testnet, which
+// accepted zero entries. The page said "All 0 tickets are returned at
+// settlement", wrong twice: there is nothing to return, and its entries had
+// already gone back through the REFUND path, not settlement. A failed round is
+// in one of two different situations and the words must not conflate them.
+test("a round that accepted NO entries says so, and promises no settlement", () => {
+  const empty = { ...computeDraw(FAILED), tickets: 0n, viable: false, positions: [] };
+  const text = describeDraw(empty);
+  assert.match(text.summary, /no entries were accepted/i);
+  assert.doesNotMatch(text.summary, /\b0 tickets\b/, "never phrase emptiness as a count of zero");
+  assert.doesNotMatch(text.summary, /settlement/, "nothing reaches settlement from an empty round");
+});
+
+test("a round that accepted SOME entries but too few returns them at settlement", () => {
+  const text = describeDraw(computeDraw(FAILED));
+  assert.match(text.summary, /did not reach its minimum/);
+  assert.match(text.summary, /10 tickets/);
+  assert.match(text.summary, /returned at settlement/);
+});

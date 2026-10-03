@@ -32,18 +32,18 @@
     ],
     "inputs": [
       {
+        "since": "0x8000000000000100",
         "previous_output": {
           "tx_hash": "0xc23463d2da1232815363d1b0f298e9b0141cc2de1e71be45a2cd1d7bb9bfbc4d",
           "index": "0x0"
-        },
-        "since": "0x8000000000000100"
+        }
       },
       {
+        "since": "0x0",
         "previous_output": {
           "tx_hash": "0xc23463d2da1232815363d1b0f298e9b0141cc2de1e71be45a2cd1d7bb9bfbc4d",
           "index": "0x1"
-        },
-        "since": "0x0"
+        }
       }
     ],
     "outputs": [
@@ -80,5 +80,9 @@
     ]
   },
   "multisig_configs": {},
-  "signatures": {}
+  "signatures": {
+    "0xa776bf02d19cafa3749d906cc2c9ab1cf1e80ff7": [
+      "0x7fd96227598857c6f17bf7d1305985a0d283296dcc5b087dba870deaf5f138ae4226aa22e92324e9973ad3e2088656dbe8cb4fbd3bba795d331447cafac026db01"
+    ]
+  }
 }

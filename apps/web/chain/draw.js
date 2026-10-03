@@ -129,9 +129,22 @@ function describeDraw(draw) {
     "after it. None of them existed when the entries were sealed, and the " +
     "derivation is public, so anyone can recompute this result.";
   if (!draw.viable) {
+    // Two different situations, and the words must not conflate them. Found
+    // on the first real failed draw, which printed "All 0 tickets are
+    // returned at settlement" — wrong twice, since an empty round has nothing
+    // to return and its entries go back through the REFUND path instead.
+    if (draw.tickets === 0n) {
+      return {
+        summary:
+          "No entries were accepted into this round, so nothing was drawn. " +
+          "Entries the round did not accept are returned by refund.",
+        method,
+        winners: [],
+      };
+    }
     return {
       summary:
-        `This round did not reach its minimum, so no prizes were drawn. All ` +
+        `This round did not reach its minimum, so no prizes were drawn. Its ` +
         `${draw.tickets} tickets are returned at settlement.`,
       method,
       winners: [],
