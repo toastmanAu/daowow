@@ -139,9 +139,11 @@ const sponsor = {
   lock: { codeHash: "0x" + "22".repeat(32), hashType: "type", args: "0x" + "ab".repeat(20) },
   lockDep: { outPoint: { txHash: "0x" + "77".repeat(32), index: 0 }, depType: "depGroup" },
 };
+const DAO_TYPE_DEP = { outPoint: { txHash: "0x" + "8f".repeat(32), index: 2 }, depType: "code" };
 const base = () => ({
   manifest: MANIFEST, config: CONFIG, ledger: ledgerCell, entryCells,
   allEntries: entries, configCellOutPoint: CONFIG_DEP, sponsor,
+  daoTypeDep: DAO_TYPE_DEP,
 });
 
 test("the ledger is input 0 and its proof witness is witness 0", () => {
@@ -322,4 +324,20 @@ test("the sponsor's lock cell dep is required and lands among the deps", () => {
     "the sponsor's lock dep must be present, or its input is ScriptNotFound");
   const { lockDep, ...without } = sponsor;
   assert.throws(() => buildAggregateTx({ ...base(), sponsor: without }), /lockDep|ScriptNotFound/);
+});
+
+// Found reading the FIRST live aggregate before it was signed. The transaction
+// creates a native DAO deposit, and a TYPE script runs on every cell that
+// carries it — outputs included — so the DAO type's code cell must be a dep.
+// It was missing, and the dry run's checks were green, because they only
+// looked at input LOCKS. Sent, it would have failed with ScriptNotFound on
+// Outputs[1].Type. The Python reference harness adds this dep explicitly
+// (native_dao_dep, genesis tx0:2); this builder never did.
+test("the native DAO type's cell dep is required and lands among the deps", () => {
+  const { tx } = buildAggregateTx(base());
+  const deps = tx.cellDeps.map((d) => `${d.outPoint.txHash}:${d.outPoint.index}`);
+  assert.ok(deps.includes("0x" + "8f".repeat(32) + ":2"),
+    "without it the DAO deposit output is ScriptNotFound on Outputs[1].Type");
+  const { daoTypeDep, ...without } = base();
+  assert.throws(() => buildAggregateTx(without), /native DAO|daoTypeDep/);
 });

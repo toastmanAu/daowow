@@ -208,8 +208,20 @@ function receiptArgs(config, shardId, id, batch) {
  */
 function buildAggregateTx({
   manifest, config, ledger, entryCells, allEntries, configCellOutPoint, sponsor,
-  feeShannons = FEE_SHANNONS,
+  daoTypeDep, feeShannons = FEE_SHANNONS,
 }) {
+  // The native DAO deposit is an OUTPUT carrying the DAO type script, and a
+  // type script runs on every cell that carries it — so its code cell must be
+  // a dep. Found reading the first live aggregate before it was signed: it was
+  // missing, every dry-run check was green (they looked only at input locks),
+  // and the node would have answered ScriptNotFound on Outputs[1].Type.
+  // Required rather than resolved here, so a caller cannot forget it.
+  if (!daoTypeDep || !daoTypeDep.outPoint) {
+    throw new Error(
+      "the native DAO type's cell dep is required (daoTypeDep); the deposit " +
+      "output carries that type script and the node refuses it without the code",
+    );
+  }
   if (!configCellOutPoint || !configCellOutPoint.txHash) {
     throw new Error("the round config cell out point is required as a cell dep");
   }
@@ -296,6 +308,7 @@ function buildAggregateTx({
         { outPoint: entryLock.outPoint, depType: entryLock.depType },
         { outPoint: configCellOutPoint, depType: "code" },
         sponsor.lockDep,
+        daoTypeDep,
       ],
       headerDeps: [],
       inputs: [

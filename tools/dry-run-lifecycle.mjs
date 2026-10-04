@@ -516,7 +516,17 @@ if (step === "freeze") {
     process.exit(0);
   }
   const batchCells = pending.slice(0, ledgerCodec.MAX_BATCH_ENTRIES);
+  // The native DAO type script runs on the deposit OUTPUT, so its code cell
+  // is a dep — resolved from the chain like the sponsor's lock.
+  const daoDep = await resolveLockDep(liveRpc, {
+    code_hash: "0x" + config.daoType.codeHash, hash_type: "type", args: "0x",
+  });
+  if (!daoDep) throw new Error("no cell dep on this chain provides the native DAO type");
   built = buildAggregateTx({
+    daoTypeDep: {
+      outPoint: { txHash: daoDep.out_point.tx_hash, index: Number(daoDep.out_point.index) },
+      depType: daoDep.dep_type === "dep_group" ? "depGroup" : "code",
+    },
     manifest, config,
     ledger: {
       outPoint: outPointOf(ledgerCell.cell),
@@ -589,6 +599,21 @@ for (const [i, input] of built.tx.inputs.entries()) {
   console.log(provided
     ? `  ok    input ${i}'s lock has a cell dep providing it`
     : `  FAIL  input ${i}'s lock has NO cell dep; ScriptNotFound on Inputs[${i}].Lock`);
+  if (got.cell.output.type) {
+    const t = await depsProvide(liveRpc, asRpcShape, got.cell.output.type);
+    console.log(t ? `  ok    Inputs[${i}].Type has a cell dep providing it`
+                  : `  FAIL  Inputs[${i}].Type has NO cell dep; ScriptNotFound`);
+  }
+}
+// OUTPUT type scripts run too. The first live aggregate passed every check
+// here while missing the native DAO type's dep, because only input locks were
+// looked at.
+for (const [i, o] of built.tx.outputs.entries()) {
+  if (!o.type) continue;
+  const script = { code_hash: o.type.codeHash, hash_type: o.type.hashType, args: o.type.args };
+  const t = await depsProvide(liveRpc, asRpcShape, script);
+  console.log(t ? `  ok    Outputs[${i}].Type has a cell dep providing it`
+                : `  FAIL  Outputs[${i}].Type has NO cell dep; ScriptNotFound on Outputs[${i}].Type`);
 }
 
 if (reasons.length === 0) {

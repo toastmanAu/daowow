@@ -103,6 +103,32 @@ for (const [i, cell] of resolved.entries()) {
   }
 }
 
+// TYPE scripts run too — on every input that carries one AND every output that
+// carries one. Checking only input locks was a blind spot that let the first
+// live aggregate reach "safe to send" without the native DAO type's dep: its
+// deposit OUTPUT carries that type script, so the node would have answered
+// ScriptNotFound on Outputs[1].Type. Deps are deduplicated per script, since a
+// shared type (entry-shard-type on the ledger AND the receipt) needs one dep.
+const typeSites = [
+  ...resolved.map((c, i) => ({ where: `Inputs[${i}].Type`, script: c.output.type })),
+  ...tx.outputs.map((o, i) => ({ where: `Outputs[${i}].Type`, script: o.type })),
+].filter((x) => x.script);
+const seenTypes = new Map();
+for (const { where, script } of typeSites) {
+  const key = `${script.code_hash}:${script.hash_type}`;
+  if (!seenTypes.has(key)) {
+    seenTypes.set(key, await depsProvide(rpc, tx.cell_deps ?? [], script));
+  }
+  if (seenTypes.get(key)) {
+    ok.push(`${where} has a cell dep providing it`);
+  } else {
+    fail.push(
+      `${where} (code_hash ${script.code_hash.slice(0, 18)}…) has NO cell dep; ` +
+      `the node will refuse this with ScriptNotFound on ${where}`,
+    );
+  }
+}
+
 // --- which step is this, and does it obey its rules? ----------------------
 // Told apart by DATA LENGTH, exactly as the contract's own dispatch does.
 const shardType = manifest.scripts["entry-shard-type"];
