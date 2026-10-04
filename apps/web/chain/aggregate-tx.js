@@ -28,6 +28,10 @@ const ledgerCodec =
 const ledgerWitness =
   typeof require === "function" ? require("./ledger-witness.js") : window.DaowowLedgerWitness;
 const core = typeof require === "function" ? require("../core.js") : window.DaowowCore;
+// Resolved lazily: classic scripts load in page order, and a load-time lookup
+// of a sibling broke entry.html once already.
+const refundTx = () =>
+  typeof require === "function" ? require("./refund-tx.js") : window.DaowowRefundTx;
 
 const CKB = 100000000n;
 const FEE_SHANNONS = 10000000n;
@@ -222,6 +226,28 @@ function buildAggregateTx({
       "output carries that type script and the node refuses it without the code",
     );
   }
+  // The deposit's type is the native DAO SCRIPT, and the config does not hold
+  // its code hash: it holds the hash of the WHOLE SCRIPT, because the contract
+  // compares load_cell_type_hash (ledger.rs:159). Round 0xa42e2888 committed
+  // the raw code hash instead; no script hashes to that, every local check
+  // passed, and the node answered -28 on Inputs[0].Type. So the script comes
+  // from the caller (the chain's consensus) and must hash to the config value.
+  const daoType = daoTypeDep.script;
+  if (!daoType || typeof daoType.codeHash !== "string") {
+    throw new Error(
+      "the native DAO type script is required (daoTypeDep.script): the config " +
+      "holds only its hash, so the script itself cannot be recovered from it",
+    );
+  }
+  const daoTypeHash = refundTx().scriptHash(daoType);
+  if (daoTypeHash !== config.daoType.codeHash.toLowerCase()) {
+    throw new Error(
+      `the native DAO type script hashes to ${daoTypeHash} but the round config ` +
+      `commits dao_type ${config.daoType.codeHash}. The contract compares the ` +
+      "type script hash, so no deposit can satisfy this round; if the config " +
+      "holds the raw dao_type_hash from get_consensus, the round cannot aggregate",
+    );
+  }
   if (!configCellOutPoint || !configCellOutPoint.txHash) {
     throw new Error("the round config cell out point is required as a cell dep");
   }
@@ -334,11 +360,7 @@ function buildAggregateTx({
             hashType: hashTypeName(config.daoLock.hashType),
             args: daoLockArgs(config, id, batch),
           },
-          type: {
-            codeHash: "0x" + config.daoType.codeHash,
-            hashType: hashTypeName(config.daoType.hashType),
-            args: "0x",
-          },
+          type: daoType,
         },
         // 2: the receipt, which is what a participant's entitlement is proved
         // against later.

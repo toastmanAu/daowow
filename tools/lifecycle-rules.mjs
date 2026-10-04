@@ -30,6 +30,7 @@ const { acceptBatch, daoLockArgs, receiptArgs } =
 const { closedState, closableFrom } = require_("../apps/web/chain/close-tx.js");
 const ledgerCodec = require_("../apps/web/chain/ledger-codec.js");
 const core = require_("../apps/web/core.js");
+const { scriptHash } = require_("../apps/web/chain/refund-tx.js");
 
 export const ABSOLUTE_EPOCH_FLAG = 0x2000000000000000n;
 const CKB = 100000000n;
@@ -175,10 +176,16 @@ export function checkAggregate({
     if ((daoOutput.lock.args ?? "").toLowerCase() !== wantArgs) {
       bad.push("the DAO deposit's dao_lock args do not carry this batch's id and digest");
     }
-    if (!daoOutput.type
-        || (daoOutput.type.codeHash ?? "").replace(/^0x/, "").toLowerCase()
-           !== config.daoType.codeHash.toLowerCase()) {
-      bad.push("the DAO deposit's type script is not the config's dao_type");
+    // The contract compares the deposit's TYPE SCRIPT HASH with dao_type
+    // (ledger.rs:159), not its code hash. Checking the code-hash field shared
+    // the builder's wrong belief and passed round 0xa42e2888's aggregate, which
+    // the node then refused with -28.
+    if (!daoOutput.type || typeof daoOutput.type.codeHash !== "string"
+        || scriptHash(daoOutput.type) !== config.daoType.codeHash.toLowerCase()) {
+      bad.push(
+        "the DAO deposit's type script does not hash to the config's dao_type " +
+        `(${config.daoType.codeHash}); the contract compares the whole script's hash`,
+      );
     }
     if ((daoData ?? "").replace(/^0x/, "") !== "00".repeat(8)) {
       bad.push(

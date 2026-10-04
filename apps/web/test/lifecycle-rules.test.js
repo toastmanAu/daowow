@@ -13,6 +13,7 @@ const { decodeEntryDataV1 } = require("../chain/entry-codec.js");
 const { daoLockArgs, receiptArgs, acceptBatch } = require("../chain/aggregate-tx.js");
 const { batchId } = require("../chain/ledger-codec.js");
 const core = require("../core.js");
+const { scriptHash } = require("../chain/refund-tx.js");
 
 const load = () => import("../../../tools/lifecycle-rules.mjs");
 const V = JSON.parse(fs.readFileSync(path.join(
@@ -131,13 +132,21 @@ const host = (() => {
 })();
 const proofs = entries.map((_, i) => host.membershipProof(i));
 
+// The config commits the native DAO type SCRIPT's hash, so the deposit's
+// type is checked as a whole script, not as a code hash.
+const NATIVE_DAO = {
+  codeHash: "0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e",
+  hashType: "type", args: "0x",
+};
+const DAO_CONFIG = { ...CONFIG, daoType: { codeHash: scriptHash(NATIVE_DAO), hashType: 1 } };
+
 const aggBase = () => ({
-  config: CONFIG, before: GENESIS, after: AFTER, entries, capacities,
+  config: DAO_CONFIG, before: GENESIS, after: AFTER, entries, capacities,
   ledgerInCapacity: 318n * CKB, ledgerOutCapacity: 318n * CKB,
   daoOutput: {
     capacity: BATCH.inputCapacity,
     lock: { args: daoLockArgs(CONFIG, ID, BATCH) },
-    type: { codeHash: "0x" + CONFIG.daoType.codeHash },
+    type: NATIVE_DAO,
   },
   daoData: "0x" + "00".repeat(8),
   receiptOutput: { type: { args: receiptArgs(CONFIG, 0, ID, BATCH) } },
@@ -163,7 +172,18 @@ const aggCases = [
    (b) => { b.daoOutput = { ...b.daoOutput, lock: { args: "0x" + "00".repeat(104) } }; },
    /dao_lock args/],
   ["the DAO deposit must carry the config's dao_type",
-   (b) => { b.daoOutput = { ...b.daoOutput, type: { codeHash: "0x" + "11".repeat(32) } }; },
+   (b) => { b.daoOutput = { ...b.daoOutput, type: { ...NATIVE_DAO, codeHash: "0x" + "11".repeat(32) } }; },
+   /dao_type/],
+  // The live round 0xa42e2888 failure: the deposit's CODE HASH equalled the
+  // config's dao_type, every check passed, and the node answered -28 because
+  // the contract compares the type SCRIPT's hash.
+  ["a deposit whose code hash merely equals the config's dao_type is refused",
+   (b) => {
+     b.config = { ...b.config, daoType: { codeHash: NATIVE_DAO.codeHash.slice(2), hashType: 1 } };
+   },
+   /dao_type/],
+  ["a DAO type with the right code hash but non-empty args is refused",
+   (b) => { b.daoOutput = { ...b.daoOutput, type: { ...NATIVE_DAO, args: "0x00" } }; },
    /dao_type/],
   ["the DAO deposit's data must be eight zero bytes",
    (b) => { b.daoData = "0x"; }, /eight zero bytes/],

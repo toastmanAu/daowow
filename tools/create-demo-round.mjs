@@ -161,8 +161,14 @@ const ref = (name) => ({
   hashType: HASH_TYPE[scripts[name].hashType],
 });
 // The native Nervos DAO type script, which the round config pins so deposits
-// cannot be redirected to an impostor.
-const daoTypeHash = (await rpc("get_consensus", [])).dao_type_hash;
+// cannot be redirected to an impostor. The config pins the HASH OF THE WHOLE
+// SCRIPT, not get_consensus's dao_type_hash (which is only its code hash): the
+// contracts compare load_cell_type_hash. Round 0xa42e2888 committed the raw
+// code hash, so no deposit could ever match and it could not aggregate.
+const nativeDao = ccc.Script.from({
+  codeHash: (await rpc("get_consensus", [])).dao_type_hash, hashType: "type", args: "0x",
+});
+const daoTypeHash = nativeDao.hash();
 
 const config = {
   version: 1,

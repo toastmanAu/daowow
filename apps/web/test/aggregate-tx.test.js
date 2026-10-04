@@ -14,6 +14,7 @@ const {
 } = require("../chain/ledger-codec.js");
 const { decodeLedgerWitness } = require("../chain/ledger-witness.js");
 const { decodeRoundConfigV1 } = require("../chain/codec.js");
+const { scriptHash } = require("../chain/refund-tx.js");
 const { decodeEntryDataV1 } = require("../chain/entry-codec.js");
 const { loadManifest } = require("../chain/manifest.js");
 const core = require("../core.js");
@@ -139,9 +140,21 @@ const sponsor = {
   lock: { codeHash: "0x" + "22".repeat(32), hashType: "type", args: "0x" + "ab".repeat(20) },
   lockDep: { outPoint: { txHash: "0x" + "77".repeat(32), index: 0 }, depType: "depGroup" },
 };
-const DAO_TYPE_DEP = { outPoint: { txHash: "0x" + "8f".repeat(32), index: 2 }, depType: "code" };
+// The native DAO type script, as testnet's genesis defines it. The round
+// config does NOT store this code hash: it stores the HASH OF THIS WHOLE
+// SCRIPT, because the contracts compare load_cell_type_hash (ledger.rs:159,
+// dao-lock, entitlements). The vector config's dao_type is arbitrary bytes, so
+// the tests use a config whose dao_type is this script's hash.
+const NATIVE_DAO = {
+  codeHash: "0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e",
+  hashType: "type", args: "0x",
+};
+const DAO_CONFIG = { ...CONFIG, daoType: { codeHash: scriptHash(NATIVE_DAO), hashType: 1 } };
+const DAO_TYPE_DEP = {
+  outPoint: { txHash: "0x" + "8f".repeat(32), index: 2 }, depType: "code", script: NATIVE_DAO,
+};
 const base = () => ({
-  manifest: MANIFEST, config: CONFIG, ledger: ledgerCell, entryCells,
+  manifest: MANIFEST, config: DAO_CONFIG, ledger: ledgerCell, entryCells,
   allEntries: entries, configCellOutPoint: CONFIG_DEP, sponsor,
   daoTypeDep: DAO_TYPE_DEP,
 });
@@ -181,8 +194,34 @@ test("the DAO deposit's capacity is the summed entry capacity, exactly", () => {
 test("the DAO deposit carries the native DAO type and eight zero bytes", () => {
   const { tx } = buildAggregateTx(base());
   const i = tx.outputs.findIndex((o) => o.lock.codeHash === "0x" + CONFIG.daoLock.codeHash);
-  assert.strictEqual(tx.outputs[i].type.codeHash, "0x" + CONFIG.daoType.codeHash);
+  assert.deepStrictEqual(tx.outputs[i].type, NATIVE_DAO);
+  // What the contract actually compares: the type SCRIPT's hash.
+  assert.strictEqual(scriptHash(tx.outputs[i].type), DAO_CONFIG.daoType.codeHash);
   assert.strictEqual(tx.outputsData[i], "0x" + "00".repeat(8));
+});
+
+test("positive control: testnet's native DAO script hashes to the value ccc computes", () => {
+  // Computed independently with ccc.Script.hash() against the live testnet
+  // consensus dao_type_hash; scriptHash must agree or every test above that
+  // leans on it is comparing a wrong value with itself.
+  assert.strictEqual(
+    scriptHash(NATIVE_DAO),
+    "cc77c4deac05d68ab5b26828f0bf4565a8d73113d7bb7e92b8362b8a74e58e58",
+  );
+});
+
+test("a config that committed the RAW DAO code hash is refused before signing", () => {
+  // Round 0xa42e2888's shape: create-demo-round wrote get_consensus's
+  // dao_type_hash into the config. No script hashes to that, so the contract
+  // answers -28 on Inputs[0].Type for every aggregate, and the node is the
+  // first to say so. The builder must say so first.
+  const raw = { ...CONFIG, daoType: { codeHash: NATIVE_DAO.codeHash.slice(2), hashType: 1 } };
+  assert.throws(() => buildAggregateTx({ ...base(), config: raw }), /script hash/);
+});
+
+test("the native DAO type script itself is required, not only its dep", () => {
+  const { script, ...depOnly } = DAO_TYPE_DEP;
+  assert.throws(() => buildAggregateTx({ ...base(), daoTypeDep: depOnly }), /native DAO/);
 });
 
 // Built by hand rather than by calling daoLockArgs, because comparing the

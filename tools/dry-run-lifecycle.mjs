@@ -517,15 +517,19 @@ if (step === "freeze") {
   }
   const batchCells = pending.slice(0, ledgerCodec.MAX_BATCH_ENTRIES);
   // The native DAO type script runs on the deposit OUTPUT, so its code cell
-  // is a dep — resolved from the chain like the sponsor's lock.
+  // is a dep — resolved from the chain like the sponsor's lock. Its code hash
+  // comes from CONSENSUS: the config holds only the hash of the whole script,
+  // which the builder checks this script against.
+  const nativeDaoCodeHash = (await liveRpc.call("get_consensus", [])).dao_type_hash;
   const daoDep = await resolveLockDep(liveRpc, {
-    code_hash: "0x" + config.daoType.codeHash, hash_type: "type", args: "0x",
+    code_hash: nativeDaoCodeHash, hash_type: "type", args: "0x",
   });
   if (!daoDep) throw new Error("no cell dep on this chain provides the native DAO type");
   built = buildAggregateTx({
     daoTypeDep: {
       outPoint: { txHash: daoDep.out_point.tx_hash, index: Number(daoDep.out_point.index) },
       depType: daoDep.dep_type === "dep_group" ? "depGroup" : "code",
+      script: { codeHash: nativeDaoCodeHash, hashType: "type", args: "0x" },
     },
     manifest, config,
     ledger: {
