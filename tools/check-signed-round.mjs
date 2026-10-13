@@ -35,8 +35,12 @@ import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { ccc } from "../apps/web/vendor/ccc-joyid.min.mjs";
 import { depsProvide } from "./lock-deps.mjs";
-import { creationRoundId, validateRoundConfig } from "./round-rules.mjs";
+import {
+  creationRoundId, entryWindowProblem, validateRoundConfig,
+} from "./round-rules.mjs";
 
+// Captured from the decode below so the clock check can use it.
+let checkedConfig = null;
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const require_ = createRequire(path.join(ROOT, "tools/"));
 const { decodeRoundConfigV1 } = require_("../apps/web/chain/codec.js");
@@ -173,6 +177,7 @@ if (!args.outputType) {
     fail.push("output 0 has no data, so there is no config cell to check against");
   } else {
     const cfg = decodeRoundConfigV1(ccc.bytesFrom(configData));
+    checkedConfig = cfg;
     if (commitment !== cfg.prizeScheduleHash) {
       fail.push(
         "the schedule in witness 0 does NOT match the config cell's " +
@@ -249,6 +254,23 @@ try {
   }
 } catch (e) {
   ok.push(`cell-dep check SKIPPED: could not reach ${rpcUrl} (${e.message})`);
+}
+
+// 5. the entry window is still open NOW. A signed round file can sit unsent
+// for days; round 0x7000bce2 did, and went on chain already expired. Unlike
+// the dep check this does not degrade to a skip: a round sent without knowing
+// the clock is exactly the failure being prevented.
+if (checkedConfig) {
+  try {
+    const tip = await rpc.call("get_tip_header", []);
+    const nowEpoch = BigInt(tip.epoch) & 0xffffffn;
+    const why = entryWindowProblem(checkedConfig, nowEpoch);
+    if (why) fail.push(why);
+    else ok.push(`entry window open: epoch ${nowEpoch}, closes at ${checkedConfig.entryEnd}`);
+  } catch (e) {
+    fail.push(`could not read the chain's epoch from ${rpcUrl} (${e.message}); ` +
+      "refusing rather than sending a round whose window may already be closed");
+  }
 }
 
 for (const line of ok) console.log(`  ok    ${line}`);

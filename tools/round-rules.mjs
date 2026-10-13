@@ -75,3 +75,21 @@ export function validateRoundConfig(cfg) {
   }
   return bad;
 }
+
+/**
+ * Is the entry window still open at `nowEpoch`? Not a contract rule: round
+ * creation is accepted with any window. It is the operator's rule, because a
+ * round sent after its window closed is born dead — round 0x7000bce2 was built
+ * at epoch ~13956 and sent at 13997, committing 843 CKB to a round nobody
+ * could enter. Closed means `nowEpoch >= entry_end`: the shard may be frozen
+ * from entry_end inclusive (entry-shard-type absolute_epoch_at_least).
+ * Returns a reason, or null when the window is open.
+ */
+export function entryWindowProblem(cfg, nowEpoch) {
+  if (nowEpoch < cfg.entryEnd) return null;
+  return (
+    `the entry window (epochs ${cfg.entryStart}..${cfg.entryEnd}) has already ` +
+    `closed at epoch ${nowEpoch}; this round would go on chain unenterable. ` +
+    "Rebuild it with create-demo-round and send it promptly"
+  );
+}

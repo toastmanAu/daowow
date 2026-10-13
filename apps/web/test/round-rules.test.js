@@ -102,3 +102,21 @@ test("the config output index is part of the derivation", async () => {
   };
   assert.notStrictEqual(creationRoundId(input, 0), creationRoundId(input, 1));
 });
+
+// Round 0x7000bce2 was built at epoch ~13956 with a six-epoch entry window
+// and SENT at epoch 13997: it went on chain already expired, with 843 CKB of
+// config and shard cells committed to a round nobody could enter. Signing and
+// the schedule were both fine; nothing compared the window with the clock.
+test("a round whose entry window has already closed is refused", async () => {
+  const { entryWindowProblem } = await load();
+  const cfg = { ...valid, entryStart: 13956n, entryEnd: 13962n };
+  assert.match(entryWindowProblem(cfg, 13997n), /already closed/);
+  assert.match(entryWindowProblem(cfg, 13962n), /already closed/);
+});
+
+test("a round with its entry window still open passes", async () => {
+  const { entryWindowProblem } = await load();
+  const cfg = { ...valid, entryStart: 13956n, entryEnd: 13962n };
+  assert.strictEqual(entryWindowProblem(cfg, 13956n), null);
+  assert.strictEqual(entryWindowProblem(cfg, 13961n), null);
+});
