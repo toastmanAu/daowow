@@ -263,3 +263,42 @@ test("findEntries skips an entry-lock cell from another round", async () => {
   }]);
   assert.deepStrictEqual(await findEntries(rpc, ledgerManifest(), COMMITMENT), []);
 });
+
+// --- selectRound: which round a page shows --------------------------------
+// findRounds returns rounds in INDEXER order, which for a prefix type search
+// is by type args, i.e. by round id — not by age. With four rounds on testnet
+// rounds[0] was a dead round, so both entry and refund pages showed the wrong
+// one (2026-11-09).
+const { selectRound } = require("../chain/discovery.js");
+const rnd = (id, entryStart) => ({ config: { roundId: id, entryStart: BigInt(entryStart) } });
+const ROUNDS = [
+  rnd("0x7000bce2" + "00".repeat(28), 13956),
+  rnd("0xa42e2888" + "00".repeat(28), 13900),
+  rnd("0xaffb66f7" + "00".repeat(28), 14157),
+  rnd("0xd15f6b5e" + "00".repeat(28), 13800),
+];
+
+test("with no round requested, the newest round by entry_start is shown, not the first returned", () => {
+  assert.strictEqual(selectRound(ROUNDS).config.roundId.slice(0, 10), "0xaffb66f7");
+});
+
+test("a requested round prefix selects that round, with or without 0x and in any case", () => {
+  assert.strictEqual(selectRound(ROUNDS, "a42e2888").config.roundId.slice(0, 10), "0xa42e2888");
+  assert.strictEqual(selectRound(ROUNDS, "0xA42E").config.roundId.slice(0, 10), "0xa42e2888");
+});
+
+test("a requested round that matches nothing returns null rather than falling back to another round", () => {
+  assert.strictEqual(selectRound(ROUNDS, "ffff"), null);
+});
+
+test("an ambiguous prefix returns null rather than guessing", () => {
+  assert.strictEqual(selectRound(ROUNDS, "0xa"), null);
+});
+
+test("a requested value that is not hex returns null", () => {
+  assert.strictEqual(selectRound(ROUNDS, "a42e<script>"), null);
+});
+
+test("no rounds returns null", () => {
+  assert.strictEqual(selectRound([]), null);
+});

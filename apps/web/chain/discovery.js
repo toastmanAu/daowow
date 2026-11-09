@@ -197,8 +197,29 @@ async function findEntries(rpc, manifest, commitment, participantLockHash = null
   return found;
 }
 
+// Which round a page shows. findRounds returns INDEXER order (by type args,
+// i.e. by round id), which is not age: rounds[0] once picked a dead round.
+// - wanted given: the unique round whose id starts with it (0x optional, any
+//   case). No match, an ambiguous prefix or non-hex input -> null; never fall
+//   back to some OTHER round, because acting on the wrong round is worse than
+//   showing nothing.
+// - wanted absent: the newest round by entry_start.
+function selectRound(rounds, wanted) {
+  if (!rounds || rounds.length === 0) return null;
+  if (wanted === undefined || wanted === null || wanted === "") {
+    return rounds.reduce((best, r) =>
+      r.config.entryStart > best.config.entryStart ? r : best);
+  }
+  const prefix = String(wanted).toLowerCase().replace(/^0x/, "");
+  if (!/^[0-9a-f]+$/.test(prefix)) return null;
+  const hits = rounds.filter((r) =>
+    r.config.roundId.toLowerCase().replace(/^0x/, "").startsWith(prefix));
+  return hits.length === 1 ? hits[0] : null;
+}
+
 const api = {
   findRounds, findShards, findLedger, findEntries, deriveRoundState, ROUND_STATE,
+  selectRound,
 };
 if (typeof module !== "undefined" && module.exports) module.exports = api;
 if (typeof window !== "undefined") window.DaowowDiscovery = api;

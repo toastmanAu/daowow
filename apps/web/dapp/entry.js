@@ -155,7 +155,14 @@ async function init() {
     return;
   }
 
-  const round = rounds[0];
+  // ?round=<id prefix> picks a round; otherwise the newest. Never rounds[0]:
+  // that is indexer order (by id), not age, and once showed a dead round.
+  const wanted = new URLSearchParams(window.location.search).get("round");
+  const round = c.selectRound(rounds, wanted);
+  if (!round) {
+    showError(roundBox, "No unique round matches ?round=.", String(wanted));
+    return;
+  }
   const shards = await c.findShards(rpc, manifest, round.config.roundId);
   const state = c.deriveRoundState(round.config, shards, nowEpoch);
   const sold = state.ticketsSold;
