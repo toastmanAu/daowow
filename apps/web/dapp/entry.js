@@ -382,6 +382,8 @@ function wireWallet() {
       el("tickets").dispatchEvent(new Event("input"));
     } catch (e) {
       button.textContent = "Connect failed — retry";
+      // Say WHY on the page; a console-only error is invisible to the user.
+      el("submit-error").textContent = `Wallet connect failed: ${e?.message ?? String(e)}`;
       console.error(e);
     } finally {
       button.disabled = false;
