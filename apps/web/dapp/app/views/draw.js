@@ -19,6 +19,7 @@ export function mount(node, ctx, firstRow) {
   let row = firstRow;
   let stage = null;
   let shownKey = null;
+  let firstSeed = null; // the first result this screen showed
   let disposed = false;
   const body = h("div", {});
   clear(node).append(body);
@@ -49,6 +50,7 @@ export function mount(node, ctx, firstRow) {
     if (key === shownKey) return;
     stopStage();
     shownKey = key;
+    firstSeed = row.draw.seed;
 
     const script = window.DaowowDrawScript.buildDrawScript({ draw: row.draw, myPositions: mine });
     const honesty = h("p", { class: "honesty" }, copy().honestyLine(phase.lastHeight));
@@ -112,6 +114,12 @@ export function mount(node, ctx, firstRow) {
     const phase = window.DaowowDrawScript.drawPhase({
       snapshot: row.snapshot, tipHeight: tip.height, hasDraw: Boolean(row.draw),
     });
+    // A block the result depended on was replaced after winners were shown.
+    // Different winners must not simply appear in their place.
+    if (row.draw && window.DaowowDrawScript.resultChanged(firstSeed, row.draw)) {
+      message(copy().errors.drawChanged);
+      return;
+    }
     if (phase.phase === "not-sealed") { message(words.notSealed); return; }
     if (phase.blocksLeft === 0n && row.drawError) {
       // Unconfirmed means unshown. No winners appear beside this error.
@@ -127,14 +135,18 @@ export function mount(node, ctx, firstRow) {
     showResult(phase);
   }
 
-  // While the result is still to come, look again every few seconds so the
-  // countdown is live and the reveal starts without a reload.
+  paint();
+  // While a sealed round counts down to its result, look again every few
+  // seconds so the countdown is live and the reveal starts without a reload.
+  // Started after the first paint, so a screen that failed to draw leaves no
+  // timer behind.
   const timer = window.setInterval(() => {
-    if (disposed || document.hidden || row.draw) return;
-    ctx.store.refresh();
+    if (disposed || document.hidden) return;
+    if (window.DaowowDrawScript.needsPolling({
+      snapshot: row.snapshot, draw: row.draw, drawError: row.drawError,
+    })) ctx.store.refresh();
   }, COUNTDOWN_REFRESH_MS);
 
-  paint();
   return {
     update(next) { row = next; paint(); },
     dispose() { disposed = true; window.clearInterval(timer); stopStage(); },

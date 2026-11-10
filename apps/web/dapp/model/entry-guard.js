@@ -49,6 +49,9 @@ async function checkBeforeSigning({ store, roundId, tickets, acceptLate, lockScr
   if (store.state.status !== "ready") {
     return { ok: false, message: copy().errors.network, needsLateConsent: false, row: null };
   }
+  if (store.state.lagging) {
+    return { ok: false, message: copy().errors.lagging, needsLateConsent: false, row: null };
+  }
   const row = store.findRound(roundId);
   if (!row) {
     return { ok: false, message: copy().text.entry.gone, needsLateConsent: false, row: null };

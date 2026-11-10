@@ -191,6 +191,12 @@ test("the same code under a different hash type is not ours", () => {
     deployedConfig({ daoLock: { ...lock, hashType: 1 } }), F.MANIFEST), false);
 });
 
+test("a manifest missing one of the contracts trusts no round, and does not throw", () => {
+  const scripts = { ...F.MANIFEST.scripts };
+  delete scripts["dao-lock"];
+  assert.strictEqual(matchesDeployment(deployedConfig(), { ...F.MANIFEST, scripts }), false);
+});
+
 test("a round is sound only if its DAO type is the network's own, as a script hash", () => {
   assert.strictEqual(usesNetworkDao(deployedConfig(), DAO_TYPE_HASH), true);
   // The 2026-10-05 trap: two live rounds committed the DAO's CODE hash here

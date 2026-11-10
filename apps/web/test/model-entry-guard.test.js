@@ -131,6 +131,15 @@ test("an unsound round stops the flow before signing", async () => {
   assert.match(result.message, /can't take entries/);
 });
 
+test("a network that is still catching up stops the flow: its picture of the round is old", async () => {
+  const store = fakeStore({ snapshot, view: view(), schedule: SCHED, sound: true });
+  const refresh = store.refresh;
+  store.refresh = async () => { await refresh(); store.state.lagging = true; };
+  const result = await checkBeforeSigning({ store, roundId: "ab".repeat(32), tickets: 2n, acceptLate: false, ...OFFER });
+  assert.strictEqual(result.ok, false);
+  assert.match(result.message, /catching up/);
+});
+
 test("a late entry goes ahead only when the player has accepted the risk", async () => {
   const lateStore = () => {
     const s = fakeStore({ snapshot, view: view(), schedule: SCHED, sound: true });

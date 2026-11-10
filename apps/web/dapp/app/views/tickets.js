@@ -11,7 +11,7 @@ const T = () => window.DaowowTickets;
 // of a transaction that is out for signature.
 const flow = { key: null, stage: "idle", text: "", error: null };
 const keyOf = (entry) => `${entry.outPoint.txHash}:${entry.outPoint.index}`;
-const resetFlow = () => Object.assign(flow, { key: null, stage: "idle", text: "", error: null });
+const resetFlow = () => Object.assign(flow, { key: null, stage: "idle", text: "", error: null, owner: null });
 
 function tone(outcome) {
   const O = T().OUTCOME;
@@ -22,6 +22,9 @@ function tone(outcome) {
 }
 
 function winLines(card, row) {
+  // The cards and the rounds are read moments apart; a card can briefly say
+  // "won" for a round whose result is not in hand.
+  if (!row.draw || !row.schedule) return [];
   const est = window.DaowowPrizeEstimate;
   const tickets = row.draw.tickets;
   const estimate = est.estimatePrizes({ schedule: row.schedule, tickets, poolSoFar: row.pool });
@@ -38,54 +41,51 @@ function winLines(card, row) {
 
 async function runRefund(ctx, card, entry) {
   const words = copy().text.refund;
-  const say = (text) => { flow.text = text; ctx.rerender(); };
+  const lines = { checking: words.checking, approve: words.approve, sending: words.sending, waiting: words.waiting };
   flow.stage = "busy";
   flow.error = null;
-  try {
-    say(words.checking);
-    // Read the round again: the entry may already be gone, or the round may
-    // have moved on, since this card was drawn. A re-read that FAILS stops
-    // here too; the old data still in memory is not good enough to sign on.
-    const check = await window.DaowowRefundGuard.checkBeforeRefund({
+  flow.owner = ctx.store.state.session ? ctx.store.state.session.address : null;
+  // The sequence lives in model/send-flow.js, where it is tested: read the
+  // round again, build from the replayed history, and never say "not sent"
+  // about a refund that was broadcast.
+  const guard = window.DaowowRefundGuard;
+  const outcome = await window.DaowowSendFlow.runRefund({
+    check: () => guard.checkBeforeRefund({
       store: ctx.store, roundId: card.roundId, outPoint: entry.outPoint,
-    });
-    const session = ctx.signing();
-    if (!check.ok || !session) {
-      throw Object.assign(new Error(check.ok ? words.unavailable : check.message), { plain: true });
-    }
-    const prepared = await window.DaowowRefundGuard.prepareRefund({
-      rpc: ctx.rpc, manifest: ctx.manifest, row: check.row, entry: check.entry, session,
-      nowEpoch: check.nowEpoch,
-    });
-    if (!prepared.ok) {
-      flow.stage = "error";
-      flow.error = { headline: prepared.message, detail: prepared.detail };
-      ctx.rerender();
-      return;
-    }
-    say(words.approve);
-    const signed = await session.signEntry(prepared.tx);
-    say(words.sending);
-    const txHash = await session.broadcast(signed);
-    say(words.waiting);
-    const landed = await window.DaowowConfirm.awaitCommitted(ctx.rpc, txHash);
-    if (landed.timedOut) {
-      flow.stage = "done";
-      say(words.stillWaiting);
-      return;
-    }
-    await window.DaowowConfirm.awaitIndexer(ctx.rpc, landed.blockNumber);
+    }),
+    prepare: (checked, session) => guard.prepareRefund({
+      rpc: ctx.rpc, manifest: ctx.manifest, row: checked.row, entry: checked.entry, session,
+      nowEpoch: checked.nowEpoch,
+    }),
+    signer: () => ctx.signing(),
+    isLive: () => true,
+    watch: (txHash) => window.DaowowSendFlow.watchTransaction({ rpc: ctx.rpc, txHash }),
+    say: (stage) => { flow.text = lines[stage] ?? ""; ctx.rerender(); },
+  });
+
+  const fail = (headline, detail) => {
+    flow.stage = "error";
+    flow.text = "";
+    flow.error = { headline, detail: detail ?? null };
+  };
+  if (outcome.stage === "confirmed") {
     flow.stage = "done";
     flow.text = copy().refundDone(entry.capacity);
     await ctx.store.refresh();
-  } catch (e) {
-    flow.stage = "error";
-    flow.text = "";
-    flow.error = e?.plain
-      ? { headline: e.message, detail: null }
-      : { headline: words.notSent, detail: e?.message ?? String(e) };
-    ctx.rerender();
+  } else if (outcome.stage === "pending") {
+    // Sent, not yet confirmed. Shown as done-for-now so the button is gone.
+    flow.stage = "done";
+    flow.text = words.pending;
+  } else if (outcome.stage === "refused") {
+    fail(outcome.message, outcome.detail);
+  } else if (outcome.stage === "no-wallet") {
+    fail(words.noWallet);
+  } else if (outcome.stage === "rejected") {
+    fail(words.rejected, outcome.detail);
+  } else {
+    fail(words.notSent, outcome.detail);
   }
+  ctx.rerender();
 }
 
 function refundBlock(ctx, card, entry) {
@@ -174,6 +174,8 @@ export function render(node, ctx) {
         copy().text.connect)));
     return;
   }
+  // A refund's status belongs to the wallet that made it.
+  if (flow.owner && flow.owner !== state.session.address && flow.stage !== "busy") resetFlow();
   if (state.mineError) {
     showRetry(node, copy().errors.mine, () => ctx.store.refresh(), state.mineError);
     return;
@@ -188,7 +190,7 @@ export function render(node, ctx) {
     node.append(h("div", { class: "notice-good", role: "status" },
       h("span", {}, flow.text),
       h("button", { class: "link-button", type: "button", onclick: () => { resetFlow(); view.rerender(); } },
-        "Dismiss")));
+        copy().text.dismiss)));
   }
   if (state.mine.length === 0) {
     node.append(h("div", { class: "card" },

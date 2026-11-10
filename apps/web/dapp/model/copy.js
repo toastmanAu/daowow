@@ -149,6 +149,8 @@ const drawCountdown = (height, ms) =>
 
 const errors = Object.freeze({
   network: "We can't reach the network right now. Check your connection and try again.",
+  lagging: "The network is catching up, so what you see here may be a little old. Try again in a moment.",
+  drawChanged: "This round's result changed on the network after it was shown, so it has been taken down. Check back in a few minutes.",
   manifest: "This site couldn't load its own settings. Reload the page to try again.",
   roundNotFound: "We couldn't find that round.",
   wallet: (message) => `The wallet didn't connect: ${message}. Nothing was sent. Please try again.`,
@@ -161,6 +163,7 @@ const errors = Object.freeze({
 
 const text = Object.freeze({
   retry: "Try again",
+  dismiss: "Dismiss",
   loading: "Loading…",
   connect: "Connect wallet",
   connecting: "Connecting…",
@@ -192,6 +195,9 @@ const text = Object.freeze({
     waiting: "Sent. Waiting for confirmation…",
     stillWaiting: "This is taking longer than usual. Your entry may still go through. Check My tickets in a few minutes.",
     notSent: "Your entry was not sent. Nothing has left your wallet.",
+    rejected: "The network turned this entry down. Nothing has left your wallet.",
+    pending: "Your entry was sent, but we couldn't confirm it yet. Don't send it again. Check My tickets in a few minutes.",
+    sentElsewhere: "Your entry was sent after you left that screen. Check My tickets in a few minutes.",
     seeTickets: "See my tickets",
     transaction: "Transaction",
     closed: "Entries for this round have closed.",
@@ -215,6 +221,9 @@ const text = Object.freeze({
     waiting: "Sent. Waiting for confirmation…",
     stillWaiting: "This is taking longer than usual. The refund may still go through. Check back in a few minutes.",
     notSent: "The refund was not sent. Your deposit is still safe in the round.",
+    rejected: "The network turned this refund down. Your deposit is still safe in the round.",
+    pending: "The refund was sent, but we couldn't confirm it yet. Don't send it again. Check back in a few minutes.",
+    noWallet: "Your wallet isn't connected any more. Connect it and try again.",
   }),
   draw: Object.freeze({
     title: "The draw",
@@ -233,6 +242,7 @@ const text = Object.freeze({
   retireSoon: "Your ticket deposit will be returnable here soon.",
   refundBlocked: "This can't be refunded yet.",
   prizeTable: "What this round pays",
+  poolUnknown: "We couldn't read the prize pool just now.",
   noPoolYet: "The prize pool starts growing once the round's tickets are placed in savings.",
   roundEnded: "This round didn't go ahead.",
   youAreHere: "You are here",

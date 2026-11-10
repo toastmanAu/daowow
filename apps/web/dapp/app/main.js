@@ -46,6 +46,7 @@ function readers(manifest, rpc) {
     isTrustedRound: (config) => cells.matchesDeployment(config, manifest),
     isSoundRound: async (config) => cells.usesNetworkDao(config, await daoTypeHash()),
     readTip: (rpc) => rpc.call("get_tip_header", []),
+    readIndexerTip: async (r) => BigInt((await r.call("get_indexer_tip", [])).block_number),
     readDeployment: cells.readDeployment,
     countEntries: cells.countEntries,
     readSchedule: fetchSchedule,
@@ -70,7 +71,8 @@ function showNotice(text) {
   if (!text) return;
   node.append(
     h("span", {}, text),
-    h("button", { class: "link-button", type: "button", onclick: () => showNotice("") }, "Dismiss"));
+    h("button", { class: "link-button", type: "button", onclick: () => showNotice("") },
+      copy().text.dismiss));
 }
 
 // The wallet pill. The store is told WHO is connected. The session that can
@@ -161,14 +163,12 @@ function createWalletControl({ manifest, store }) {
 
 function createApp({ manifest, store }) {
   const route = () => window.DaowowRoute.parseRoute(window.location.hash);
-  const nav = (to) => {
-    const hash = typeof to === "string" ? to : window.DaowowRoute.formatRoute(to);
-    if (window.location.hash === hash) render(); else window.location.hash = hash;
-  };
-  const ctx = { manifest, store, rpc: store.rpc, nav, connect: null };
-  // What the entry and refund views get on top: the means to sign. No other
-  // view is handed this object.
-  const signingCtx = () => ({ ...ctx, signing: () => (ctx.wallet ? ctx.wallet.signing() : null) });
+  // What every view receives. It carries no wallet and no way to sign.
+  const ctx = { manifest, store, rpc: store.rpc, connect: null, notice: showNotice };
+  // The means to sign, held in this closure and added only to the object the
+  // entry and refund views are given.
+  let walletSigning = null;
+  const signingCtx = () => ({ ...ctx, signing: () => (walletSigning ? walletSigning() : null) });
   const SIGNING_PANELS = ["enter"];
   const SIGNING_TABS = ["tickets"];
   let panel = null; // { key, handle }
@@ -211,7 +211,7 @@ function createApp({ manifest, store }) {
     if (state.status === "loading") { dropPanel(); clear(node).append(loadingCard()); return; }
     if (state.status === "error" && state.rows.length === 0) {
       dropPanel();
-      showRetry(node, copy().errors.network, () => store.refresh(), state.error);
+      showRetry(node, copy().errors.network, retry, state.error);
       return;
     }
     const row = store.findRound(r.round);
@@ -230,20 +230,36 @@ function createApp({ manifest, store }) {
     if (!view) return; // How it works is static
     const node = el(`${tab}-live`);
     const state = store.state;
-    if (state.status === "loading") { clear(node).append(loadingCard()); return; }
-    if (state.status === "error") {
-      showRetry(node, copy().errors.network, () => store.refresh(), state.error);
+    if (state.status !== "ready") {
+      // Nothing from an earlier read stays on screen beside a loading or
+      // error card: old figures next to "can't reach the network" read as current.
+      if (view.reset) view.reset();
+      if (state.status === "loading") { clear(node).append(loadingCard()); return; }
+      showRetry(node, copy().errors.network, retry, state.error);
       return;
     }
     view.render(node, SIGNING_TABS.includes(tab) ? signingCtx() : ctx);
   }
 
+  // Retry shows that it is trying: the card goes back to "Loading" at once.
+  function retry() {
+    store.state.status = "loading";
+    render();
+    store.refresh();
+  }
+
+  let lagShown = false;
   function render() {
+    // Say once when the network's picture is old, and take it down when it is not.
+    if (store.state.lagging !== lagShown) {
+      lagShown = store.state.lagging;
+      showNotice(lagShown ? copy().errors.lagging : "");
+    }
     const r = route();
     if (r.unknown || r.panel) renderPanel(r); else renderTab(r.tab);
   }
 
-  return { render, ctx };
+  return { render, ctx, setSigning(fn) { walletSigning = fn; } };
 }
 
 async function boot() {
@@ -261,7 +277,7 @@ async function boot() {
   const app = createApp({ manifest, store });
   const wallet = createWalletControl({ manifest, store });
   app.ctx.connect = wallet.connect;
-  app.ctx.wallet = { signing: wallet.signing };
+  app.setSigning(wallet.signing);
 
   store.subscribe(() => app.render());
   window.addEventListener("hashchange", () => app.render());

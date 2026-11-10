@@ -25,11 +25,19 @@ const entropy = () => lib("../../chain/entropy-derive.js", "DaowowEntropyDerive"
 
 const message = (e) => (e && e.message ? e.message : String(e));
 
-function createStore({ manifest, rpc, readers }) {
+// How far the indexer may trail the chain before its picture of a round is
+// too old to act on, and how many blocks must sit on top of the last entropy
+// block before a result drawn from it is treated as final.
+const MAX_INDEXER_LAG = 8n;
+const DRAW_CONFIRMATIONS = 3n;
+const READ_TIMEOUT_MS = 20000;
+
+function createStore({ manifest, rpc, readers, timeoutMs = READ_TIMEOUT_MS }) {
   const state = {
     status: "loading",
     error: null,
     tip: null,
+    lagging: false,
     rows: [],
     session: null,
     mine: null,
@@ -37,9 +45,14 @@ function createStore({ manifest, rpc, readers }) {
   };
   const listeners = new Set();
   const schedules = new Map(); // roundId -> decoded schedule; committed, so kept
-  let queue = Promise.resolve();
+  let running = null; // the read in progress
+  let queued = null;  // the ONE read waiting behind it, shared by all later callers
+  let latest = 0;     // which read may write its answer
 
-  const notify = () => { for (const fn of [...listeners]) fn(state); };
+  // One view failing to draw must not stop the others, or the read itself.
+  const notify = () => {
+    for (const fn of [...listeners]) { try { fn(state); } catch { /* that view's problem */ } }
+  };
 
   // The draw for a round whose result exists. Returns { draw, drawError,
   // drawHeight }. Every path that cannot be CONFIRMED ends with no draw.
@@ -78,7 +91,9 @@ function createStore({ manifest, rpc, readers }) {
   async function buildRow(snapshot, label, tip, entryCounts) {
     const S = roundState().PLAYER_STATE;
     const entropyReady = Boolean(snapshot.seal)
-      && tip.height >= entropy().lastEntropyHeight(snapshot.seal.inclusionHeight);
+      // A block at the very tip can still be replaced. The result is final
+      // only once a few blocks sit on top of the last one it depends on.
+      && tip.height >= entropy().lastEntropyHeight(snapshot.seal.inclusionHeight) + DRAW_CONFIRMATIONS;
     const view = roundState().derivePlayerState({
       snapshot, nowEpoch: tip.epoch.number, entropyReady,
       liveEntryCount: entryCounts.get(snapshot.config.commitment) ?? 0,
@@ -94,9 +109,17 @@ function createStore({ manifest, rpc, readers }) {
 
     // A deposit exists only once the round has been taken in. A failure here
     // costs one figure, not the page.
+    // `poolUnknown` keeps "we could not read it" apart from "there is none
+    // yet", so the page never states the second when the first is true.
     let pool = null;
+    let poolUnknown = false;
     if (snapshot.ledger || snapshot.seal || snapshot.record) {
-      try { pool = await readers.readPoolSoFar(rpc, snapshot.config, tip.header); } catch { pool = null; }
+      try {
+        pool = await readers.readPoolSoFar(rpc, snapshot.config, tip.header);
+      } catch {
+        pool = null;
+        poolUnknown = true;
+      }
     }
     // A draw that names nobody (the round fell short) is a round that did not
     // run. Calling it "drawn" would promise winners that do not exist.
@@ -107,7 +130,9 @@ function createStore({ manifest, rpc, readers }) {
     // offered on the strength of a check that did not happen.
     let sound = false;
     try { sound = Boolean(await readers.isSoundRound(snapshot.config)); } catch { sound = false; }
-    return { snapshot, view: shown, label, sound, schedule, scheduleError, ...drawn, pool };
+    return {
+      snapshot, view: shown, label, sound, schedule, scheduleError, ...drawn, pool, poolUnknown,
+    };
   }
 
   async function loadMine(rows, tip, session) {
@@ -140,50 +165,85 @@ function createStore({ manifest, rpc, readers }) {
     state.mineError = error;
   }
 
+  async function readChain(mayWrite) {
+    const header = await readers.readTip(rpc);
+    const tip = {
+      height: BigInt(header.number), epoch: time().parseEpoch(header.epoch), header,
+    };
+    const [found, entryCounts, indexerTip] = await Promise.all([
+      readers.readDeployment(rpc, manifest), readers.countEntries(rpc, manifest),
+      readers.readIndexerTip(rpc),
+    ]);
+    // Only rounds built on this deployment's own contracts. Anyone can
+    // create a round cell; one that points at other scripts is not ours
+    // and is never listed, linked to, or signed for.
+    const snapshots = [];
+    for (const snapshot of found) {
+      if (await readers.isTrustedRound(snapshot.config)) snapshots.push(snapshot);
+    }
+    const labels = roundState().roundLabels(snapshots);
+    const rows = [];
+    for (const snapshot of snapshots) {
+      rows.push(await buildRow(snapshot, labels.get(snapshot.config.roundId), tip, entryCounts));
+    }
+    if (!mayWrite()) return;
+    state.tip = tip;
+    // Cells are read through the indexer, which trails the chain. Too far
+    // behind and its picture of a round is old: fine to look at, not to sign on.
+    state.lagging = tip.height - BigInt(indexerTip) > MAX_INDEXER_LAG;
+    state.rows = rows;
+    state.status = "ready";
+    state.error = null;
+    await refreshMine();
+  }
+
   async function readAll() {
+    const mine = ++latest;
+    const mayWrite = () => mine === latest;
+    let timer = null;
+    const gaveUp = new Promise((resolve) => { timer = setTimeout(() => resolve("gave-up"), timeoutMs); });
     try {
-      const header = await readers.readTip(rpc);
-      const tip = {
-        height: BigInt(header.number), epoch: time().parseEpoch(header.epoch), header,
-      };
-      const [found, entryCounts] = await Promise.all([
-        readers.readDeployment(rpc, manifest), readers.countEntries(rpc, manifest),
-      ]);
-      // Only rounds built on this deployment's own contracts. Anyone can
-      // create a round cell; one that points at other scripts is not ours
-      // and is never listed, linked to, or signed for.
-      const snapshots = [];
-      for (const snapshot of found) {
-        if (await readers.isTrustedRound(snapshot.config)) snapshots.push(snapshot);
+      // A request that never answers would otherwise leave every tab on
+      // "Loading" for ever, with no Retry and every later read stuck behind it.
+      const outcome = await Promise.race([readChain(mayWrite), gaveUp]);
+      if (outcome === "gave-up") {
+        latest += 1; // whatever that read eventually returns is discarded
+        state.status = "error";
+        state.error = "the network took too long to answer";
       }
-      const labels = roundState().roundLabels(snapshots);
-      const rows = [];
-      for (const snapshot of snapshots) {
-        rows.push(await buildRow(snapshot, labels.get(snapshot.config.roundId), tip, entryCounts));
-      }
-      state.tip = tip;
-      state.rows = rows;
-      state.status = "ready";
-      state.error = null;
-      await refreshMine();
     } catch (e) {
-      state.status = "error";
-      state.error = message(e);
+      if (mayWrite()) {
+        state.status = "error";
+        state.error = message(e);
+      }
+    } finally {
+      clearTimeout(timer);
     }
     notify();
+  }
+
+  function start() {
+    const read = readAll();
+    running = read;
+    read.then(() => { if (running === read) running = null; });
+    return read;
   }
 
   /**
    * Re-reads everything. Never throws: a failure becomes status "error".
    *
-   * Refreshes run ONE AT A TIME, and the promise a caller gets settles only
-   * after a read that STARTED after their call. "Read the round again before
-   * signing" depends on that: a refresh that returned early because another
-   * was already running would hand back state up to a minute old.
+   * One read runs at a time. Everyone who asks while it runs shares ONE
+   * further read that starts when it finishes, so the promise a caller gets
+   * always settles after a read that STARTED after their call. "Read the
+   * round again before signing" depends on that. Sharing the queued read is
+   * what stops timers and Retry clicks piling up behind a slow node.
    */
   function refresh() {
-    queue = queue.then(readAll, readAll);
-    return queue;
+    if (!running) return start();
+    if (!queued) {
+      queued = running.then(() => { queued = null; return start(); });
+    }
+    return queued;
   }
 
   // WHO is connected, and nothing that can sign. Every view can read the

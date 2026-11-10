@@ -86,6 +86,12 @@ test("the pool so far is the interest earned to date, summed over deposits", asy
   assert.strictEqual(await readPoolSoFar(rpc, CONFIG, TIP), ((9814n + 5000n) * CKB) / 1000n);
 });
 
+test("a deposit newer than the tip it is measured against adds nothing, never a negative", async () => {
+  const older = { number: "0x1", dao: daoField(9990000000000000n) }; // rate BELOW the deposit's
+  const rpc = F.fakeRpc([deposit()], { headers: HEADERS });
+  assert.strictEqual(await readPoolSoFar(rpc, CONFIG, older), 0n);
+});
+
 test("no deposit means null, not zero", async () => {
   assert.strictEqual(await readPoolSoFar(F.fakeRpc([]), CONFIG, TIP), null);
 });

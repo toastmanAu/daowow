@@ -141,8 +141,10 @@ test("only the entry and refund views can reach the signing operations", () => {
     assert.strictEqual(touches, allowed.includes(f), f);
   }
   for (const f of walk("dapp/model")) {
-    assert.doesNotMatch(code(read(f)), /signEntry|\.broadcast\(/, f);
+    assert.doesNotMatch(code(read(f)), /signEntry\s*:|window\.\w*[sS]ign/, f);
   }
+  // The shared context every view receives must not carry the wallet.
+  assert.doesNotMatch(code(read("dapp/app/main.js")), /ctx\.wallet|ctx\.signing\s*=/);
 });
 
 test("the three retired pages are script-free redirects into the app", () => {
@@ -152,4 +154,18 @@ test("the three retired pages are script-free redirects into the app", () => {
     assert.doesNotMatch(old, /<script|<link|<style|\son[a-z]+=/, page);
     assert.match(old, /http-equiv="Content-Security-Policy" content="default-src 'none'"/, page);
   }
+});
+
+test("the entry and refund screens run the tested send sequences, not their own", () => {
+  const enter = code(read("dapp/app/views/enter.js"));
+  const tickets = code(read("dapp/app/views/tickets.js"));
+  assert.match(enter, /DaowowSendFlow\.runEntry\(/);
+  assert.match(tickets, /DaowowSendFlow\.runRefund\(/);
+  // The watching of a sent transaction happens only inside that sequence.
+  for (const src of [enter, tickets]) {
+    assert.doesNotMatch(src, /awaitCommitted|awaitIndexer/);
+    assert.doesNotMatch(src, /\btry\s*\{/, "outcomes come back as stages, not as a catch-all");
+  }
+  assert.match(enter, /isLive: \(\) => !disposed/);
+  assert.match(enter, /beforeSign\(\);\s*say\(words\.approve\);\s*return who\.signEntry/);
 });

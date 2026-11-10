@@ -116,6 +116,24 @@ test("an unsealed round is not-sealed", () => {
     { phase: "not-sealed", blocksLeft: 0n, lastHeight: null });
 });
 
+const { needsPolling, resultChanged } = require("../dapp/model/draw-script.js");
+
+test("only a round counting down to its result is polled", () => {
+  const sealed = sealedAt(1000n);
+  assert.strictEqual(needsPolling({ snapshot: sealed, draw: null, drawError: null }), true);
+  assert.strictEqual(needsPolling({ snapshot: sealed, draw: { seed: "x" }, drawError: null }), false);
+  // A result that failed its check will fail it again in 15 seconds.
+  assert.strictEqual(needsPolling({ snapshot: sealed, draw: null, drawError: "no match" }), false);
+  assert.strictEqual(needsPolling({ snapshot: { seal: null, record: null }, draw: null, drawError: null }), false);
+});
+
+test("a result that changes after it was shown is detected", () => {
+  assert.strictEqual(resultChanged(null, { seed: "aa" }), false);
+  assert.strictEqual(resultChanged("aa", { seed: "aa" }), false);
+  assert.strictEqual(resultChanged("aa", { seed: "bb" }), true);
+  assert.strictEqual(resultChanged("aa", null), true, "a result that vanishes has changed too");
+});
+
 test("a result line names the place and the ticket, and marks the viewer's", () => {
   assert.strictEqual(copy.resultLine(1, "4", true), "1st place — Ticket 4 (yours)");
   assert.strictEqual(copy.resultLine(2, "8", false), "2nd place — Ticket 8");

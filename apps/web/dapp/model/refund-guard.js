@@ -69,6 +69,7 @@ async function checkBeforeRefund({ store, roundId, outPoint }) {
   if (store.state.status !== "ready") {
     return { ok: false, message: copy().errors.network };
   }
+  if (store.state.lagging) return { ok: false, message: copy().errors.lagging };
   const row = store.findRound(roundId);
   const card = (store.state.mine ?? []).find((c) => c.roundId === roundId);
   const entry = card ? card.refundable.find((e) => sameOutPoint(e.outPoint, outPoint)) : null;

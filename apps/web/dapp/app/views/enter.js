@@ -101,6 +101,7 @@ export function mount(node, ctx, firstRow) {
     ticketNote.textContent = guard.block ? "" : request.note;
     input.disabled = busy || finished;
     agree.disabled = busy || finished;
+    late.disabled = busy || finished;
     lateLine.hidden = !guard.warn;
 
     clear(payout);
@@ -144,7 +145,7 @@ export function mount(node, ctx, firstRow) {
     submit.disabled = busy || !agree.checked || (Boolean(guard.warn) && !late.checked);
   }
 
-  async function send(fresh, tickets, who) {
+  async function send(fresh, tickets, who, beforeSign) {
     const { manifest, rpc } = ctx;
     const config = fresh.snapshot.config;
     // The shard head, read fresh on every attempt. Never cached: a cached
@@ -166,6 +167,9 @@ export function mount(node, ctx, firstRow) {
           tickets, nowEpoch: ctx.store.state.tip.epoch.number,
           configCellOutPoint: fresh.snapshot.outPoint,
         });
+        // Stops here if the player has left this screen: a screen nobody is
+        // looking at must not open their wallet.
+        beforeSign();
         say(words.approve);
         return who.signEntry(built.tx);
       },
@@ -174,6 +178,11 @@ export function mount(node, ctx, firstRow) {
         return who.broadcast(signed);
       },
     });
+  }
+
+  function showHash(txHash) {
+    after.append(h("details", {}, h("summary", {}, copy().text.technical),
+      h("p", { class: "muted" }, `${words.transaction}: `, h("span", { class: "mono" }, txHash))));
   }
 
   async function onSubmit() {
@@ -194,48 +203,55 @@ export function mount(node, ctx, firstRow) {
     clear(problem);
     clear(after);
     paint();
-    try {
-      say(words.checking);
-      // Read the round AGAIN before the wallet opens. It may have closed or
-      // filled while this summary sat on screen.
-      const check = await window.DaowowEntryGuard.checkBeforeSigning({
+
+    const lines = { checking: words.checking, waiting: words.waiting };
+    // The sequence itself lives in model/send-flow.js, where it is tested:
+    // re-read before the wallet opens, never sign for a screen the player has
+    // left, and never say "not sent" about a transaction that was broadcast.
+    const outcome = await window.DaowowSendFlow.runEntry({
+      check: () => window.DaowowEntryGuard.checkBeforeSigning({
         store: ctx.store, roundId, tickets: request.tickets, acceptLate: late.checked,
         lockScript: who.lockScript, shownTotal: confirmedTotal,
-      });
-      if (!check.ok) {
-        say("");
-        problem.append(errorBox(check.message));
-        return;
-      }
-      const { txHash } = await send(check.row, request.tickets, who);
-      // Committed is NOT claimed yet. The node accepted the transaction into
-      // its pool; that is all a send means. So it is watched.
-      say(words.waiting);
-      after.append(h("details", {}, h("summary", {}, copy().text.technical),
-        h("p", { class: "muted" }, `${words.transaction}: `, h("span", { class: "mono" }, txHash))));
-      const landed = await window.DaowowConfirm.awaitCommitted(ctx.rpc, txHash);
-      if (landed.timedOut) {
-        // Not a failure, and not claimed as one. We stopped watching; the
-        // chain did not stop working.
-        say(words.stillWaiting);
-        return;
-      }
-      // The indexer trails the chain. Re-reading before it catches up shows
-      // the world as it was BEFORE this entry.
-      await window.DaowowConfirm.awaitIndexer(ctx.rpc, landed.blockNumber);
+      }),
+      isLive: () => !disposed,
+      send: (fresh, beforeSign) => send(fresh, request.tickets, who, beforeSign),
+      watch: (txHash) => {
+        showHash(txHash);
+        return window.DaowowSendFlow.watchTransaction({ rpc: ctx.rpc, txHash });
+      },
+      say: (stage) => say(lines[stage] ?? ""),
+    });
+
+    busy = false;
+    if (outcome.stage === "refused") {
+      say("");
+      problem.append(errorBox(outcome.message));
+    } else if (outcome.stage === "not-sent") {
+      // The wallet said no, the broadcast failed, or the round was too busy.
+      // All three leave the player's funds where they were.
+      say("");
+      problem.append(errorBox(words.notSent, outcome.detail));
+    } else if (outcome.stage === "rejected") {
+      say("");
+      problem.append(errorBox(words.rejected, outcome.detail));
+    } else if (outcome.stage === "pending") {
+      // Sent, not yet confirmed. The form stays locked: pressing Enter again
+      // here is how someone pays twice.
+      finished = true;
+      say(words.pending);
+    } else if (outcome.stage === "confirmed") {
       finished = true;
       await ctx.store.refresh();
       say(copy().entryConfirmed(request.tickets));
       after.append(h("a", { class: "primary-button", href: "#/tickets" }, words.seeTickets));
-    } catch (e) {
-      // Contention that ran out of retries, a rejection, or the wallet saying
-      // no. All three leave the player's funds where they were.
-      say("");
-      problem.append(errorBox(words.notSent, e?.message ?? String(e)));
-    } finally {
-      busy = false;
-      paint();
     }
+    // If the player moved on while this was in flight, the outcome still has
+    // to reach them, wherever they are now.
+    if (disposed && outcome.txHash) {
+      ctx.notice(outcome.stage === "confirmed"
+        ? copy().entryConfirmed(request.tickets) : words.sentElsewhere);
+    }
+    paint();
   }
 
   paint();

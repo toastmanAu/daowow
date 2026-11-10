@@ -108,6 +108,15 @@ test("a re-read that failed stops the refund, even though old data is still in m
   assert.match(result.message, /can't reach the network/);
 });
 
+test("a network that is still catching up stops the refund", async () => {
+  const store = refundStore();
+  const refresh = store.refresh;
+  store.refresh = async () => { await refresh(); store.state.lagging = true; };
+  const result = await checkBeforeRefund({ store, roundId: "ab".repeat(32), outPoint: key });
+  assert.strictEqual(result.ok, false);
+  assert.match(result.message, /catching up/);
+});
+
 test("an entry that is gone or no longer refundable stops the refund", async () => {
   for (const store of [refundStore({ refundable: [] }), refundStore({ found: false }),
     refundStore({ refundable: [{ ...entry, outPoint: { txHash: key.txHash, index: 1 } }] })]) {

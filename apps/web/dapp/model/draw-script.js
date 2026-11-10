@@ -87,7 +87,30 @@ function drawPhase({ snapshot, tipHeight, hasDraw }) {
   return { phase: "countdown", blocksLeft, lastHeight };
 }
 
-const api = { MAX_BALLS, TUMBLE_MS, REVEAL_GAP_MS, seededRandom, buildDrawScript, drawPhase };
+/**
+ * Should the draw screen keep asking the network? Only while a sealed round
+ * is counting down to a result. A result that failed its check will fail it
+ * again in fifteen seconds, and an unsealed round is covered by the page's
+ * ordinary once-a-minute read.
+ */
+function needsPolling({ snapshot, draw, drawError }) {
+  return Boolean(snapshot.seal) && !snapshot.record && !draw && !drawError;
+}
+
+/**
+ * Has the result changed since it was first shown? A block the result
+ * depended on can be replaced; if that happens after winners were on screen,
+ * the screen must say so rather than quietly show different winners.
+ */
+function resultChanged(firstSeed, draw) {
+  if (firstSeed === null || firstSeed === undefined) return false;
+  return !draw || draw.seed !== firstSeed;
+}
+
+const api = {
+  MAX_BALLS, TUMBLE_MS, REVEAL_GAP_MS, seededRandom, buildDrawScript, drawPhase,
+  needsPolling, resultChanged,
+};
 if (typeof module !== "undefined" && module.exports) module.exports = api;
 if (typeof window !== "undefined") window.DaowowDrawScript = api;
 })();

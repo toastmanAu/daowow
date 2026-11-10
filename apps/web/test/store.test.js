@@ -61,12 +61,13 @@ function readers(over = {}) {
     scriptHash: () => "ab".repeat(32),
     isTrustedRound: () => true,
     isSoundRound: () => true,
+    readIndexerTip: log("readIndexerTip", 2000000n),
     ...over,
   };
 }
-const make = (over) => {
+const make = (over, options = {}) => {
   const r = readers(over);
-  return { r, store: createStore({ manifest: { rpcUrl: "https://node.example" }, rpc: { url: "x" }, readers: r }) };
+  return { r, store: createStore({ manifest: { rpcUrl: "https://node.example" }, rpc: { url: "x" }, readers: r, ...options }) };
 };
 
 test("a failing node leaves status 'error' and does not throw", async () => {
@@ -155,6 +156,86 @@ test("a sealed round is drawn from the browser's own record once the last block 
   await store.refresh();
   assert.strictEqual(store.state.rows[0].view.state, S.DRAWN);
   assert.strictEqual(store.state.rows[0].draw.positions.length, 2);
+});
+
+test("the result is not final until the last block has three blocks on top of it", async () => {
+  // A block at the very tip can still be replaced. Showing winners from it,
+  // then different winners a moment later, is worse than waiting half a minute.
+  const sealed = snap(A, { seal: { seal: SEAL, inclusionHeight: 1234567n } });
+  const at = async (offset) => {
+    const { store } = make({ readDeployment: async () => [sealed], readTip: async () => tipHeader(1234567n + offset) });
+    await store.refresh();
+    return store.state.rows[0];
+  };
+  for (const offset of [192n, 193n, 194n]) {
+    const row = await at(offset);
+    assert.strictEqual(row.view.state, S.WAITING, `+${offset}`);
+    assert.strictEqual(row.draw, null);
+  }
+  assert.strictEqual((await at(195n)).view.state, S.DRAWN);
+});
+
+test("a read that never answers becomes an error with a Retry, not an endless wait", async () => {
+  const { store } = make({ readTip: () => new Promise(() => {}) }, { timeoutMs: 30 });
+  await store.refresh();
+  assert.strictEqual(store.state.status, "error");
+  assert.match(store.state.error, /too long/);
+});
+
+test("a read that answers after it was given up on cannot overwrite what came later", async () => {
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  let n = 0;
+  const { store } = make({
+    readTip: async () => { n += 1; if (n === 1) { await gate; return tipHeader(100n); } return tipHeader(2000000n); },
+  }, { timeoutMs: 30 });
+  await store.refresh();                 // times out
+  await store.refresh();                 // succeeds
+  release();
+  await new Promise((r) => setTimeout(r, 20));
+  assert.strictEqual(store.state.status, "ready");
+  assert.strictEqual(store.state.tip.height, 2000000n);
+});
+
+test("refreshes that pile up behind a slow read share ONE further read", async () => {
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  let reads = 0;
+  const { store } = make({
+    readTip: async () => { reads += 1; if (reads === 1) await gate; return tipHeader(2000000n); },
+  });
+  const all = [store.refresh(), store.refresh(), store.refresh(), store.refresh(), store.refresh()];
+  await new Promise((r) => setTimeout(r, 10));
+  release();
+  await Promise.all(all);
+  assert.strictEqual(reads, 2, "one running, one queued for everyone who came after");
+});
+
+test("an indexer far behind the chain is reported as lagging", async () => {
+  const behind = make({ readIndexerTip: async () => 2000000n - 9n });
+  await behind.store.refresh();
+  assert.strictEqual(behind.store.state.lagging, true);
+  const close = make({ readIndexerTip: async () => 2000000n - 8n });
+  await close.store.refresh();
+  assert.strictEqual(close.store.state.lagging, false);
+});
+
+test("a subscriber that throws does not break the refresh or the other subscribers", async () => {
+  const { store } = make();
+  let heard = 0;
+  store.subscribe(() => { throw new Error("a view blew up"); });
+  store.subscribe(() => { heard += 1; });
+  await store.refresh();
+  assert.strictEqual(store.state.status, "ready");
+  assert.ok(heard >= 1);
+});
+
+test("a pool that could not be read is marked as unknown, not as 'no pool yet'", async () => {
+  const { store } = make({ readPoolSoFar: async () => { throw new Error("no header"); } });
+  await store.refresh();
+  assert.strictEqual(store.state.rows[0].pool, null);
+  assert.strictEqual(store.state.rows[0].poolUnknown, true);
+  assert.strictEqual(store.state.rows[1].poolUnknown, false);
 });
 
 test("a sealed round one block short of its last entropy block is waiting, with no draw", async () => {

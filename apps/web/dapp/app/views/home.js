@@ -51,7 +51,8 @@ function prizes(row) {
       h("li", { class: r.open ? "" : "muted" },
         copy().placeLine(r.place, r.share, r.opensAt, r.open, r.reachable)))),
     h("p", { class: row.pool === null ? "muted" : "figure" },
-      row.pool === null ? copy().text.noPoolYet : copy().poolLine(row.pool)));
+      row.pool !== null ? copy().poolLine(row.pool)
+        : row.poolUnknown ? copy().text.poolUnknown : copy().text.noPoolYet));
 }
 
 function enterButton(row) {
@@ -69,13 +70,20 @@ function enterButton(row) {
   ];
 }
 
+const liveParts = () => ({ round: el("home-round"), timeline: el("home-timeline"),
+  cost: el("home-cost"), prizes: el("home-prizes"), enter: el("home-enter") });
+
+/** Clears every figure that came from the chain. */
+export function reset() {
+  for (const part of Object.values(liveParts())) clear(part);
+}
+
 export function render(node, ctx) {
   const { state } = ctx.store;
   const row = ctx.store.currentRound();
   clear(node);
-  const parts = { round: el("home-round"), timeline: el("home-timeline"), cost: el("home-cost"),
-    prizes: el("home-prizes"), enter: el("home-enter") };
-  for (const part of Object.values(parts)) clear(part);
+  const parts = liveParts();
+  reset();
   if (!row) {
     parts.round.append(h("div", { class: "card" }, h("p", { class: "empty" }, copy().text.noRounds)));
     parts.enter.append(...enterButton(null));
