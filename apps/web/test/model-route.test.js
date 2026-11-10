@@ -45,6 +45,16 @@ test("an unknown panel or path is unknown", () => {
   assert.strictEqual(parseRoute("#/admin").unknown, true);
   assert.strictEqual(parseRoute("#/rounds/extra").unknown, true);
 });
+test("the demo draw has its own route, with no round in it", () => {
+  assert.deepStrictEqual(parseRoute("#/demo"),
+    { tab: "home", round: null, panel: "demo", unknown: false });
+  assert.strictEqual(formatRoute({ panel: "demo" }), "#/demo");
+  assert.deepStrictEqual(parseRoute(formatRoute({ panel: "demo" })).panel, "demo");
+  // It is not a tab and not a round panel.
+  assert.strictEqual(parseRoute("#/demo/extra").unknown, true);
+  assert.strictEqual(parseRoute("#/round/affb66f7/demo").unknown, true);
+  assert.strictEqual(parseRoute("#/Demo").unknown, true);
+});
 test("format emits a short round id and round-trips through parse", () => {
   assert.strictEqual(formatRoute({ tab: "tickets" }), "#/tickets");
   const link = formatRoute({ round: "AFFB66F7" + "00".repeat(28), panel: "enter" });

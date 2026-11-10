@@ -30,6 +30,7 @@ const PAGES = {
     "DaowowEntropyDerive", "DaowowDaoYield", "DaowowEntryView", "DaowowTime", "DaowowRoundState",
     "DaowowTickets", "DaowowRoute", "DaowowPrizeEstimate", "DaowowCopy", "DaowowStore",
     "DaowowTimeline", "DaowowEntryGuard", "DaowowRefundGuard", "DaowowDrawScript", "DaowowSendFlow",
+    "DaowowDemoDraw",
   ],
 };
 

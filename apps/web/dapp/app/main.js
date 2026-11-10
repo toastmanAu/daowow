@@ -13,6 +13,7 @@ import * as rounds from "./views/rounds.js";
 import * as tickets from "./views/tickets.js";
 import * as enter from "./views/enter.js";
 import * as draw from "./views/draw.js";
+import * as demoDraw from "./views/demo-draw.js";
 
 const el = (id) => document.getElementById(id);
 const copy = () => window.DaowowCopy;
@@ -203,8 +204,16 @@ function createApp({ manifest, store }) {
       h("a", { class: "secondary-button", href: "#/rounds" }, copy().text.seeRounds)));
   }
 
+  // The panel's way back: to Rounds from a round, to Home from the demo.
+  function setBack(tab) {
+    const link = el("panel-back");
+    link.textContent = tab === "home" ? copy().text.backHome : copy().text.backRounds;
+    link.setAttribute("href", window.DaowowRoute.formatRoute({ tab }));
+  }
+
   function renderPanel(r) {
     const node = el("panel-body");
+    setBack("rounds");
     show("view-panel", "rounds");
     const state = store.state;
     if (r.unknown) { dropPanel(); notFound(node); return; }
@@ -221,6 +230,16 @@ function createApp({ manifest, store }) {
     dropPanel();
     const given = SIGNING_PANELS.includes(r.panel) ? signingCtx() : ctx;
     panel = { key, handle: PANEL_VIEWS[r.panel].mount(node, given, row) };
+  }
+
+  // The demo draw needs no round, no wallet and no answer from the network,
+  // so it is shown at once and a refresh never restarts it.
+  function renderDemo() {
+    setBack("home");
+    show("view-panel", "home");
+    if (panel && panel.key === "demo") return;
+    dropPanel();
+    panel = { key: "demo", handle: demoDraw.mount(el("panel-body")) };
   }
 
   function renderTab(tab) {
@@ -256,7 +275,9 @@ function createApp({ manifest, store }) {
       showNotice(lagShown ? copy().errors.lagging : "");
     }
     const r = route();
-    if (r.unknown || r.panel) renderPanel(r); else renderTab(r.tab);
+    if (r.panel === "demo") renderDemo();
+    else if (r.unknown || r.panel) renderPanel(r);
+    else renderTab(r.tab);
   }
 
   return { render, ctx, setSigning(fn) { walletSigning = fn; } };

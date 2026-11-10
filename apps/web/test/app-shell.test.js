@@ -127,10 +127,44 @@ test("the stage frees what it allocates and caps the pixel ratio", () => {
   assert.match(src, /setPixelRatio\(Math\.min\(window\.devicePixelRatio[^)]*, 2\)\)/);
 });
 
-test("the draw screen falls back to the list for reduced motion and for a failed stage", () => {
-  const src = code(read("dapp/app/views/draw.js"));
+test("the result player falls back to the list for reduced motion and for a failed stage", () => {
+  const src = code(read("dapp/app/draw/player.js"));
   assert.match(src, /prefers-reduced-motion: reduce/);
   assert.match(src, /catch\s*\{[\s\S]*?asList\(/);
+  // Both screens that show a result go through it rather than their own copy.
+  for (const view of ["draw.js", "demo-draw.js"]) {
+    const v = code(read(`dapp/app/views/${view}`));
+    assert.match(v, /createPlayer\(/, view);
+    assert.doesNotMatch(v, /createStage|draw\/stage\.js/, view);
+  }
+});
+
+// --- the demo draw -----------------------------------------------------------
+test("Home links to the demo draw, and the demo needs nothing from the network or a wallet", () => {
+  assert.match(html, /<a[^>]*class="secondary-button"[^>]*href="#\/demo"/);
+  const src = code(read("dapp/app/views/demo-draw.js"));
+  assert.doesNotMatch(src, /ctx\.|store|rpc|session|fetch\(/);
+  assert.match(src, /window\.DaowowDemoDraw/);
+  assert.match(src, /\.buildDemoDraw\(run\)/);
+  assert.doesNotMatch(src, /Math\.random|crypto\.getRandomValues|Date\.now/);
+});
+
+test("the demo says it is a demo before anything else on its screen", () => {
+  const src = code(read("dapp/app/views/demo-draw.js"));
+  const notice = src.indexOf("words.notice");
+  const player = src.indexOf("player.nodes");
+  assert.ok(notice > 0 && player > notice, "the notice comes before the machine");
+  const copy = require("../dapp/model/copy.js");
+  assert.match(copy.text.demo.notice, /demonstration/i);
+  assert.match(copy.text.demo.notice, /made up/i);
+  assert.match(copy.text.demo.title, /demo/i);
+});
+
+test("the demo route is shown without waiting for the chain", () => {
+  const main = code(read("dapp/app/main.js"));
+  assert.match(main, /r\.panel === "demo"\) renderDemo\(\)/);
+  const body = main.slice(main.indexOf("function renderDemo"), main.indexOf("function renderTab"));
+  assert.doesNotMatch(body, /state\.status|store\./);
 });
 
 test("only the entry and refund views can reach the signing operations", () => {

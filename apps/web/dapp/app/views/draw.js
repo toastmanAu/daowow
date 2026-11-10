@@ -6,18 +6,15 @@
 // result or shows nothing. If the check failed there are no winners on
 // screen, only the error.
 import { h, clear } from "../dom.js";
-import { renderResultList, resultItem } from "../draw/fallback.js";
+import { createPlayer } from "../draw/player.js";
 
 const copy = () => window.DaowowCopy;
 const COUNTDOWN_REFRESH_MS = 15000;
 
-const reducedMotion = () =>
-  window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-
 export function mount(node, ctx, firstRow) {
   const words = copy().text.draw;
   let row = firstRow;
-  let stage = null;
+  let player = null; // the machine or list showing the current result
   let shownKey = null;
   let firstSeed = null; // the first result this screen showed
   let disposed = false;
@@ -25,8 +22,8 @@ export function mount(node, ctx, firstRow) {
   clear(node).append(body);
 
   const stopStage = () => {
-    if (stage) { try { stage.dispose(); } catch { /* already freed */ } }
-    stage = null;
+    if (player) player.dispose();
+    player = null;
   };
 
   function myPositions() {
@@ -42,7 +39,7 @@ export function mount(node, ctx, firstRow) {
       h("h2", {}, `${row.label} · ${words.title}`), h("p", {}, text), extra ?? null));
   }
 
-  async function showResult(phase) {
+  function showResult(phase) {
     const mine = myPositions();
     // Painted once per result. The store re-reads the chain every minute and
     // that must not restart an animation someone is watching.
@@ -60,52 +57,13 @@ export function mount(node, ctx, firstRow) {
       return;
     }
 
-    const rail = h("ol", { class: "rail", "aria-live": "polite" });
-    const host = h("div", { class: "draw-stage", hidden: true });
-    const note = h("p", { class: "muted", hidden: true });
-    const skip = h("button", { class: "secondary-button", type: "button" }, words.skip);
-    const replay = h("button", { class: "secondary-button", type: "button" }, words.replay);
-    const controls = h("div", { class: "actions", hidden: true }, skip, replay);
+    player = createPlayer(script);
     clear(body).append(h("div", { class: "card" },
       h("h2", {}, `${row.label} · ${words.title}`),
       honesty,
-      host,
-      controls,
-      h("h3", {}, words.results),
-      rail,
-      note,
+      ...player.nodes,
       ctx.store.state.session ? null : h("p", { class: "muted" }, words.connectHint)));
-
-    const asList = (why) => {
-      host.hidden = true;
-      controls.hidden = true;
-      if (why) { note.textContent = why; note.hidden = false; }
-      renderResultList(rail, script);
-    };
-    if (reducedMotion()) { asList(null); return; }
-
-    try {
-      // Loaded only when a draw is actually watched: the 3D library is the
-      // largest file on the site and most visits never need it.
-      const { createStage } = await import("../draw/stage.js");
-      if (disposed || shownKey !== key) return;
-      const canvas = h("canvas", { role: "img", "aria-label": words.stage });
-      host.append(canvas);
-      host.hidden = false;
-      stage = createStage(canvas, script, {
-        onReveal: (reveal) => rail.append(resultItem(reveal)),
-        onDone: () => {},
-      });
-      controls.hidden = false;
-      skip.addEventListener("click", () => stage && stage.skip());
-      replay.addEventListener("click", () => { clear(rail); if (stage) stage.replay(); });
-      stage.play();
-    } catch {
-      // No WebGL, or the scene failed. The result is the same list either way.
-      stopStage();
-      clear(host);
-      asList(copy().errors.noWebgl);
-    }
+    player.start();
   }
 
   function paint() {

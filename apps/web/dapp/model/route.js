@@ -7,12 +7,14 @@
 //
 //   #/home  #/rounds  #/tickets  #/how
 //   #/round/<id prefix>/enter    #/round/<id prefix>/draw
+//   #/demo                       the demo draw: a panel with no round
 //
 // The hash is attacker-reachable, so it is matched against this closed set
 // and nothing from it is ever echoed back to the page.
 
 const TABS = Object.freeze(["home", "rounds", "tickets", "how"]);
 const PANELS = Object.freeze(["enter", "draw"]);
+const DEMO = "demo";
 // At least 8 characters: ids can be ground to collide on a short prefix, and
 // a link that could mean two rounds must mean neither.
 const ROUND_TOKEN = /^[0-9a-f]{8,64}$/i;
@@ -26,6 +28,9 @@ function parseRoute(hash) {
   if (parts.length === 1 && TABS.includes(parts[0])) {
     return { tab: parts[0], round: null, panel: null, unknown: false };
   }
+  if (parts.length === 1 && parts[0] === DEMO) {
+    return { tab: "home", round: null, panel: DEMO, unknown: false };
+  }
   if (parts.length === 3 && parts[0] === "round"
       && ROUND_TOKEN.test(parts[1]) && PANELS.includes(parts[2])) {
     return { tab: "rounds", round: parts[1].toLowerCase(), panel: parts[2], unknown: false };
@@ -34,6 +39,7 @@ function parseRoute(hash) {
 }
 
 function formatRoute({ tab, round, panel }) {
+  if (panel === DEMO) return `#/${DEMO}`;
   if (round && panel) {
     return `#/round/${String(round).replace(/^0x/, "").toLowerCase().slice(0, 8)}/${panel}`;
   }
