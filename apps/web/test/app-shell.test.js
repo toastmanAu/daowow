@@ -144,3 +144,12 @@ test("only the entry and refund views can reach the signing operations", () => {
     assert.doesNotMatch(code(read(f)), /signEntry|\.broadcast\(/, f);
   }
 });
+
+test("the three retired pages are script-free redirects into the app", () => {
+  for (const [page, to] of [["entry.html", "./#/rounds"], ["refund.html", "./#/tickets"], ["how-it-works.html", "./#/how"]]) {
+    const old = read(`dapp/${page}`);
+    assert.ok(old.includes(`<meta http-equiv="refresh" content="0; url=${to}">`), page);
+    assert.doesNotMatch(old, /<script|<link|<style|\son[a-z]+=/, page);
+    assert.match(old, /http-equiv="Content-Security-Policy" content="default-src 'none'"/, page);
+  }
+});

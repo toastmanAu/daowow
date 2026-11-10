@@ -7,8 +7,9 @@ const assert = require("node:assert");
 const fs = require("node:fs");
 const path = require("node:path");
 
-const PAGE = fs.readFileSync(
-  path.join(__dirname, "..", "dapp", "how-it-works.html"), "utf8");
+// How it works is a tab of the one app now; the section is what is tested.
+const SHELL = fs.readFileSync(path.join(__dirname, "..", "dapp", "index.html"), "utf8");
+const PAGE = (SHELL.match(/<section id="view-how"[\s\S]*?<\/section>/) ?? [""])[0];
 const text = PAGE.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
 
 test("it leads with the fact everything else depends on", () => {
@@ -43,8 +44,12 @@ test("it says what works today and what does not", () => {
   const section = text.slice(text.indexOf("What works today"));
   assert.ok(section.length > 200, "the section must exist");
   assert.match(section, /not yet available in this interface/i);
-  for (const unbuilt of ["Transferring", "Redeeming", "Retiring", "animated draw"]) {
-    assert.match(section, new RegExp(unbuilt, "i"), `${unbuilt} must be listed as unbuilt`);
+  const [working, unbuilt] = section.split(/not yet available in this interface/i);
+  for (const built of ["Entering a round", "Refunding", "My tickets", "animated draw"]) {
+    assert.match(working, new RegExp(built, "i"), `${built} must be listed as working`);
+  }
+  for (const missing of ["Transferring", "Claiming a prize", "Retiring"]) {
+    assert.match(unbuilt, new RegExp(missing, "i"), `${missing} must be listed as unbuilt`);
   }
 });
 
@@ -59,4 +64,16 @@ test("it does not promise returns or call testnet funds valuable", () => {
   assert.match(text, /no monetary value|no real value/i);
   assert.doesNotMatch(text, /guaranteed (return|profit|yield)/i);
   assert.doesNotMatch(text, /risk[- ]free/i);
+});
+
+test("the draw section names the four blocks correctly", () => {
+  // The seal's own block, then 64, 128 and 192 after it. 256 is how long the
+  // operator must wait before writing the result down, not a fifth source.
+  assert.match(text, /the block that sealed the entries, and the blocks 64, 128 and 192 after it/i);
+  assert.match(text, /256 blocks/);
+});
+
+test("the section sits in the app shell and has real content", () => {
+  assert.ok(text.length > 3000, "the full explanation must have moved in");
+  assert.match(PAGE, /<h1[^>]*>How it works<\/h1>/);
 });

@@ -38,3 +38,6 @@ reclaim.json
 # round creation working file
 create-round.json
 .superpowers/
+
+# The assembled public site (tools/build-site.mjs)
+/dist/

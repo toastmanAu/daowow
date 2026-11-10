@@ -117,8 +117,177 @@
     <div id="tickets-live" aria-live="polite"></div>
   </section>
 
-  <section id="view-how" hidden>
+  <section id="view-how" class="prose" hidden>
     <h1 tabindex="-1">How it works</h1>
+
+    <p class="lede">
+      Prizes are funded by Nervos DAO yield on the pooled principal. Entrants
+      get their principal back whether they win or lose. Nobody's stake pays
+      anybody else's prize.
+    </p>
+
+    <p>
+      That is the whole design, and it is the opposite of a conventional
+      lottery. There is no pot of losers' money. What is at stake is the
+      <em>interest</em> the pool earns while it is locked, not the pool itself.
+    </p>
+    <p class="aside">
+      This page is the full detail, in the network's own terms. The other
+      tabs say the same things in plainer words.
+    </p>
+
+    <h2>Where the prizes come from</h2>
+    <p>
+      Every ticket's principal is deposited into the
+      <strong>Nervos DAO</strong>, the protocol-level savings mechanism built
+      into CKB. A deposit earns yield over 180-epoch cycles, roughly a month
+      each. A round runs for one or two of those cycles.
+    </p>
+    <p>
+      When the round settles, the principal returns to whoever deposited it,
+      and the <em>yield</em> becomes the prize pool. A winner receives a share
+      of that interest. A non-winner receives exactly what they put in.
+    </p>
+    <p class="aside">
+      This also means a round with few entrants has a small pool. Yield is
+      proportional to how much was deposited and for how long. It is not
+      topped up from anywhere.
+    </p>
+
+    <h2>How many places pay</h2>
+    <p>
+      More entrants, more places paid, the way a poker tournament pays more of
+      a larger field. Each round commits to a payout table in advance, and a
+      place only starts paying once the round reaches its threshold.
+    </p>
+    <p>
+      The table is fixed when the round is created and cannot be changed
+      afterwards by anyone, including whoever created it. Home and the entry
+      screen show the live table: how many places the round pays now, and what
+      would open next.
+    </p>
+    <p class="aside">
+      Paying fewer, larger prizes in a small round is deliberate. A prize
+      below about 61 CKB cannot even be paid into its own cell without being
+      topped up, so spreading a small pool across five places would produce
+      prizes too small to deliver.
+    </p>
+
+    <h2>How winners are chosen</h2>
+    <p>
+      First the entry list is <strong>sealed</strong>: once the round closes,
+      the exact set of tickets is fixed and committed on chain. Only then is
+      the randomness drawn.
+    </p>
+    <p>
+      The randomness comes from the hashes of <strong>four separate
+      blocks</strong>: the block that sealed the entries, and the blocks 64,
+      128 and 192 after it. Nobody, including whoever created the round, can
+      know the later hashes when entry closes, because those blocks do not
+      exist yet. The four hashes are combined with the round's own identity
+      into a single seed, and winning ticket positions are drawn from it.
+    </p>
+    <p>
+      The result is fixed the moment the last of those blocks is mined. This
+      app works it out itself at that point and starts the draw. The round's
+      operator writes the same result on chain once the seal is 256 blocks
+      old, and the app checks that the two agree before showing anything.
+    </p>
+    <p>
+      Anyone can recompute the result. The seal, the block hashes and the seed
+      derivation are all public, so the draw can be checked independently
+      rather than trusted. The animated draw only reveals that result; it
+      never chooses one.
+    </p>
+    <div class="caveat">
+      <h3>What this is not</h3>
+      <p>
+        This is <strong>not a verifiable random function and not a randomness
+        beacon</strong>. It relies on block hashes that miners produce. A
+        miner who controlled the specific blocks used could in principle
+        discard unfavourable ones and try again, "grinding" the result.
+      </p>
+      <p>
+        Sealing the entry list first means nobody can choose entropy to suit a
+        field they already know, and using four blocks spread across roughly
+        half an hour makes influence far harder than a single block would. But
+        the honest description is that this raises the cost of manipulation
+        rather than making it impossible.
+      </p>
+      <p>
+        This app also reads the chain through one public node. It checks the
+        operator's record against the block hashes, but both come from that
+        node, so the result on screen is as trustworthy as the node is.
+      </p>
+    </div>
+
+    <h2>What a ticket actually is</h2>
+    <p>
+      Each ticket mints a <strong>claim NFT</strong> into your own wallet, in
+      the same transaction as the entry. It is a real cell on chain, not a
+      database row, and it carries the ticket's identity: which round, which
+      position.
+    </p>
+    <p>
+      The claim holds the right to that ticket's prize, and it can be sent to
+      another wallet. Whoever holds a winning claim collects its prize, so My
+      tickets shows the claims your wallet holds now. Your principal and any
+      refund stay bound to you as the depositor and do not travel with it.
+    </p>
+
+    <h2>What it costs beyond the principal</h2>
+    <p>
+      On CKB, storing anything on chain means locking capacity for as long as
+      it exists. A claim NFT needs about <strong>222 CKB</strong> of capacity
+      with a JoyID wallet, and one is minted per ticket. An entry also needs
+      about 237 CKB for its own record. The other tabs call these the ticket
+      deposit and the storage deposit.
+    </p>
+    <p>
+      This capacity is <strong>locked, not spent</strong>. It returns to you
+      when the claim is retired at the end of the round. The entry screen
+      lists every part separately, so the total you confirm is the total
+      committed. The only thing spent is the network fee.
+    </p>
+
+    <h2>How long your funds are committed</h2>
+    <p>
+      A round lasts one or two native DAO cycles, roughly 30 to 60 days. Your
+      principal and the capacity above are locked for that whole period.
+      Nervos DAO deposits cannot be withdrawn early without forfeiting the
+      cycle's yield, which is why the duration is fixed when the round is
+      created.
+    </p>
+
+    <h2>What works today</h2>
+    <div class="caveat">
+      <p>
+        This is a <strong>testnet demonstration</strong>. Testnet CKB has no
+        monetary value.
+      </p>
+      <p>Working in this build:</p>
+      <ul>
+        <li>Connecting a wallet once and seeing every round</li>
+        <li>Entering a round, which mints your claim NFTs</li>
+        <li>My tickets: what your wallet holds in every round, and whether it won</li>
+        <li>
+          Refunding an entry the round did not accept, but only once the round
+          has been frozen and its ledger closed. A passed deadline alone does
+          not release an entry.
+        </li>
+        <li>The animated draw, live as the result is fixed and as a replay afterwards</li>
+      </ul>
+      <p>Specified and built in the contracts, but <strong>not yet available in this interface</strong>:</p>
+      <ul>
+        <li>Transferring a claim to someone else</li>
+        <li>Claiming a prize (redeeming a winning claim)</li>
+        <li>Retiring a claim, which returns its ticket deposit and gives a winner their memento</li>
+      </ul>
+      <p>
+        Those arrive in later milestones. Nothing in this app describes a
+        feature as usable here before it is.
+      </p>
+    </div>
   </section>
 
   <section id="view-panel" hidden>
