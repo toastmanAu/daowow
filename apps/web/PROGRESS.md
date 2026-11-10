@@ -7,6 +7,14 @@
 > that older model and is kept as history, not as a description of the
 > protocol. The live, chain-connected view is `apps/web/dapp/`, specified in
 > `docs/superpowers/specs/2026-09-18-dapp-foundation-design.md`.
+>
+> Since 2026-11-10 `apps/web/dapp/` is ONE app (`index.html`): connect once,
+> then Home, Rounds, My tickets and How it works as tabs, with entering,
+> refunds and the animated draw inside it. It loads its own `manifest.json`
+> and needs no URL parameters. Design:
+> `docs/superpowers/specs/2026-11-10-one-page-dapp-design.md`. To run it, serve
+> the repository root and open `/apps/web/dapp/`; to publish it, see
+> `docs/deploy-daowow-org.md`.
 
 
 2026-09-15: a separate consumer-facing `entry.html` preview now provides ticket
