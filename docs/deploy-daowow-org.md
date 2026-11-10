@@ -34,20 +34,29 @@ anything but the node address, and the page's security policy only allows
 connections to that one host, so changing the node means changing both
 `apps/web/dapp/index.html` and `apps/web/site/_headers`.
 
-## Cloudflare Pages, once
+## Publishing with wrangler
 
-1. Workers & Pages → Create → Pages → Connect to Git → this repository.
-2. Production branch: `main`.
-3. Build command: `node tools/build-site.mjs`
-4. Build output directory: `dist/site`
-5. No environment variables and no secrets are needed.
-6. Custom domains → add `daowow.org` (the domain is already on Cloudflare, so
-   the DNS record is created for you).
-7. SSL/TLS → Edge Certificates → turn on **Always Use HTTPS**. JoyID on a
+The Pages project is `daowow` (created 2026-11-10 as a direct-upload project,
+production branch `main`). It is served at <https://daowow.pages.dev/>.
+
+```sh
+node --test 'apps/web/test/*.test.js'
+node tools/build-site.mjs
+wrangler pages deploy dist/site --project-name daowow --branch main
+```
+
+Deploying with any other `--branch` name gives a preview address instead of
+replacing the live site, which is the place to try a change on a phone first.
+
+## Pointing daowow.org at it, once
+
+wrangler has no command for this; it is done in the dashboard.
+
+1. Workers & Pages → `daowow` → Custom domains → Set up a custom domain →
+   `daowow.org`. The domain is already on Cloudflare, so the DNS record is
+   created for you.
+2. SSL/TLS → Edge Certificates → turn on **Always Use HTTPS**. JoyID on a
    phone will not work without HTTPS.
-
-Every push to a branch other than `main` gets its own preview address, which
-is the place to try the app on a phone before it reaches daowow.org.
 
 ## Checking a build before it goes out
 
