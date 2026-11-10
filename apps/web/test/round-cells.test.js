@@ -1,0 +1,139 @@
+"use strict";
+// One read of the whole deployment. The app lists every round, and a scan per
+// round against a public node grows with the square of the round count.
+const { test } = require("node:test");
+const assert = require("node:assert");
+const F = require("./helpers/fake-chain.js");
+const { readDeployment, findClaims, findMyEntries, decodeClaimArgs } =
+  require("../chain/round-cells.js");
+const { decodeRoundConfigV1, encodeEntryShardDataV1 } = require("../chain/codec.js");
+const { decodeAggregationState } = require("../chain/ledger-codec.js");
+const { encodeClaimArgs } = require("../chain/entry-codec.js");
+
+const A = F.CONFIG;
+const B_BYTES = F.variantConfigBytes();
+const B = decodeRoundConfigV1(B_BYTES);
+const LEDGER_HEX = F.V.round_seal.ledger_hex;
+const LEDGER = decodeAggregationState(F.unhex(LEDGER_HEX));
+const shardBytes = (roundId) => encodeEntryShardDataV1({ ...LEDGER.frozen, roundId });
+
+// Round A carries the vector's record; round B is a fresh round with a shard.
+const twoRounds = () => [
+  F.roundCell(B_BYTES),                      // newest FIRST, as an indexer might
+  F.roundCell(F.CONFIG_BYTES),
+  F.shardTypeCell(A.commitment, F.V.entropy_record.hex),
+  F.shardTypeCell(B.commitment, F.hex(shardBytes(B.roundId))),
+];
+
+test("readDeployment buckets each cell under its own round", async () => {
+  const rounds = await readDeployment(F.fakeRpc(twoRounds()), F.MANIFEST);
+  assert.strictEqual(rounds.length, 2);
+  assert.strictEqual(rounds[0].config.roundId, A.roundId);
+  assert.strictEqual(rounds[0].record.record.inclusionHeight, 1234567n); // the vector's own height
+  assert.strictEqual(rounds[0].ledger, null);
+  assert.strictEqual(rounds[0].shards.length, 0);
+  assert.strictEqual(rounds[1].shards.length, 1);
+  assert.strictEqual(rounds[1].ledger, null);
+  assert.strictEqual(rounds[1].seal, null);
+  assert.strictEqual(rounds[1].record, null);
+  assert.strictEqual(typeof rounds[1].outPoint.index, "number");
+});
+
+test("rounds come back oldest first whatever order the indexer used", async () => {
+  const rounds = await readDeployment(F.fakeRpc(twoRounds()), F.MANIFEST);
+  assert.ok(rounds[0].config.entryStart < rounds[1].config.entryStart);
+});
+
+test("a closed ledger is attached to its round", async () => {
+  const rounds = await readDeployment(F.fakeRpc([
+    F.roundCell(F.CONFIG_BYTES), F.shardTypeCell(A.commitment, LEDGER_HEX, { capacity: 317n }),
+  ]), F.MANIFEST);
+  assert.strictEqual(rounds[0].ledger.state.closed, true);
+  assert.strictEqual(rounds[0].ledger.capacity, 31700000000n);
+});
+
+test("a seal carries the block it was included in", async () => {
+  const rounds = await readDeployment(F.fakeRpc([
+    F.roundCell(F.CONFIG_BYTES), F.shardTypeCell(A.commitment, F.V.round_seal.hex, { block: 1000n }),
+  ]), F.MANIFEST);
+  assert.strictEqual(rounds[0].seal.inclusionHeight, 1000n);
+  assert.strictEqual(rounds[0].seal.seal.ledgers.length, 1);
+  assert.strictEqual(rounds[0].record, null);
+});
+
+test("a cell of the right length but the wrong version byte is ignored", async () => {
+  const bad = "09" + LEDGER_HEX.slice(2);
+  const rounds = await readDeployment(F.fakeRpc([
+    F.roundCell(F.CONFIG_BYTES), F.shardTypeCell(A.commitment, bad),
+  ]), F.MANIFEST);
+  assert.strictEqual(rounds[0].ledger, null);
+});
+
+test("a ledger whose args name another round's commitment is not attached", async () => {
+  const rounds = await readDeployment(F.fakeRpc([
+    F.roundCell(F.CONFIG_BYTES), F.shardTypeCell(B.commitment, LEDGER_HEX),
+  ]), F.MANIFEST);
+  assert.strictEqual(rounds[0].ledger, null);
+});
+
+test("the scan count does not grow with the number of rounds", async () => {
+  const scans = async (cells) => {
+    const rpc = F.fakeRpc(cells);
+    await readDeployment(rpc, F.MANIFEST);
+    return rpc.calls.filter((c) => c.method === "get_cells").length;
+  };
+  const five = [1, 2, 3, 4, 5].flatMap((i) => {
+    const bytes = F.variantConfigBytes({ idByte: i, entryStart: BigInt(3000 + i) });
+    const c = decodeRoundConfigV1(bytes);
+    return [F.roundCell(bytes), F.shardTypeCell(c.commitment, F.hex(shardBytes(c.roundId)))];
+  });
+  assert.strictEqual(await scans([F.roundCell(F.CONFIG_BYTES)]), 2);
+  assert.strictEqual(await scans(five), 2);
+});
+
+const claimType = (commitment, position) => F.script("entry-shard-type",
+  "0x" + F.hex(encodeClaimArgs({ commitment: F.unhex(commitment), shardId: 0, position })));
+
+test("findClaims returns only claim-typed cells under the lock", async () => {
+  const cells = [
+    F.cell({ lock: F.WALLET_LOCK, type: claimType(A.commitment, 3n), capacity: 222n }),
+    F.cell({ lock: F.WALLET_LOCK, type: claimType(A.commitment, 7n), capacity: 222n }),
+    F.cell({ lock: F.WALLET_LOCK }),
+    F.cell({ lock: F.WALLET_LOCK, type: { codeHash: "0x" + "ee".repeat(32), hashType: "data1", args: claimType(A.commitment, 1n).args } }),
+    F.cell({ lock: { ...F.WALLET_LOCK, args: "0x" + "cd".repeat(22) }, type: claimType(A.commitment, 9n) }),
+  ];
+  const claims = await findClaims(F.fakeRpc(cells), F.MANIFEST, F.WALLET_LOCK);
+  assert.deepStrictEqual(claims.map((c) => c.position), [3n, 7n]);
+  assert.strictEqual(claims[0].commitment, A.commitment);
+  assert.strictEqual(claims[0].shardId, 0);
+  assert.strictEqual(claims[0].capacity, 22200000000n);
+});
+
+test("decodeClaimArgs round-trips encodeClaimArgs, and rejects wrong length or tag", () => {
+  const args = encodeClaimArgs({ commitment: F.unhex(A.commitment), shardId: 2, position: 41n });
+  assert.deepStrictEqual(decodeClaimArgs("0x" + F.hex(args)),
+    { commitment: A.commitment, shardId: 2, position: 41n });
+  assert.strictEqual(decodeClaimArgs("0x" + F.hex(args.slice(0, 44))), null);
+  const memento = Uint8Array.from(args); memento[0] = 6;
+  assert.strictEqual(decodeClaimArgs("0x" + F.hex(memento)), null);
+  assert.strictEqual(decodeClaimArgs(undefined), null);
+});
+
+test("findMyEntries searches by participant prefix and returns each entry's commitment", async () => {
+  const me = "aa".repeat(32);
+  const lockFor = (who, commitment) => F.script("entry-lock", "0x" + who + commitment);
+  const bytes = F.unhex(F.V.entry_encoding.entry.hex);
+  const cells = [
+    F.cell({ lock: lockFor(me, A.commitment), data: F.hex(bytes), capacity: 500n }),
+    F.cell({ lock: lockFor(me, B.commitment), data: F.hex(bytes), capacity: 500n }),
+    F.cell({ lock: lockFor("cc".repeat(32), A.commitment), data: F.hex(bytes) }),
+  ];
+  const rpc = F.fakeRpc(cells);
+  const mine = await findMyEntries(rpc, F.MANIFEST, "0x" + me);
+  assert.deepStrictEqual(mine.map((e) => e.commitment).sort(), [A.commitment, B.commitment].sort());
+  assert.strictEqual(mine[0].participantLockHash, me);
+  const key = rpc.calls.find((c) => c.method === "get_cells").params[0];
+  assert.strictEqual(key.script.args, "0x" + me);
+  assert.strictEqual(key.script_search_mode, "prefix");
+  assert.strictEqual(key.script_type, "lock");
+});
