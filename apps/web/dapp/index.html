@@ -52,9 +52,59 @@
 
   <section id="view-home">
     <h1 tabindex="-1">Everyone gets their deposit back</h1>
+    <p class="lede">
+      DAOWOW is a lottery you can't lose your deposit in. Prizes are paid from
+      interest, never from other players' money.
+    </p>
+
     <div id="home-live" aria-live="polite">
       <div class="card"><p class="empty">Loading…</p></div>
     </div>
+    <div id="home-round"></div>
+
+    <div class="card explain">
+      <h2>How the savings pool works</h2>
+      <p>
+        Everyone's ticket money is pooled and placed in the
+        <strong>Nervos DAO</strong>, a savings feature built into the Nervos
+        network. While it sits there it earns interest.
+      </p>
+      <p>
+        When the round ends, every player gets their whole deposit back, win
+        or lose. The interest the pool earned becomes the prizes.
+      </p>
+    </div>
+
+    <div class="card explain">
+      <h2>How long it takes</h2>
+      <p>
+        You buy tickets while entries are open. Winners are drawn soon after
+        entries close. Your deposit then stays in savings for the term, and
+        comes back with any prize at payout.
+      </p>
+      <div id="home-timeline"></div>
+    </div>
+
+    <div class="card explain">
+      <h2>What it costs</h2>
+      <p>
+        Nothing is spent except a small network fee. Everything else is a
+        deposit that is returned to you.
+      </p>
+      <div id="home-cost"></div>
+    </div>
+
+    <div class="card explain">
+      <h2>What you can win</h2>
+      <p>
+        The more tickets a round sells, the more prize places it pays. The
+        prize table is fixed when the round is created and nobody can change
+        it afterwards.
+      </p>
+      <div id="home-prizes"></div>
+    </div>
+
+    <div id="home-enter" class="actions"></div>
   </section>
 
   <section id="view-rounds" hidden>
@@ -108,6 +158,7 @@
 <script src="model/tickets.js"></script>
 <script src="model/route.js"></script>
 <script src="model/prize-estimate.js"></script>
+<script src="model/timeline.js"></script>
 <script src="model/copy.js"></script>
 <script src="model/store.js"></script>
 <script type="module" src="app/main.js"></script>

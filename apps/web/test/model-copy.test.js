@@ -95,3 +95,40 @@ test("ordinals read naturally", () => {
   assert.deepStrictEqual([1, 2, 3, 4, 11, 12, 13, 21, 22, 23].map(copy.ordinal),
     ["1st", "2nd", "3rd", "4th", "11th", "12th", "13th", "21st", "22nd", "23rd"]);
 });
+
+test("what a ticket costs is said in full, and says what comes back", () => {
+  const CKB = 100000000n;
+  assert.strictEqual(copy.costTicket(10000n * CKB),
+    "10,000 CKB per ticket. You get this back after the round, win or lose.");
+  assert.strictEqual(copy.costDeposit(222n * CKB, false),
+    "222 CKB ticket deposit per ticket with a JoyID wallet. Held while the round runs, then returned.");
+  assert.strictEqual(copy.costDeposit(220n * CKB, true),
+    "220 CKB ticket deposit per ticket. Held while the round runs, then returned.");
+  assert.strictEqual(copy.costStorage(237n * CKB),
+    "237 CKB storage deposit, once per purchase. Returned after the round.");
+  assert.match(copy.text.feeLine, /not returned/);
+});
+
+test("the static pages outside How it works carry no banned word", () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const html = fs.readFileSync(path.join(__dirname, "..", "dapp", "index.html"), "utf8");
+  const body = html.slice(html.indexOf("<body"));
+  const outsideHow = body.replace(/<section id="view-how"[\s\S]*?<\/section>/, "");
+  const words = outsideHow.replace(/<script[^>]*><\/script>/g, " ").replace(/<[^>]+>/g, " ");
+  assert.ok(words.includes("Nervos DAO"), "Home must explain where prizes come from");
+  assert.doesNotMatch(words, BANNED);
+});
+
+test("Home's fixed text covers the four things a first-timer must understand", () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const html = fs.readFileSync(path.join(__dirname, "..", "dapp", "index.html"), "utf8");
+  const home = html.match(/<section id="view-home"[\s\S]*?<\/section>/)[0];
+  for (const heading of ["How the savings pool works", "How long it takes", "What it costs", "What you can win"]) {
+    assert.match(home, new RegExp(`<h2[^>]*>${heading}</h2>`), heading);
+  }
+  for (const id of ["home-round", "home-timeline", "home-cost", "home-prizes", "home-enter"]) {
+    assert.match(home, new RegExp(`id="${id}"`), id);
+  }
+});

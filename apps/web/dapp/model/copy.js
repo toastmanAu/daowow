@@ -115,6 +115,23 @@ const winLine = (place, weight, total) =>
 
 const heldLine = (n) => `You hold ${plural(n, "ticket")}`;
 
+// What entering costs, each part with what happens to it afterwards.
+const costTicket = (price) =>
+  `${ckb(price)} CKB per ticket. You get this back after the round, win or lose.`;
+const costDeposit = (amount, connected) =>
+  `${ckb(amount)} CKB ticket deposit per ticket${connected ? "" : " with a JoyID wallet"}. ` +
+  "Held while the round runs, then returned.";
+const costStorage = (amount) =>
+  `${ckb(amount)} CKB storage deposit, once per purchase. Returned after the round.`;
+const costExample = (total) =>
+  `Buying one ticket moves ${ckb(total)} CKB out of your wallet. All of it comes back except the fee.`;
+const placeLine = (place, share, opensAt, open, reachable) => {
+  const head = `${ordinal(place)} place · ${share} shares`;
+  if (!reachable) return `${head} · not available in a round this size`;
+  return open ? `${head} · paying` : `${head} · opens at ${opensAt} tickets`;
+};
+const poolLine = (shannons) => `Prize pool: ${estimateLine(shannons)}`;
+
 const errors = Object.freeze({
   network: "We can't reach the network right now. Check your connection and try again.",
   manifest: "This site couldn't load its own settings. Reload the page to try again.",
@@ -151,7 +168,11 @@ const text = Object.freeze({
   claimSoon: "Prize claiming opens soon.",
   retireSoon: "Your ticket deposit will be returnable here soon.",
   refundBlocked: "This can't be refunded yet.",
-  poolSoFar: "Prize pool",
+  noPoolYet: "The prize pool starts growing once the round's tickets are placed in savings.",
+  roundEnded: "This round didn't go ahead.",
+  youAreHere: "You are here",
+  done: "Done",
+  ticketPrice: "Ticket price",
   yours: "yours",
 });
 
@@ -171,6 +192,9 @@ function ALL_SAMPLES() {
   for (const o of Object.values(T.OUTCOME)) out.push(outcomeBadge(o));
   for (const a of Object.values(T.ACTION)) out.push(actionLabel(a));
   out.push(ticketsLine(7n, 10n), ticketsLine(1n, null), estimateLine(4100000000n), estimateLine(1n));
+  out.push(costTicket(1n), costDeposit(1n, true), costDeposit(1n, false), costStorage(1n), costExample(1n));
+  out.push(placeLine(1, 50n, 1n, true, true), placeLine(2, 30n, 5n, false, true),
+    placeLine(3, 20n, 99n, false, false), poolLine(100000000n));
   out.push(honestyLine(1192n), winLine(1, 50n, 100n), heldLine(1), heldLine(5), ckb(1n), ordinal(2));
   for (const v of Object.values(errors)) out.push(typeof v === "function" ? v("popup closed") : v);
   const walk = (v) => {
@@ -182,7 +206,8 @@ function ALL_SAMPLES() {
 
 const api = {
   ckb, ordinal, plural, shortAddress, stateBadge, ticketsLine, milestone, outcomeBadge, actionLabel,
-  estimateLine, honestyLine, winLine, heldLine, errors, text, ALL_SAMPLES,
+  estimateLine, honestyLine, winLine, heldLine, costTicket, costDeposit, costStorage, costExample,
+  placeLine, poolLine, errors, text, ALL_SAMPLES,
 };
 if (typeof module !== "undefined" && module.exports) module.exports = api;
 if (typeof window !== "undefined") window.DaowowCopy = api;

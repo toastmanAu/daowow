@@ -29,6 +29,7 @@ const PAGES = {
     "DaowowShardHistory", "DaowowConfirm", "DaowowRefundTx", "DaowowDraw", "DaowowEntropyTx",
     "DaowowEntropyDerive", "DaowowDaoYield", "DaowowEntryView", "DaowowTime", "DaowowRoundState",
     "DaowowTickets", "DaowowRoute", "DaowowPrizeEstimate", "DaowowCopy", "DaowowStore",
+    "DaowowTimeline",
   ],
 };
 

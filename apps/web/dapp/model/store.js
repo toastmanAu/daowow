@@ -98,7 +98,12 @@ function createStore({ manifest, rpc, readers }) {
     if (snapshot.ledger || snapshot.seal || snapshot.record) {
       try { pool = await readers.readPoolSoFar(rpc, snapshot.config, tip.header); } catch { pool = null; }
     }
-    return { snapshot, view, label, schedule, scheduleError, ...drawn, pool };
+    // A draw that names nobody (the round fell short) is a round that did not
+    // run. Calling it "drawn" would promise winners that do not exist.
+    const shown = drawn.draw && !drawn.draw.viable
+      ? Object.freeze({ ...view, state: S.FINISHED })
+      : view;
+    return { snapshot, view: shown, label, schedule, scheduleError, ...drawn, pool };
   }
 
   async function loadMine(rows, tip, session) {

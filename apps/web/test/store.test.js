@@ -129,6 +129,15 @@ test("a round with a record on chain is drawn, and the browser's own derivation 
   assert.strictEqual(a.drawHeight, 1234567n + 192n);
 });
 
+test("a drawn round that paid no prizes is shown as finished, not as drawn", async () => {
+  // Below its minimum the draw names nobody: saying "winners are drawn" would be false.
+  const short = { ...A, minimumTickets: 99n };
+  const { store } = make({ readDeployment: async () => [snap(short, { record: { record: RECORD } })] });
+  await store.refresh();
+  assert.strictEqual(store.state.rows[0].draw.viable, false);
+  assert.strictEqual(store.state.rows[0].view.state, S.FINISHED);
+});
+
 test("a derived record that disagrees with the on-chain record yields drawError and no draw", async () => {
   const forged = { ...HEADERS, entropyHeaders: HEADERS.entropyHeaders.map((h, i) => (i === 1 ? { ...h, hash: "0x" + "00".repeat(32) } : h)) };
   const { store } = make({ readEntropyHeaders: async () => forged });
