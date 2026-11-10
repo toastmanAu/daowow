@@ -36,3 +36,39 @@ test("the vendored crypto agrees with the Rust oracle", async () => {
     .replace(/^0x/, "");
   assert.strictEqual(got, vectors.domain_hash.output);
 });
+
+// --- Three.js, for the draw animation ---------------------------------------
+const THREE_ARTIFACT = path.join(VENDOR, "three.module.min.js");
+const THREE_LOCK = path.join(VENDOR, "three.lock.json");
+
+test("the vendored Three.js matches its lock file", () => {
+  const lock = JSON.parse(fs.readFileSync(THREE_LOCK, "utf8"));
+  const got = crypto.createHash("sha256").update(fs.readFileSync(THREE_ARTIFACT)).digest("hex");
+  assert.strictEqual(got, lock.artifactSha256);
+});
+
+test("the Three.js lock pins 0.170.0 and its registry integrity", () => {
+  const lock = JSON.parse(fs.readFileSync(THREE_LOCK, "utf8"));
+  assert.deepStrictEqual(lock.packages, { three: "0.170.0" });
+  assert.strictEqual(lock.tarballIntegrity,
+    "sha512-FQK+LEpYc0fBD+J8g6oSEyyNzjp+Q7Ks1C568WWaoMRLW+TkNNWmenWeGgJjV105Gd+p/2ql1ZcjYvNiPZBhuQ==");
+  assert.strictEqual(lock.source, "package/build/three.module.min.js");
+});
+
+test("the vendored Three.js is a single file with no imports of its own", () => {
+  const src = fs.readFileSync(THREE_ARTIFACT, "utf8");
+  assert.ok(src.length > 300000, "this should be the whole library");
+  assert.doesNotMatch(src, /(^|[;\n])\s*import\s*[\w{*"']/);
+  assert.doesNotMatch(src, /\bimport\s*\(/);
+  assert.doesNotMatch(src, /\bfrom\s*["']\.{0,2}\//);
+});
+
+test("the vendored Three.js needs no eval, so the strict CSP can stay", () => {
+  const src = fs.readFileSync(THREE_ARTIFACT, "utf8");
+  assert.doesNotMatch(src, /\beval\s*\(|new Function\s*\(/);
+});
+
+test("the vendored Three.js reports the pinned revision", async () => {
+  const THREE = await import("../vendor/three.module.min.js");
+  assert.strictEqual(THREE.REVISION, "170");
+});

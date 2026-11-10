@@ -1,6 +1,11 @@
-# Vendored CCC + JoyID bundle
+# Vendored third-party code
 
-`ccc-joyid.min.mjs` is the **only third-party code in this repository**. It is
+Two artifacts, and nothing else third-party in this repository: the CCC + JoyID
+bundle described first, and Three.js, described at the end.
+
+## CCC + JoyID bundle
+
+`ccc-joyid.min.mjs` is
 a single browser ES module containing `@ckb-ccc/core` and `@ckb-ccc/joy-id`,
 built by `tools/build-vendor-ccc.sh`.
 
@@ -50,3 +55,32 @@ package; none are moderate, high or critical.
 This is **runtime surface, not build-time only**: `elliptic` is bundled into
 the artifact, not merely present in `node_modules` during the build. Recorded
 here because an earlier framing of this decision claimed otherwise.
+
+## Three.js
+
+`three.module.min.js` is Three.js **0.170.0**, used only by the draw animation
+(`apps/web/dapp/app/draw/stage.js`). Size: 692K minified.
+
+It is one file copied **unmodified** out of the published npm tarball by
+`tools/vendor-three.sh`. Nothing is installed, bundled or executed: the script
+downloads the tarball, refuses it unless its sha512 equals the registry
+integrity pinned in the script, and extracts that single file.
+`three.lock.json` records the version, that integrity, and the artifact's
+sha256.
+
+0.170.0 is deliberate. It is the last release that ships as a single
+`three.module.min.js`; later releases split the build across two files, which
+would mean two artifacts to pin.
+
+```sh
+./tools/vendor-three.sh
+node --test apps/web/test/vendor.test.js
+```
+
+The tests check five things: the artifact matches its lock; the lock names
+0.170.0 and the pinned integrity; the file imports nothing; it contains no
+`eval` or `new Function`, so the page's `script-src 'self'` policy can stay;
+and the module reports revision 170 when loaded.
+
+The animation is not on any signing path. It reads a draw result the app has
+already computed and checked, and draws it.

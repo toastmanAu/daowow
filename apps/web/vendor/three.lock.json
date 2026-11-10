@@ -1,0 +1,9 @@
+{
+  "artifactSha256": "08fd7545d13d2c7fb65ab691530a802dafefd638596501854f267d0fb13c39e7",
+  "packages": {
+    "three": "0.170.0"
+  },
+  "tarballIntegrity": "sha512-FQK+LEpYc0fBD+J8g6oSEyyNzjp+Q7Ks1C568WWaoMRLW+TkNNWmenWeGgJjV105Gd+p/2ql1ZcjYvNiPZBhuQ==",
+  "source": "package/build/three.module.min.js",
+  "regenerate": "tools/vendor-three.sh"
+}
