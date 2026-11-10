@@ -137,3 +137,20 @@ test("findMyEntries searches by participant prefix and returns each entry's comm
   assert.strictEqual(key.script_search_mode, "prefix");
   assert.strictEqual(key.script_type, "lock");
 });
+
+test("countEntries counts the entries still on chain, per round, in one scan", async () => {
+  const { countEntries } = require("../chain/round-cells.js");
+  const bytes = F.V.entry_encoding.entry.hex;
+  const lockFor = (who, commitment) => F.script("entry-lock", "0x" + who + commitment);
+  const rpc = F.fakeRpc([
+    F.cell({ lock: lockFor("aa".repeat(32), A.commitment), data: bytes }),
+    F.cell({ lock: lockFor("cc".repeat(32), A.commitment), data: bytes }),
+    F.cell({ lock: lockFor("aa".repeat(32), B.commitment), data: bytes }),
+    F.cell({ lock: lockFor("aa".repeat(32), B.commitment), data: "00" }), // not an entry
+  ]);
+  const counts = await countEntries(rpc, F.MANIFEST);
+  assert.strictEqual(counts.get(A.commitment), 2);
+  assert.strictEqual(counts.get(B.commitment), 1);
+  assert.strictEqual(counts.get("ee".repeat(32)), undefined);
+  assert.strictEqual(rpc.calls.filter((c) => c.method === "get_cells").length, 1);
+});

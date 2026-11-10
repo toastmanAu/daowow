@@ -9,27 +9,10 @@ const assert = require("node:assert");
 const fs = require("node:fs");
 const path = require("node:path");
 
-const SOURCE = fs.readFileSync(
-  path.join(__dirname, "..", "dapp", "dapp.js"), "utf8");
-
-test("rejects manifest locations that are not same-origin paths", async () => {
-  const { isSafeManifestUrl } = await import("../dapp/dapp.js");
-  for (const good of ["/deployments/testnet-manifest.json", "/a/b.json"]) {
-    assert.strictEqual(isSafeManifestUrl(good), true, good);
-  }
-  for (const bad of [
-    "//evil.example/m.json",            // protocol-relative: fetches off-origin
-    "https://evil.example/m.json",
-    "deployments/m.json",               // relative, so not anchored
-    '/x"><img src=x onerror=alert(1)>', // the injection the review found
-    "/x<script>",
-    "/x with spaces",
-    "",
-    null,
-  ]) {
-    assert.strictEqual(isSafeManifestUrl(bad), false, JSON.stringify(bad));
-  }
-});
+// The parameter is gone: the app loads one manifest from its own folder. The
+// two fences below stay, pointed at the code that now talks to the page.
+const SOURCE = ["app/main.js", "app/dom.js", "model/store.js"].map((f) => fs.readFileSync(
+  path.join(__dirname, "..", "dapp", f), "utf8")).join("\n");
 
 test("no error path interpolates a message into innerHTML", () => {
   // A regression fence: showError builds DOM and sets textContent. If a later

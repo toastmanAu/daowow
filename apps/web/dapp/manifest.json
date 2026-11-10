@@ -1,0 +1,82 @@
+{
+  "schemaVersion": 1,
+  "status": "generated",
+  "purpose": "dev-deployment-gate-2",
+  "fundedRoundsReady": false,
+  "network": "ckb_testnet",
+  "rpcUrl": "https://testnet.ckb.dev",
+  "genesisHash": "0x10639e0895502b5688a6be8cf69460d76541bfa4821629d86d62ba0aae3f9606",
+  "generatedAt": "2026-09-22T10:16:38.605Z",
+  "generatedFrom": [
+    "dev-deploy-a.json",
+    "dev-deploy-b.json"
+  ],
+  "note": "Dev deployment for gate 2. Superseded by gate 4's hardened deployment. Verify with tools/verify-deployment.mjs before trusting it.",
+  "scripts": {
+    "round-type": {
+      "codeHash": "0x6134e43925b4495d2c0db93ed83a22fd973e36712c4ca9afce99ecfa3b5405ec",
+      "hashType": "data1",
+      "binaryBytes": null,
+      "cellDep": {
+        "outPoint": {
+          "txHash": "0x86cb7a8ebac06ec26099e7da062764a64be61b4fa763c4509f82adc18f3400be",
+          "index": 0
+        },
+        "depType": "code"
+      },
+      "occupiedCapacityShannons": "6245300000000"
+    },
+    "entry-shard-type": {
+      "codeHash": "0x60052a7bc888489cf3fff5967d58ac123b52c99afc3bf46d6956e47328682b3a",
+      "hashType": "data1",
+      "binaryBytes": null,
+      "cellDep": {
+        "outPoint": {
+          "txHash": "0xa52472b89c3a75b35b462c7dc3ea88ca6339243942b08d0ae046d164630a6687",
+          "index": 0
+        },
+        "depType": "code"
+      },
+      "occupiedCapacityShannons": "23165300000000"
+    },
+    "entry-lock": {
+      "codeHash": "0x863d2629646bfdbb158ea6a2171ac7321158e3058589160ab2266591bd3d220b",
+      "hashType": "data1",
+      "binaryBytes": null,
+      "cellDep": {
+        "outPoint": {
+          "txHash": "0x86cb7a8ebac06ec26099e7da062764a64be61b4fa763c4509f82adc18f3400be",
+          "index": 1
+        },
+        "depType": "code"
+      },
+      "occupiedCapacityShannons": "9545300000000"
+    },
+    "dao-lock": {
+      "codeHash": "0x0cb1229acee4a8555c97224f1905ab43f70783e5d37924bdd431394790e543bd",
+      "hashType": "data1",
+      "binaryBytes": null,
+      "cellDep": {
+        "outPoint": {
+          "txHash": "0xb536d389344447adb6bcddda348a87e0432fc117f4c5419b08bc5bedd0296e41",
+          "index": 2
+        },
+        "depType": "code"
+      },
+      "occupiedCapacityShannons": "7750100000000"
+    },
+    "settlement-type": {
+      "codeHash": "0xa68543719429b2fd95244b5d7d8ae0b706fee0cb826a375416c260d503cf9207",
+      "hashType": "data1",
+      "binaryBytes": null,
+      "cellDep": {
+        "outPoint": {
+          "txHash": "0xa52472b89c3a75b35b462c7dc3ea88ca6339243942b08d0ae046d164630a6687",
+          "index": 1
+        },
+        "depType": "code"
+      },
+      "occupiedCapacityShannons": "15560500000000"
+    }
+  }
+}

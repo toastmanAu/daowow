@@ -22,17 +22,13 @@ const WEB = path.join(__dirname, "..");
 
 // Every page, and the globals its own module code reads off `window`.
 const PAGES = {
-  "index.html": ["DaowowCore", "DaowowCodec", "DaowowManifest", "DaowowRpc", "DaowowDiscovery"],
-  "entry.html": [
-    "DaowowCore", "DaowowCodec", "DaowowManifest", "DaowowRpc", "DaowowDiscovery",
-    "DaowowSchedule", "DaowowQuote", "DaowowEntryCodec", "DaowowMmrWitness",
-    "DaowowEntryTx", "DaowowContention", "DaowowShardPeaks", "DaowowConfirm",
-    "DaowowRefundTx", "DaowowEntryView",
-  ],
-  "refund.html": [
-    "DaowowCore", "DaowowCodec", "DaowowEntryCodec", "DaowowLedgerCodec",
-    "DaowowManifest", "DaowowRpc", "DaowowDiscovery", "DaowowShardHistory",
-    "DaowowRefundTx", "DaowowConfirm",
+  "index.html": [
+    "DaowowCore", "DaowowCodec", "DaowowEntryCodec", "DaowowLedgerCodec", "DaowowSealCodec",
+    "DaowowManifest", "DaowowRpc", "DaowowDiscovery", "DaowowRoundCells", "DaowowSchedule",
+    "DaowowQuote", "DaowowMmrWitness", "DaowowEntryTx", "DaowowContention", "DaowowShardPeaks",
+    "DaowowShardHistory", "DaowowConfirm", "DaowowRefundTx", "DaowowDraw", "DaowowEntropyTx",
+    "DaowowEntropyDerive", "DaowowDaoYield", "DaowowEntryView", "DaowowTime", "DaowowRoundState",
+    "DaowowTickets", "DaowowRoute", "DaowowPrizeEstimate", "DaowowCopy", "DaowowStore",
   ],
 };
 
@@ -80,6 +76,24 @@ for (const [page, expected] of Object.entries(PAGES)) {
       "throws inside its IIFE and never publishes itself.");
   });
 }
+
+test("the new chain modules publish themselves whatever order they load in", () => {
+  const sandbox = { TextEncoder, TextDecoder, DataView, Uint8Array, BigInt, console };
+  sandbox.window = sandbox;
+  sandbox.globalThis = sandbox;
+  const context = vm.createContext(sandbox);
+  // Hostile order: the three new modules FIRST, everything they use after.
+  for (const src of ["chain/round-cells.js", "chain/entropy-derive.js", "chain/dao-yield.js",
+                     "dapp/model/store.js", "dapp/model/copy.js", "dapp/model/tickets.js",
+                     "core.js", "chain/codec.js", "chain/entry-codec.js", "chain/ledger-codec.js",
+                     "chain/seal-codec.js", "chain/refund-tx.js"]) {
+    vm.runInContext(fs.readFileSync(path.join(WEB, src), "utf8"), context, { filename: src });
+  }
+  for (const name of ["DaowowRoundCells", "DaowowEntropyDerive", "DaowowDaoYield",
+                      "DaowowStore", "DaowowCopy", "DaowowTickets"]) {
+    assert.strictEqual(typeof sandbox[name], "object", `${name} must publish itself`);
+  }
+});
 
 test("a page that loads discovery.js before its dependencies still works", () => {
   // The exact regression, pinned: discovery must not care about order.

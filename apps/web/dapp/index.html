@@ -2,21 +2,15 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>DAOWOW — live round</title>
-<!--
-  entry.html forbids all network access; this page must reach a CKB node, so
-  the policy is relaxed DELIBERATELY and narrowly to the endpoints a manifest
-  may name. It cannot be derived from the manifest at runtime, because the
-  policy has to be in force before the manifest is fetched. Gate 5 should
-  serve this as a real HTTP header with only the endpoint actually in use.
--->
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>DAOWOW — the lottery where everyone gets their deposit back</title>
+<meta name="description" content="Buy tickets, get your deposit back after the round, and win prizes paid from the interest the pool earns.">
 <meta http-equiv="Content-Security-Policy" content="
   default-src 'none';
   script-src 'self';
   style-src 'self';
   img-src 'self' data:;
-  connect-src 'self' http://192.168.68.134:8114 https://testnet.ckb.dev;
+  connect-src 'self' https://testnet.ckb.dev;
   form-action 'none';
   base-uri 'none'">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext y='26' font-size='28'%3E%E2%97%8E%3C/text%3E%3C/svg%3E">
@@ -24,36 +18,98 @@
 </head>
 <body>
 <header class="site-header">
-  <span class="brand"><span class="brand-symbol">◎</span>DAO<span class="brand-light">WOW</span></span>
-  <button id="connect" class="wallet-button" type="button">Connect wallet</button>
+  <a class="brand" href="#/home" aria-label="DAOWOW home"><span class="brand-symbol" aria-hidden="true">◎</span>DAO<span class="brand-light">WOW</span></a>
+  <div class="wallet">
+    <button id="wallet" class="wallet-button" type="button" aria-haspopup="true">Connect wallet</button>
+    <div id="wallet-menu" class="wallet-menu" hidden>
+      <button id="disconnect" class="link-button" type="button">Disconnect</button>
+    </div>
+  </div>
 </header>
 
-<main>
-  <p class="banner">
-    <strong>Testnet.</strong>
-    <span>Read-only view. This page cannot build, sign or send a transaction — entry arrives in the next milestone.</span>
-  </p>
+<nav id="tabs" class="tabs" aria-label="Sections">
+  <a class="tab" data-tab="home" href="#/home">
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5V21h-6v-6H9v6H3z"/></svg>
+    <span>Home</span>
+  </a>
+  <a class="tab" data-tab="rounds" href="#/rounds">
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/></svg>
+    <span>Rounds</span>
+  </a>
+  <a class="tab" data-tab="tickets" href="#/tickets">
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v2a2 2 0 0 0 0 4v2a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-2a2 2 0 0 0 0-4z"/><path d="M14 6v12"/></svg>
+    <span>My tickets</span>
+  </a>
+  <a class="tab" data-tab="how" href="#/how">
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.7.4-1 1-1 1.7"/><path d="M12 17h.01"/></svg>
+    <span>How it works</span>
+  </a>
+</nav>
 
-  <div id="rounds" aria-live="polite">
-    <div class="card"><p class="empty">Loading round data…</p></div>
-  </div>
+<main>
+  <p class="banner"><strong>Testnet.</strong> <span>These are test coins with no real value.</span></p>
+  <div id="notice" class="notice" role="alert" hidden></div>
+
+  <section id="view-home">
+    <h1 tabindex="-1">Everyone gets their deposit back</h1>
+    <div id="home-live" aria-live="polite">
+      <div class="card"><p class="empty">Loading…</p></div>
+    </div>
+  </section>
+
+  <section id="view-rounds" hidden>
+    <h1 tabindex="-1">Rounds</h1>
+    <div id="rounds-live" aria-live="polite"></div>
+  </section>
+
+  <section id="view-tickets" hidden>
+    <h1 tabindex="-1">My tickets</h1>
+    <div id="tickets-live" aria-live="polite"></div>
+  </section>
+
+  <section id="view-how" hidden>
+    <h1 tabindex="-1">How it works</h1>
+  </section>
+
+  <section id="view-panel" hidden>
+    <a class="back-link" href="#/rounds">← Rounds</a>
+    <div id="panel-body"></div>
+  </section>
 </main>
 
-<footer>
-  <span>network <span class="mono" id="net">…</span></span>
-  <span>node <span class="mono" id="rpc">…</span></span>
-  <span>tip epoch <span class="mono" id="epoch">…</span></span>
-</footer>
-
-<!-- Classic scripts, evaluated before the deferred module below, each
-     publishing itself on window. codec must precede discovery, which reads it. -->
+<!-- Classic scripts, evaluated before the deferred module, each publishing
+     itself on window. Order matters for the ones that read a sibling at load:
+     core first, codec before the codecs built on it, schedule before quote. -->
 <script src="../core.js"></script>
 <script src="../chain/codec.js"></script>
 <script src="../chain/entry-codec.js"></script>
 <script src="../chain/ledger-codec.js"></script>
+<script src="../chain/seal-codec.js"></script>
 <script src="../chain/manifest.js"></script>
 <script src="../chain/rpc.js"></script>
 <script src="../chain/discovery.js"></script>
-<script type="module" src="dapp.js"></script>
+<script src="../chain/round-cells.js"></script>
+<script src="../chain/schedule.js"></script>
+<script src="../chain/quote.js"></script>
+<script src="../chain/mmr-witness.js"></script>
+<script src="../chain/entry-tx.js"></script>
+<script src="../chain/contention.js"></script>
+<script src="../chain/shard-peaks.js"></script>
+<script src="../chain/shard-history.js"></script>
+<script src="../chain/confirm.js"></script>
+<script src="../chain/refund-tx.js"></script>
+<script src="../chain/draw.js"></script>
+<script src="../chain/entropy-tx.js"></script>
+<script src="../chain/entropy-derive.js"></script>
+<script src="../chain/dao-yield.js"></script>
+<script src="entry-view.js"></script>
+<script src="model/time.js"></script>
+<script src="model/round-state.js"></script>
+<script src="model/tickets.js"></script>
+<script src="model/route.js"></script>
+<script src="model/prize-estimate.js"></script>
+<script src="model/copy.js"></script>
+<script src="model/store.js"></script>
+<script type="module" src="app/main.js"></script>
 </body>
 </html>

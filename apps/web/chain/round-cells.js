@@ -189,7 +189,26 @@ async function findMyEntries(rpc, manifest, participantLockHash) {
   return found;
 }
 
-const api = { readDeployment, findClaims, findMyEntries, decodeClaimArgs };
+/** How many entry cells each round still has on chain, keyed by commitment. */
+async function countEntries(rpc, manifest) {
+  const entryLock = manifest.scripts["entry-lock"];
+  const ec = entryCodec();
+  const counts = new Map();
+  for await (const cell of rpc.getCells({
+    script: { code_hash: entryLock.codeHash, hash_type: entryLock.hashType, args: "0x" },
+    script_type: "lock",
+    script_search_mode: "prefix",
+  })) {
+    const args = strip(cell.output.lock.args);
+    if (args.length !== 128) continue;
+    if (unhex(cell.output_data).length !== ec.ENTRY_DATA_SIZE) continue;
+    const commitment = args.slice(64);
+    counts.set(commitment, (counts.get(commitment) ?? 0) + 1);
+  }
+  return counts;
+}
+
+const api = { readDeployment, findClaims, findMyEntries, countEntries, decodeClaimArgs };
 if (typeof module !== "undefined" && module.exports) module.exports = api;
 if (typeof window !== "undefined") window.DaowowRoundCells = api;
 })();

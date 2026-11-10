@@ -1,0 +1,189 @@
+"use strict";
+// Wrapped in an IIFE: loaded as a classic script these files share one
+// global scope, so top-level declarations would collide between modules.
+(function () {
+// Every sentence a player reads outside the How it works tab.
+//
+// Kept in one pure file so the no-jargon rule is enforced by a test: none of
+// the protocol's own words (the banned list is in ../../test/model-copy.test.js)
+// may appear in anything this file can say. Time is in hours and days, rounds
+// have friendly names, and money is in CKB.
+
+const roundState = () =>
+  typeof require === "function" ? require("./round-state.js") : window.DaowowRoundState;
+const ticketsLib = () =>
+  typeof require === "function" ? require("./tickets.js") : window.DaowowTickets;
+const time = () =>
+  typeof require === "function" ? require("./time.js") : window.DaowowTime;
+const entropyDerive = () => typeof require === "function"
+  ? require("../../chain/entropy-derive.js") : window.DaowowEntropyDerive;
+
+const SHANNONS = 100000000n;
+const grouped = (n) => BigInt(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+
+/** Whole CKB, rounded DOWN: a figure the player is owed is never overstated. */
+function ckb(shannons) {
+  return grouped(BigInt(shannons) / SHANNONS);
+}
+
+function ordinal(n) {
+  const tens = n % 100;
+  if (tens >= 11 && tens <= 13) return `${n}th`;
+  return `${n}${{ 1: "st", 2: "nd", 3: "rd" }[n % 10] ?? "th"}`;
+}
+
+const plural = (n, word) => `${n} ${word}${BigInt(n) === 1n ? "" : "s"}`;
+
+function shortAddress(address) {
+  const a = String(address);
+  return a.length <= 14 ? a : `${a.slice(0, 6)}…${a.slice(-6)}`;
+}
+
+function stateBadge(state, view) {
+  const S = roundState().PLAYER_STATE;
+  return {
+    [S.UPCOMING]: "Opens soon",
+    [S.OPEN]: view && view.full ? "Full" : "Open now",
+    [S.WAITING]: "Waiting for draw",
+    [S.DRAWN]: "Drawn",
+    [S.REFUNDS]: "Didn't fill · refunds open",
+    [S.FINISHED]: "Finished",
+  }[state];
+}
+
+function ticketsLine(sold, cap) {
+  return cap === null || cap === undefined
+    ? `${plural(sold, "ticket")} sold`
+    : `${sold} of ${cap} tickets sold`;
+}
+
+/** The next thing that happens to a round, and roughly when. */
+function milestone({ view, snapshot, tip }) {
+  const S = roundState().PLAYER_STATE;
+  const t = time();
+  const until = (epoch) => t.describeDuration(t.msUntilEpoch(epoch, tip.epoch));
+  switch (view.state) {
+    case S.UPCOMING: return `Opens in ${until(snapshot.config.entryStart)}`;
+    case S.OPEN: return `Closes in ${until(snapshot.config.entryEnd)}`;
+    case S.WAITING: {
+      if (!snapshot.seal) return "Entries are closed. The draw comes next.";
+      const last = entropyDerive().lastEntropyHeight(snapshot.seal.inclusionHeight);
+      return `Draw in ${t.describeDuration(t.msUntilBlock(last, tip.height))}`;
+    }
+    case S.DRAWN: return "Winners are drawn. Prizes are paid after the savings term.";
+    case S.REFUNDS: return "This round didn't get enough tickets. Deposits can be taken back.";
+    default: return "This round is over.";
+  }
+}
+
+function outcomeBadge(outcome) {
+  const O = ticketsLib().OUTCOME;
+  return {
+    [O.IN_ROUND]: "In the round",
+    [O.WAITING]: "Waiting for draw",
+    [O.REFUNDABLE]: "Refund ready",
+    [O.REFUND_LATER]: "Refund opens soon",
+    [O.DID_NOT_RUN]: "Round didn't run",
+    [O.WON]: "You won",
+    [O.NOT_THIS_TIME]: "Not this time",
+  }[outcome];
+}
+
+function actionLabel(action) {
+  const A = ticketsLib().ACTION;
+  return {
+    [A.ENTER_MORE]: "Enter more",
+    [A.REFUND]: "Refund",
+    [A.WATCH_DRAW]: "Watch the draw",
+    [A.CLAIM_SOON]: "Prize claiming opens soon",
+    [A.RETIRE_SOON]: "Your ticket deposit will be returnable here soon",
+  }[action] ?? "";
+}
+
+function estimateLine(shannons) {
+  const whole = BigInt(shannons) / SHANNONS;
+  return whole === 0n
+    ? "under 1 CKB so far, still growing"
+    : `about ${grouped(whole)} CKB so far, still growing`;
+}
+
+const honestyLine = (height) =>
+  `This result was fixed on-chain at block ${grouped(height)}. The animation only reveals it.`;
+
+const winLine = (place, weight, total) =>
+  `${ordinal(place)} place · ${weight} of ${total} shares of the prize pool`;
+
+const heldLine = (n) => `You hold ${plural(n, "ticket")}`;
+
+const errors = Object.freeze({
+  network: "We can't reach the network right now. Check your connection and try again.",
+  manifest: "This site couldn't load its own settings. Reload the page to try again.",
+  roundNotFound: "We couldn't find that round.",
+  wallet: (message) => `The wallet didn't connect: ${message}. Nothing was sent. Please try again.`,
+  mine: "We couldn't load your tickets. Try again in a moment.",
+  schedule: "This round's prize table couldn't be checked, so entering is switched off.",
+  draw: "This round's result couldn't be confirmed against the network, so it isn't shown. Try again later.",
+  multiShard: "This round's result can't be shown in this view yet.",
+  noWebgl: "The animation can't run on this device, so here is the result as a list.",
+});
+
+const text = Object.freeze({
+  retry: "Try again",
+  loading: "Loading…",
+  connect: "Connect wallet",
+  connecting: "Connecting…",
+  disconnect: "Disconnect",
+  connectPrompt: "Connect your wallet to see your tickets.",
+  noTickets: "No tickets yet. Pick a round to get started.",
+  noRounds: "No rounds yet. Check back soon.",
+  seeRounds: "See rounds",
+  enter: "Enter",
+  enterCurrent: "Enter the current round",
+  notOpen: "The current round isn't open for entries right now.",
+  details: "Details",
+  technical: "Technical details",
+  roundId: "Round id",
+  testnet: "Testnet. These are test coins with no real value.",
+  groups: Object.freeze({
+    open: "Open now", upcoming: "Upcoming", waiting: "Waiting for draw", finished: "Finished",
+  }),
+  feeLine: "Network fee: under 0.01 CKB, not returned",
+  claimSoon: "Prize claiming opens soon.",
+  retireSoon: "Your ticket deposit will be returnable here soon.",
+  refundBlocked: "This can't be refunded yet.",
+  poolSoFar: "Prize pool",
+  yours: "yours",
+});
+
+// Everything this file can say, for the jargon test. A new string that is not
+// reachable from here is a string the test cannot see.
+function ALL_SAMPLES() {
+  const S = roundState().PLAYER_STATE;
+  const T = ticketsLib();
+  const tip = { height: 1100n, epoch: { number: 1005n, index: 0n, length: 1800n } };
+  const config = { entryStart: 1006n, entryEnd: 1010n };
+  const out = [];
+  for (const state of Object.values(S)) {
+    out.push(stateBadge(state, { full: false }), stateBadge(state, { full: true }));
+    out.push(milestone({ view: { state }, snapshot: { config, seal: null }, tip }));
+    out.push(milestone({ view: { state }, snapshot: { config, seal: { inclusionHeight: 1000n } }, tip }));
+  }
+  for (const o of Object.values(T.OUTCOME)) out.push(outcomeBadge(o));
+  for (const a of Object.values(T.ACTION)) out.push(actionLabel(a));
+  out.push(ticketsLine(7n, 10n), ticketsLine(1n, null), estimateLine(4100000000n), estimateLine(1n));
+  out.push(honestyLine(1192n), winLine(1, 50n, 100n), heldLine(1), heldLine(5), ckb(1n), ordinal(2));
+  for (const v of Object.values(errors)) out.push(typeof v === "function" ? v("popup closed") : v);
+  const walk = (v) => {
+    if (typeof v === "string") out.push(v); else for (const x of Object.values(v)) walk(x);
+  };
+  walk(text);
+  return out.filter((s) => s !== "");
+}
+
+const api = {
+  ckb, ordinal, plural, shortAddress, stateBadge, ticketsLine, milestone, outcomeBadge, actionLabel,
+  estimateLine, honestyLine, winLine, heldLine, errors, text, ALL_SAMPLES,
+};
+if (typeof module !== "undefined" && module.exports) module.exports = api;
+if (typeof window !== "undefined") window.DaowowCopy = api;
+})();
