@@ -98,3 +98,37 @@ test("a wallet connect failure is shown on the page, not only logged", () => {
   const main = code(read("dapp/app/main.js"));
   assert.match(main, /errors\.wallet\(/);
 });
+
+// --- the ball machine --------------------------------------------------------
+const stageSource = () => code(read("dapp/app/draw/stage.js"));
+
+test("the stage imports Three.js only from the vendored file", () => {
+  const src = stageSource();
+  const imports = [...src.matchAll(/\bfrom\s+"([^"]+)"/g)].map((m) => m[1]);
+  assert.deepStrictEqual(imports, ["../../../vendor/three.module.min.js"]);
+  assert.doesNotMatch(src, /https?:\/\//);
+  assert.doesNotMatch(src, /\bimport\s*\(/);
+});
+
+test("the stage takes its randomness from the draw's own seed", () => {
+  const src = stageSource();
+  assert.match(src, /seededRandom\(script\.seed\)/);
+  assert.doesNotMatch(src, /Math\.random|crypto\.getRandomValues|Date\.now\(\)\s*%/);
+});
+
+test("the stage exposes play, skip, replay and dispose", () => {
+  assert.match(stageSource(), /return\s*\{\s*play,\s*skip,\s*replay,\s*dispose\s*\}/);
+});
+
+test("the stage frees what it allocates and caps the pixel ratio", () => {
+  const src = stageSource();
+  assert.match(src, /renderer\.dispose\(\)/);
+  assert.match(src, /cancelAnimationFrame/);
+  assert.match(src, /setPixelRatio\(Math\.min\(window\.devicePixelRatio[^)]*, 2\)\)/);
+});
+
+test("the draw screen falls back to the list for reduced motion and for a failed stage", () => {
+  const src = code(read("dapp/app/views/draw.js"));
+  assert.match(src, /prefers-reduced-motion: reduce/);
+  assert.match(src, /catch\s*\{[\s\S]*?asList\(/);
+});
