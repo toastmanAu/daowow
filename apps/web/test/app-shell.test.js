@@ -13,14 +13,7 @@ const read = (rel) => fs.readFileSync(path.join(WEB, rel), "utf8");
 const walk = (rel) => fs.readdirSync(path.join(WEB, rel), { withFileTypes: true }).flatMap((e) =>
   e.isDirectory() ? walk(path.join(rel, e.name)) : [path.join(rel, e.name)]);
 const html = read("dapp/index.html");
-// Old pages still to be retired by the tasks that replace them. Each entry
-// must exist, so this list cannot outlive the files it excuses.
-const RETIRING = ["dapp/refund.html", "dapp/refund.js"];
-const live = (files) => files.filter((f) => !RETIRING.includes(f));
-
-test("every page awaiting retirement is still there to retire", () => {
-  for (const f of RETIRING) assert.ok(fs.existsSync(path.join(WEB, f)), `${f} is gone: drop it from RETIRING`);
-});
+const live = (files) => files;
 const code = (src) => src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 
 test("the shell carries the exact content security policy", () => {

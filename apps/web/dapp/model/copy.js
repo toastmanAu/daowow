@@ -138,6 +138,10 @@ const ticketsLeft = (left) =>
   `Only ${plural(left, "ticket")} ${BigInt(left) === 1n ? "is" : "are"} left in this round.`;
 const heldFor = (termText) => `until payout, ${termText} after the draw`;
 
+const refundButton = (shannons) => `Refund ${ckb(shannons)} CKB`;
+const refundReturns = (shannons) => `${ckb(shannons)} CKB returns to your wallet.`;
+const refundDone = (shannons) => `Refunded. ${ckb(shannons)} CKB is back in your wallet.`;
+
 const errors = Object.freeze({
   network: "We can't reach the network right now. Check your connection and try again.",
   manifest: "This site couldn't load its own settings. Reload the page to try again.",
@@ -192,6 +196,19 @@ const text = Object.freeze({
     late: "This round closes within the next few hours. An entry sent now may not arrive in time.",
     gone: "We couldn't find this round any more.",
   }),
+  refund: Object.freeze({
+    confirm: "Confirm refund",
+    cancel: "Cancel",
+    fee: "Network fee: under 0.01 CKB, paid from your balance.",
+    history: "We couldn't rebuild this round's history. Reload and try again.",
+    unavailable: "This entry can't be refunded right now.",
+    checking: "Checking the round…",
+    approve: "Approve in your wallet…",
+    sending: "Sending…",
+    waiting: "Sent. Waiting for confirmation…",
+    stillWaiting: "This is taking longer than usual. The refund may still go through. Check back in a few minutes.",
+    notSent: "The refund was not sent. Your deposit is still safe in the round.",
+  }),
   feeLine: "Network fee: under 0.01 CKB, not returned",
   claimSoon: "Prize claiming opens soon.",
   retireSoon: "Your ticket deposit will be returnable here soon.",
@@ -226,6 +243,7 @@ function ALL_SAMPLES() {
     placeLine(3, 20n, 99n, false, false), poolLine(100000000n));
   out.push(enterFor("10,459"), entryConfirmed(1n), entryConfirmed(5n), ticketsLeft(1n), ticketsLeft(3n),
     heldFor("about 30 days"));
+  out.push(refundButton(1n), refundReturns(1n), refundDone(1n));
   out.push(honestyLine(1192n), winLine(1, 50n, 100n), heldLine(1), heldLine(5), ckb(1n), ordinal(2));
   for (const v of Object.values(errors)) out.push(typeof v === "function" ? v("popup closed") : v);
   const walk = (v) => {
@@ -238,7 +256,7 @@ function ALL_SAMPLES() {
 const api = {
   ckb, ordinal, plural, shortAddress, stateBadge, ticketsLine, milestone, outcomeBadge, actionLabel,
   estimateLine, honestyLine, winLine, heldLine, costTicket, costDeposit, costStorage, costExample,
-  placeLine, poolLine, enterFor, entryConfirmed, ticketsLeft, heldFor, errors, text, ALL_SAMPLES,
+  placeLine, poolLine, refundButton, refundReturns, refundDone, enterFor, entryConfirmed, ticketsLeft, heldFor, errors, text, ALL_SAMPLES,
 };
 if (typeof module !== "undefined" && module.exports) module.exports = api;
 if (typeof window !== "undefined") window.DaowowCopy = api;
