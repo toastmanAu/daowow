@@ -132,6 +132,12 @@ const placeLine = (place, share, opensAt, open, reachable) => {
 };
 const poolLine = (shannons) => `Prize pool: ${estimateLine(shannons)}`;
 
+const enterFor = (total) => `Enter for ${total} CKB`;
+const entryConfirmed = (n) => `Confirmed. Your ${plural(n, "ticket")} ${BigInt(n) === 1n ? "is" : "are"} in the round.`;
+const ticketsLeft = (left) =>
+  `Only ${plural(left, "ticket")} ${BigInt(left) === 1n ? "is" : "are"} left in this round.`;
+const heldFor = (termText) => `until payout, ${termText} after the draw`;
+
 const errors = Object.freeze({
   network: "We can't reach the network right now. Check your connection and try again.",
   manifest: "This site couldn't load its own settings. Reload the page to try again.",
@@ -164,10 +170,33 @@ const text = Object.freeze({
   groups: Object.freeze({
     open: "Open now", upcoming: "Upcoming", waiting: "Waiting for draw", finished: "Finished",
   }),
+  entry: Object.freeze({
+    title: "Enter",
+    tickets: "How many tickets?",
+    summary: "What leaves your wallet",
+    agree: "I understand this total is held until the round pays out.",
+    acceptLate: "I understand this entry may not arrive in time.",
+    connectToEnter: "Connect wallet to enter",
+    checking: "Checking the round…",
+    approve: "Approve in your wallet…",
+    sending: "Sending…",
+    waiting: "Sent. Waiting for confirmation…",
+    stillWaiting: "This is taking longer than usual. Your entry may still go through. Check My tickets in a few minutes.",
+    notSent: "Your entry was not sent. Nothing has left your wallet.",
+    seeTickets: "See my tickets",
+    transaction: "Transaction",
+    closed: "Entries for this round have closed.",
+    notOpenYet: "This round hasn't opened yet.",
+    full: "This round is now full.",
+    none: "Choose at least one ticket.",
+    late: "This round closes within the next few hours. An entry sent now may not arrive in time.",
+    gone: "We couldn't find this round any more.",
+  }),
   feeLine: "Network fee: under 0.01 CKB, not returned",
   claimSoon: "Prize claiming opens soon.",
   retireSoon: "Your ticket deposit will be returnable here soon.",
   refundBlocked: "This can't be refunded yet.",
+  prizeTable: "What this round pays",
   noPoolYet: "The prize pool starts growing once the round's tickets are placed in savings.",
   roundEnded: "This round didn't go ahead.",
   youAreHere: "You are here",
@@ -195,6 +224,8 @@ function ALL_SAMPLES() {
   out.push(costTicket(1n), costDeposit(1n, true), costDeposit(1n, false), costStorage(1n), costExample(1n));
   out.push(placeLine(1, 50n, 1n, true, true), placeLine(2, 30n, 5n, false, true),
     placeLine(3, 20n, 99n, false, false), poolLine(100000000n));
+  out.push(enterFor("10,459"), entryConfirmed(1n), entryConfirmed(5n), ticketsLeft(1n), ticketsLeft(3n),
+    heldFor("about 30 days"));
   out.push(honestyLine(1192n), winLine(1, 50n, 100n), heldLine(1), heldLine(5), ckb(1n), ordinal(2));
   for (const v of Object.values(errors)) out.push(typeof v === "function" ? v("popup closed") : v);
   const walk = (v) => {
@@ -207,7 +238,7 @@ function ALL_SAMPLES() {
 const api = {
   ckb, ordinal, plural, shortAddress, stateBadge, ticketsLine, milestone, outcomeBadge, actionLabel,
   estimateLine, honestyLine, winLine, heldLine, costTicket, costDeposit, costStorage, costExample,
-  placeLine, poolLine, errors, text, ALL_SAMPLES,
+  placeLine, poolLine, enterFor, entryConfirmed, ticketsLeft, heldFor, errors, text, ALL_SAMPLES,
 };
 if (typeof module !== "undefined" && module.exports) module.exports = api;
 if (typeof window !== "undefined") window.DaowowCopy = api;

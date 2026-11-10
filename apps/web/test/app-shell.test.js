@@ -15,7 +15,7 @@ const walk = (rel) => fs.readdirSync(path.join(WEB, rel), { withFileTypes: true 
 const html = read("dapp/index.html");
 // Old pages still to be retired by the tasks that replace them. Each entry
 // must exist, so this list cannot outlive the files it excuses.
-const RETIRING = ["dapp/entry.html", "dapp/entry.js", "dapp/refund.html", "dapp/refund.js"];
+const RETIRING = ["dapp/refund.html", "dapp/refund.js"];
 const live = (files) => files.filter((f) => !RETIRING.includes(f));
 
 test("every page awaiting retirement is still there to retire", () => {

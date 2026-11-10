@@ -22,40 +22,42 @@ function formatCkb(shannons) {
   return `${grouped}.${frac.toString().padStart(8, "0")}`;
 }
 
-// Every component named, with what happens to it afterwards. The most
-// misleading reading of this quote is that the claim capacity is a fee; it is
-// not, it is returned when the claim retires.
-function describeQuote(quote) {
-  const rows = [
+// Every part named in plain words, with what happens to it afterwards. The
+// most misleading reading of this summary is that the ticket deposit is a
+// fee; it is not, it comes back. Only the network fee is spent.
+//
+// `term` is how long the round holds the money, in words, from the round's
+// own configuration.
+function describeQuote(quote, { term = "the length of the round" } = {}) {
+  return [
     {
-      label: "Ticket principal",
+      label: `Your tickets (${quote.tickets})`,
       value: `${formatCkb(quote.principal)} CKB`,
-      note: "Returned to you at settlement, win or lose.",
+      note: "Returned to you after the round, win or lose.",
     },
     {
-      label: `Claim NFTs (${quote.tickets})`,
+      label: `Ticket deposit (${quote.tickets})`,
       value: `${formatCkb(quote.claimCapacity)} CKB`,
-      note: "One per ticket. Locked, not spent — returned when the claim retires.",
+      note: "Held with your tickets. Returned when the round is finished.",
     },
     {
-      label: "Entry cell",
+      label: "Storage deposit",
       value: `${formatCkb(quote.entryCellOverhead)} CKB`,
-      note: "Storage for your entry. Returned at settlement.",
+      note: "Once per purchase. Returned after the round.",
+    },
+    {
+      label: "Network fee",
+      // The wallet sizes the exact fee when it prepares the transaction, so
+      // before then the honest figure is a ceiling.
+      value: quote.fee > 0n ? `${formatCkb(quote.fee)} CKB` : "under 0.01 CKB",
+      note: "Paid to the network. Not returned.",
+    },
+    {
+      label: "Total leaving your wallet now",
+      value: `${formatCkb(quote.total)} CKB`,
+      note: `Held for ${term}, then returned except the fee.`,
     },
   ];
-  if (quote.fee > 0n) {
-    rows.push({
-      label: "Network fee",
-      value: `${formatCkb(quote.fee)} CKB`,
-      note: "Paid to miners. Not returned.",
-    });
-  }
-  rows.push({
-    label: "Total committed",
-    value: `${formatCkb(quote.total)} CKB`,
-    note: "Held for the round's duration, about one to two months.",
-  });
-  return rows;
 }
 
 // What the round pays now, and what buying more would open. A threshold the

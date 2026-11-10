@@ -26,27 +26,51 @@ test("amounts render with thousands separators and no false precision", () => {
   assert.strictEqual(formatCkb(100000001n), "1.00000001");
 });
 
-test("the quote names every component, not just the total", () => {
+test("the summary names every part, in plain words, and the total", () => {
   const q = quoteEntry({ config, schedule, lockScript: joyid, tickets: 10n, feeShannons: 0n });
-  const rows = describeQuote(q);
-  const labels = rows.map((r) => r.label.toLowerCase()).join(" | ");
-  assert.match(labels, /principal/);
-  assert.match(labels, /claim/);
-  assert.match(labels, /entry cell/);
-  assert.match(labels, /total/);
+  const rows = describeQuote(q, { term: "about 30 days" });
+  assert.deepStrictEqual(rows.map((r) => r.label), [
+    "Your tickets (10)", "Ticket deposit (10)", "Storage deposit", "Network fee",
+    "Total leaving your wallet now",
+  ]);
   const total = rows.find((r) => /total/i.test(r.label));
   assert.strictEqual(total.value, "102,457 CKB");
+  assert.match(total.note, /about 30 days/);
 });
 
-test("the quote says the overhead is returned, not spent", () => {
+test("the summary says each deposit is returned, and the fee is not", () => {
   // The single most misleading reading is that the 2,220 CKB is a fee.
   const q = quoteEntry({ config, schedule, lockScript: joyid, tickets: 10n, feeShannons: 0n });
-  const rows = describeQuote(q);
-  const claim = rows.find((r) => /claim/i.test(r.label));
-  assert.match(claim.note, /return|recover|back/i,
-    "the claim capacity is locked, not spent, and must say so");
-  const entry = rows.find((r) => /entry cell/i.test(r.label));
-  assert.match(entry.note, /return|recover|back/i);
+  const rows = describeQuote(q, { term: "about 30 days" });
+  for (const label of ["Your tickets (10)", "Ticket deposit (10)", "Storage deposit"]) {
+    assert.match(rows.find((r) => r.label === label).note, /returned/i, label);
+  }
+  const fee = rows.find((r) => r.label === "Network fee");
+  assert.strictEqual(fee.value, "under 0.01 CKB");
+  assert.match(fee.note, /not returned/i);
+});
+
+test("the total row is the sum of the deposits above it", () => {
+  const q = quoteEntry({ config, schedule, lockScript: joyid, tickets: 3n, feeShannons: 0n });
+  const rows = describeQuote(q, { term: "about 30 days" });
+  const amount = (label) => BigInt(rows.find((r) => r.label === label).value.replace(/[^0-9]/g, ""));
+  assert.strictEqual(
+    amount("Your tickets (3)") + amount("Ticket deposit (3)") + amount("Storage deposit"),
+    amount("Total leaving your wallet now"));
+});
+
+test("a known fee is shown exactly", () => {
+  const q = quoteEntry({ config, schedule, lockScript: joyid, tickets: 1n, feeShannons: 100000n });
+  const fee = describeQuote(q, { term: "about 30 days" }).find((r) => r.label === "Network fee");
+  assert.strictEqual(fee.value, "0.00100000 CKB");
+});
+
+test("no summary row uses a banned word", () => {
+  const banned = /\b(epochs?|shards?|cells?|ledgers?|freez\w*|frozen|genesis|aggregat\w*|commitments?|out ?points?|lock hash\w*|witness\w*|NFTs?|principal)\b/i;
+  const q = quoteEntry({ config, schedule, lockScript: joyid, tickets: 2n, feeShannons: 0n });
+  for (const r of describeQuote(q, { term: "about 30 days" })) {
+    assert.doesNotMatch(`${r.label} ${r.note}`, banned);
+  }
 });
 
 test("the payout table shows what the round pays now and what opens next", () => {

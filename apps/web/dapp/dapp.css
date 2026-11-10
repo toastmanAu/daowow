@@ -260,3 +260,13 @@ progress.fill::-moz-progress-bar { background: var(--amber); }
 #home-enter { margin: 8px 0 24px; }
 #home-enter .muted { flex-basis: 100%; }
 main > section > h1:focus-visible { outline: none; }
+
+/* --- Entering ------------------------------------------------------------- */
+.field input { min-height: 48px; }
+.status { min-height: 24px; font-weight: 600; }
+.status:empty { display: none; }
+.confirm-line { margin: 0; font-size: 14px; }
+.confirm-line[hidden] { display: none; }
+.confirm-line label { display: flex; gap: 12px; align-items: flex-start; min-height: 44px; cursor: pointer; }
+.confirm-line input { width: 20px; height: 20px; margin: 2px 0 0; flex: none; accent-color: var(--amber); }
+.section-heading { margin: 8px 0 0; }
