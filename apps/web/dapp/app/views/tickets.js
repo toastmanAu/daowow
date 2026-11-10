@@ -44,17 +44,18 @@ async function runRefund(ctx, card, entry) {
   try {
     say(words.checking);
     // Read the round again: the entry may already be gone, or the round may
-    // have moved on, since this card was drawn.
-    await ctx.store.refresh();
-    const row = ctx.store.findRound(card.roundId);
-    const fresh = (ctx.store.state.mine ?? []).find((c) => c.roundId === card.roundId);
-    const still = fresh && fresh.refundable.find((e) => keyOf(e) === keyOf(entry));
-    const session = ctx.store.state.session;
-    if (!row || !still || !session) throw Object.assign(new Error(words.unavailable), { plain: true });
-
+    // have moved on, since this card was drawn. A re-read that FAILS stops
+    // here too; the old data still in memory is not good enough to sign on.
+    const check = await window.DaowowRefundGuard.checkBeforeRefund({
+      store: ctx.store, roundId: card.roundId, outPoint: entry.outPoint,
+    });
+    const session = ctx.signing();
+    if (!check.ok || !session) {
+      throw Object.assign(new Error(check.ok ? words.unavailable : check.message), { plain: true });
+    }
     const prepared = await window.DaowowRefundGuard.prepareRefund({
-      rpc: ctx.rpc, manifest: ctx.manifest, row, entry: still, session,
-      nowEpoch: ctx.store.state.tip.epoch.number,
+      rpc: ctx.rpc, manifest: ctx.manifest, row: check.row, entry: check.entry, session,
+      nowEpoch: check.nowEpoch,
     });
     if (!prepared.ok) {
       flow.stage = "error";

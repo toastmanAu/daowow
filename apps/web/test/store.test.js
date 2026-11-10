@@ -59,6 +59,8 @@ function readers(over = {}) {
     findClaims: log("findClaims", [{ commitment: A.commitment, shardId: 0, position: 0n, capacity: 1n }]),
     findMyEntries: log("findMyEntries", []),
     scriptHash: () => "ab".repeat(32),
+    isTrustedRound: () => true,
+    isSoundRound: () => true,
     ...over,
   };
 }
@@ -222,18 +224,79 @@ test("subscribers hear every change and can leave", async () => {
   assert.strictEqual(heard, before);
 });
 
-test("a slow older refresh cannot overwrite a newer one", async () => {
+test("refreshes run one after another, and each caller waits for its OWN read", async () => {
+  // "Read the round again before signing" is only true if the promise a
+  // caller awaits is the read it asked for. A refresh that returned early
+  // because another was in flight would hand back state up to a minute old.
   let release;
   const gate = new Promise((r) => { release = r; });
-  let n = 0;
+  let reads = 0;
   const { store } = make({
-    readTip: async () => { n += 1; if (n === 1) { await gate; return tipHeader(100n); } return tipHeader(2000000n); },
+    readTip: async () => { reads += 1; if (reads === 1) { await gate; return tipHeader(100n); } return tipHeader(2000000n); },
   });
-  const slow = store.refresh();
-  await store.refresh();
+  const first = store.refresh();
+  let secondDone = false;
+  const second = store.refresh().then(() => { secondDone = true; });
+  await new Promise((r) => setTimeout(r, 20));
+  assert.strictEqual(secondDone, false, "the second must not resolve before it has read");
   release();
-  await slow;
+  await first;
+  await second;
+  assert.strictEqual(reads, 2);
   assert.strictEqual(store.state.tip.height, 2000000n);
+});
+
+test("a round that is not built on this deployment's contracts is never listed", async () => {
+  const { store } = make({ isTrustedRound: (config) => config.roundId === A.roundId });
+  await store.refresh();
+  assert.deepStrictEqual(store.state.rows.map((r) => r.snapshot.config.roundId), [A.roundId]);
+  assert.strictEqual(store.findRound(B.roundId.slice(0, 8)), null);
+});
+
+test("a round of ours that can never run is listed but marked unsound", async () => {
+  const { store } = make({ isSoundRound: (config) => config.roundId !== B.roundId });
+  await store.refresh();
+  assert.deepStrictEqual(store.state.rows.map((r) => r.sound), [true, false]);
+});
+
+test("if soundness cannot be checked, the round is treated as unsound, not as fine", async () => {
+  const { store } = make({ isSoundRound: async () => { throw new Error("no consensus"); } });
+  await store.refresh();
+  assert.strictEqual(store.state.status, "ready");
+  assert.deepStrictEqual(store.state.rows.map((r) => r.sound), [false, false]);
+});
+
+test("the store keeps who is connected, never the means to sign", async () => {
+  const { store } = make();
+  await store.refresh();
+  await store.setSession({
+    address: "ckt1x", lockScript: { codeHash: "0x1", hashType: "type", args: "0x" },
+    balance: async () => 5n, signEntry: async () => "signed", broadcast: async () => "sent",
+  });
+  assert.deepStrictEqual(Object.keys(store.state.session).sort(), ["address", "balance", "lockScript"]);
+  assert.strictEqual(store.state.session.signEntry, undefined);
+});
+
+test("tickets loaded for one wallet never appear under another", async () => {
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  let calls = 0;
+  const { store } = make({
+    findClaims: async () => {
+      calls += 1;
+      if (calls === 1) { await gate; return [{ commitment: A.commitment, shardId: 0, position: 0n, capacity: 1n }]; }
+      return [];
+    },
+  });
+  await store.refresh();
+  const lock = (n) => ({ codeHash: "0x1", hashType: "type", args: "0x0" + n });
+  const a = store.setSession({ address: "ckt1a", lockScript: lock(1) });
+  await new Promise((r) => setTimeout(r, 10));
+  await store.setSession({ address: "ckt1b", lockScript: lock(2) });
+  release();
+  await a;
+  assert.strictEqual(store.state.session.address, "ckt1b");
+  assert.deepStrictEqual(store.state.mine, []);
 });
 
 test("findRound resolves a unique id prefix and nothing else", async () => {
@@ -241,6 +304,7 @@ test("findRound resolves a unique id prefix and nothing else", async () => {
   await store.refresh();
   assert.strictEqual(store.findRound(A.roundId.slice(0, 8)).snapshot.config.roundId, A.roundId);
   assert.strictEqual(store.findRound("0000"), null);
+  assert.strictEqual(store.findRound(A.roundId.slice(0, 7)), null, "a link needs at least 8 characters");
   assert.strictEqual(store.findRound(""), null);
 });
 

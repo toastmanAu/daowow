@@ -35,6 +35,7 @@ export function mount(node, ctx, firstRow) {
   let row = firstRow;
   let busy = false;
   let finished = false;
+  let shownTotal = null; // the total on screen, which is the total that may be signed
   let disposed = false;
 
   const head = h("div", { class: "card" });
@@ -93,7 +94,7 @@ export function mount(node, ctx, firstRow) {
     const view = window.DaowowEntryView;
     const request = asked();
     const guard = window.DaowowEntryGuard.entryProblem({
-      view: row.view, snapshot: row.snapshot, schedule: row.schedule,
+      view: row.view, snapshot: row.snapshot, schedule: row.schedule, sound: row.sound,
       tickets: request.tickets ?? 1n, nowEpoch: ctx.store.state.tip.epoch.number,
     });
     // One reason at a time: when the round itself is the problem, say that.
@@ -114,6 +115,7 @@ export function mount(node, ctx, firstRow) {
     }
 
     clear(summary);
+    shownTotal = null;
     // A round that cannot take this entry shows why, and no total: a figure
     // in CKB that no longer matches the request is the one thing on this
     // screen a player must never misread.
@@ -131,6 +133,7 @@ export function mount(node, ctx, firstRow) {
       tickets: request.tickets, feeShannons: 0n,
     });
     summary.append(summaryList(view.describeQuote(quote, { term: termText(row) })));
+    shownTotal = quote.total;
     if (finished) { submit.hidden = true; return; }
     if (!session()) {
       submit.disabled = busy;
@@ -141,9 +144,8 @@ export function mount(node, ctx, firstRow) {
     submit.disabled = busy || !agree.checked || (Boolean(guard.warn) && !late.checked);
   }
 
-  async function send(fresh, tickets) {
+  async function send(fresh, tickets, who) {
     const { manifest, rpc } = ctx;
-    const who = session();
     const config = fresh.snapshot.config;
     // The shard head, read fresh on every attempt. Never cached: a cached
     // head is exactly how a client builds on a cell another entry already
@@ -176,13 +178,18 @@ export function mount(node, ctx, firstRow) {
 
   async function onSubmit() {
     if (busy || finished) return;
-    if (!session()) {
+    // The wallet that will sign, taken once, now. Everything from here on
+    // uses this one session, so a wallet swapped mid-flow cannot sign a total
+    // that was quoted for another.
+    const who = ctx.signing();
+    if (!who) {
       await ctx.connect();
       paint();
       return;
     }
     const request = asked();
-    if (request.tickets === null) return;
+    if (request.tickets === null || shownTotal === null) return;
+    const confirmedTotal = shownTotal;
     busy = true;
     clear(problem);
     clear(after);
@@ -193,13 +200,14 @@ export function mount(node, ctx, firstRow) {
       // filled while this summary sat on screen.
       const check = await window.DaowowEntryGuard.checkBeforeSigning({
         store: ctx.store, roundId, tickets: request.tickets, acceptLate: late.checked,
+        lockScript: who.lockScript, shownTotal: confirmedTotal,
       });
       if (!check.ok) {
         say("");
         problem.append(errorBox(check.message));
         return;
       }
-      const { txHash } = await send(check.row, request.tickets);
+      const { txHash } = await send(check.row, request.tickets, who);
       // Committed is NOT claimed yet. The node accepted the transaction into
       // its pool; that is all a send means. So it is watched.
       say(words.waiting);

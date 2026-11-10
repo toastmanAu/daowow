@@ -37,7 +37,7 @@ function createStore({ manifest, rpc, readers }) {
   };
   const listeners = new Set();
   const schedules = new Map(); // roundId -> decoded schedule; committed, so kept
-  let generation = 0;
+  let queue = Promise.resolve();
 
   const notify = () => { for (const fn of [...listeners]) fn(state); };
 
@@ -103,7 +103,11 @@ function createStore({ manifest, rpc, readers }) {
     const shown = drawn.draw && !drawn.draw.viable
       ? Object.freeze({ ...view, state: S.FINISHED })
       : view;
-    return { snapshot, view: shown, label, schedule, scheduleError, ...drawn, pool };
+    // Sound = it can ever run. Unknown counts as no: an entry is never
+    // offered on the strength of a check that did not happen.
+    let sound = false;
+    try { sound = Boolean(await readers.isSoundRound(snapshot.config)); } catch { sound = false; }
+    return { snapshot, view: shown, label, sound, schedule, scheduleError, ...drawn, pool };
   }
 
   async function loadMine(rows, tip, session) {
@@ -119,55 +123,83 @@ function createStore({ manifest, rpc, readers }) {
     });
   }
 
-  async function refreshMine(mine) {
-    if (!state.session || !state.tip) { state.mine = null; state.mineError = null; return; }
+  async function refreshMine() {
+    const session = state.session;
+    if (!session || !state.tip) { state.mine = null; state.mineError = null; return; }
+    let mine = null;
+    let error = null;
     try {
-      state.mine = await loadMine(state.rows, state.tip, state.session);
-      state.mineError = null;
+      mine = await loadMine(state.rows, state.tip, session);
     } catch (e) {
-      state.mine = mine ?? null;
-      state.mineError = message(e);
+      error = message(e);
     }
+    // The wallet changed while this was loading: these are someone else's
+    // tickets now, and must not be shown under the new wallet.
+    if (state.session !== session) return;
+    state.mine = mine;
+    state.mineError = error;
   }
 
-  /** Re-reads everything. Never throws: a failure becomes status "error". */
-  async function refresh() {
-    const mine = ++generation;
+  async function readAll() {
     try {
       const header = await readers.readTip(rpc);
       const tip = {
         height: BigInt(header.number), epoch: time().parseEpoch(header.epoch), header,
       };
-      const [snapshots, entryCounts] = await Promise.all([
+      const [found, entryCounts] = await Promise.all([
         readers.readDeployment(rpc, manifest), readers.countEntries(rpc, manifest),
       ]);
+      // Only rounds built on this deployment's own contracts. Anyone can
+      // create a round cell; one that points at other scripts is not ours
+      // and is never listed, linked to, or signed for.
+      const snapshots = [];
+      for (const snapshot of found) {
+        if (await readers.isTrustedRound(snapshot.config)) snapshots.push(snapshot);
+      }
       const labels = roundState().roundLabels(snapshots);
       const rows = [];
       for (const snapshot of snapshots) {
         rows.push(await buildRow(snapshot, labels.get(snapshot.config.roundId), tip, entryCounts));
       }
-      // A newer refresh started while this one was reading: its answer wins.
-      if (mine !== generation) return;
       state.tip = tip;
       state.rows = rows;
       state.status = "ready";
       state.error = null;
-      await refreshMine(null);
+      await refreshMine();
     } catch (e) {
-      if (mine !== generation) return;
       state.status = "error";
       state.error = message(e);
     }
-    if (mine === generation) notify();
+    notify();
   }
 
+  /**
+   * Re-reads everything. Never throws: a failure becomes status "error".
+   *
+   * Refreshes run ONE AT A TIME, and the promise a caller gets settles only
+   * after a read that STARTED after their call. "Read the round again before
+   * signing" depends on that: a refresh that returned early because another
+   * was already running would hand back state up to a minute old.
+   */
+  function refresh() {
+    queue = queue.then(readAll, readAll);
+    return queue;
+  }
+
+  // WHO is connected, and nothing that can sign. Every view can read the
+  // store, so the signing operations are deliberately not kept in it; the
+  // page hands those only to the two views that send transactions.
   async function setSession(session) {
-    state.session = session;
+    state.session = session
+      ? Object.freeze({
+        address: session.address, lockScript: session.lockScript, balance: session.balance,
+      })
+      : null;
     state.mine = null;
     state.mineError = null;
     notify();
     if (session && state.status === "ready") {
-      await refreshMine(null);
+      await refreshMine();
       notify();
     }
   }
@@ -175,7 +207,7 @@ function createStore({ manifest, rpc, readers }) {
   /** The round a link names: a UNIQUE id prefix, or null. Never another round. */
   function findRound(prefix) {
     const want = String(prefix ?? "").toLowerCase().replace(/^0x/, "");
-    if (!/^[0-9a-f]{4,64}$/.test(want)) return null;
+    if (!/^[0-9a-f]{8,64}$/.test(want)) return null;
     const hits = state.rows.filter((r) => r.snapshot.config.roundId.toLowerCase().startsWith(want));
     return hits.length === 1 ? hits[0] : null;
   }

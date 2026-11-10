@@ -154,3 +154,53 @@ test("countEntries counts the entries still on chain, per round, in one scan", a
   assert.strictEqual(counts.get("ee".repeat(32)), undefined);
   assert.strictEqual(rpc.calls.filter((c) => c.method === "get_cells").length, 1);
 });
+
+// --- which rounds belong to this deployment ----------------------------------
+// Anyone can create a cell under the round type. A round only counts as OURS if
+// its config points at the same contracts the site was built for; otherwise a
+// stranger could list a round whose deposits go to a lock of their choosing.
+const { matchesDeployment, usesNetworkDao } = require("../chain/round-cells.js");
+const { scriptHash } = require("../chain/refund-tx.js");
+const NAMES = { "entry-lock": "entryLock", "dao-lock": "daoLock",
+  "settlement-type": "settlementType", "entry-shard-type": "entryShardType" };
+const HASH_TYPE = { data: 0, type: 1, data1: 2, data2: 4 };
+const DAO_TYPE_HASH = scriptHash({ codeHash: "0x" + "82".repeat(32), hashType: "type", args: "0x" });
+const deployedConfig = (over = {}) => {
+  const config = { ...A, daoType: { codeHash: DAO_TYPE_HASH, hashType: 1 } };
+  for (const [name, field] of Object.entries(NAMES)) {
+    const s = F.MANIFEST.scripts[name];
+    config[field] = { codeHash: s.codeHash.replace(/^0x/, ""), hashType: HASH_TYPE[s.hashType] };
+  }
+  return { ...config, ...over };
+};
+
+test("a round built on this deployment's contracts is ours", () => {
+  assert.strictEqual(matchesDeployment(deployedConfig(), F.MANIFEST), true);
+});
+
+test("a round pointing any one script somewhere else is not ours", () => {
+  const rogue = { codeHash: "66".repeat(32), hashType: 2 };
+  for (const field of Object.values(NAMES)) {
+    assert.strictEqual(matchesDeployment(deployedConfig({ [field]: rogue }), F.MANIFEST), false, field);
+  }
+});
+
+test("the same code under a different hash type is not ours", () => {
+  const lock = deployedConfig().daoLock;
+  assert.strictEqual(matchesDeployment(
+    deployedConfig({ daoLock: { ...lock, hashType: 1 } }), F.MANIFEST), false);
+});
+
+test("a round is sound only if its DAO type is the network's own, as a script hash", () => {
+  assert.strictEqual(usesNetworkDao(deployedConfig(), DAO_TYPE_HASH), true);
+  // The 2026-10-05 trap: two live rounds committed the DAO's CODE hash here
+  // and can never run. They are ours, but nobody may be offered an entry.
+  const codeHashInstead = { codeHash: "82".repeat(32), hashType: 1 };
+  assert.strictEqual(usesNetworkDao(deployedConfig({ daoType: codeHashInstead }), DAO_TYPE_HASH), false);
+  assert.strictEqual(usesNetworkDao(
+    deployedConfig({ daoType: { codeHash: DAO_TYPE_HASH, hashType: 2 } }), DAO_TYPE_HASH), false);
+});
+
+test("without the network's DAO type to compare against, no round is sound", () => {
+  assert.strictEqual(usesNetworkDao(deployedConfig(), null), false);
+});

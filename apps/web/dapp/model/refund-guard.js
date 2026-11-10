@@ -55,7 +55,28 @@ async function prepareRefund({ rpc, manifest, row, entry, session, nowEpoch, rea
   }
 }
 
-const api = { prepareRefund };
+const sameOutPoint = (a, b) =>
+  Boolean(a && b) && a.txHash === b.txHash && Number(a.index) === Number(b.index);
+
+/**
+ * Reads the round again before a refund is signed, and hands back the FRESH
+ * round and entry. A failed re-read leaves the old data in memory, so the
+ * status is checked: building on a ledger that has since moved produces a
+ * transaction the chain refuses.
+ */
+async function checkBeforeRefund({ store, roundId, outPoint }) {
+  await store.refresh();
+  if (store.state.status !== "ready") {
+    return { ok: false, message: copy().errors.network };
+  }
+  const row = store.findRound(roundId);
+  const card = (store.state.mine ?? []).find((c) => c.roundId === roundId);
+  const entry = card ? card.refundable.find((e) => sameOutPoint(e.outPoint, outPoint)) : null;
+  if (!row || !entry) return { ok: false, message: copy().text.refund.unavailable };
+  return { ok: true, row, entry, nowEpoch: store.state.tip.epoch.number };
+}
+
+const api = { prepareRefund, checkBeforeRefund };
 if (typeof module !== "undefined" && module.exports) module.exports = api;
 if (typeof window !== "undefined") window.DaowowRefundGuard = api;
 })();

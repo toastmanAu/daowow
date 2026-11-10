@@ -74,3 +74,44 @@ test("a refusal from the builder comes back as a message, with its reason kept",
   assert.strictEqual(result.detail, "ledger is still open");
   assert.doesNotMatch(result.message, /ledger/);
 });
+
+// --- reading the round again before a refund is signed -----------------------
+const { checkBeforeRefund } = require("../dapp/model/refund-guard.js");
+const key = { txHash: "0x" + "e1".repeat(32), index: 0 };
+const mineEntry = { ...entry, outPoint: key };
+const refundStore = ({ status = "ready", refundable = [mineEntry], found = true } = {}) => {
+  const store = {
+    refreshes: 0,
+    state: { status: "ready", tip: { epoch: { number: 300n } }, mine: null },
+    async refresh() {
+      store.refreshes += 1;
+      store.state.status = status;
+      store.state.mine = [{ roundId: "ab".repeat(32), refundable }];
+    },
+    findRound: () => (found ? row(ledger(2)) : null),
+  };
+  return store;
+};
+
+test("a refund re-reads the round and hands on the FRESH entry and round", async () => {
+  const store = refundStore();
+  const result = await checkBeforeRefund({ store, roundId: "ab".repeat(32), outPoint: key });
+  assert.strictEqual(store.refreshes, 1);
+  assert.strictEqual(result.ok, true);
+  assert.strictEqual(result.entry, mineEntry);
+  assert.strictEqual(result.nowEpoch, 300n);
+});
+
+test("a re-read that failed stops the refund, even though old data is still in memory", async () => {
+  const result = await checkBeforeRefund({ store: refundStore({ status: "error" }), roundId: "ab".repeat(32), outPoint: key });
+  assert.strictEqual(result.ok, false);
+  assert.match(result.message, /can't reach the network/);
+});
+
+test("an entry that is gone or no longer refundable stops the refund", async () => {
+  for (const store of [refundStore({ refundable: [] }), refundStore({ found: false }),
+    refundStore({ refundable: [{ ...entry, outPoint: { txHash: key.txHash, index: 1 } }] })]) {
+    const result = await checkBeforeRefund({ store, roundId: "ab".repeat(32), outPoint: key });
+    assert.strictEqual(result.ok, false);
+  }
+});

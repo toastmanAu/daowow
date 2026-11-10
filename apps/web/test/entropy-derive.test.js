@@ -89,3 +89,11 @@ test("readEntropyHeaders returns the seal's header and the three after it, in or
   assert.deepStrictEqual(got.entropyHeaders.map((h) => BigInt(h.number)), [1064n, 1128n, 1192n]);
   assert.strictEqual(got.entropyHeaders[2].hash, "0x" + (1192n).toString(16).padStart(64, "0"));
 });
+
+test("a header for a different block than the one asked for is refused", async () => {
+  // A node answering height 1064 with block 1065's header would shift the
+  // whole run by one and still look self-consistent.
+  const headers = headersUpTo(1192n);
+  headers["1064"] = { number: "0x429", hash: "0x" + "77".repeat(32) }; // 1065
+  await assert.rejects(readEntropyHeaders(F.fakeRpc([], { headers }), 1000n), /asked for block 1064/);
+});

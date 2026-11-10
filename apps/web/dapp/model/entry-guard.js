@@ -12,14 +12,17 @@
 const lib = (path, name) => (typeof require === "function" ? require(path) : window[name]);
 const roundState = () => lib("./round-state.js", "DaowowRoundState");
 const copy = () => lib("./copy.js", "DaowowCopy");
+const quote = () => lib("../../chain/quote.js", "DaowowQuote");
 
 /** `block` stops the entry; `warn` needs the player's explicit yes. */
-function entryProblem({ view, snapshot, tickets, nowEpoch, schedule }) {
+function entryProblem({ view, snapshot, tickets, nowEpoch, schedule, sound }) {
   const S = roundState().PLAYER_STATE;
   const words = copy().text.entry;
   const none = { block: null, warn: null };
   if (view.state === S.UPCOMING) return { ...none, block: words.notOpenYet };
   if (view.state !== S.OPEN) return { ...none, block: words.closed };
+  // A round that can never place its tickets in savings takes no entries.
+  if (!sound) return { ...none, block: words.unsound };
   // Without a checked prize table the offer cannot be described, so it is
   // not made.
   if (!schedule) return { ...none, block: copy().errors.schedule };
@@ -41,7 +44,7 @@ function entryProblem({ view, snapshot, tickets, nowEpoch, schedule }) {
  * Re-reads the round, then judges it. `row` in the answer is the FRESH round,
  * and is the one the transaction must be built from.
  */
-async function checkBeforeSigning({ store, roundId, tickets, acceptLate }) {
+async function checkBeforeSigning({ store, roundId, tickets, acceptLate, lockScript, shownTotal }) {
   await store.refresh();
   if (store.state.status !== "ready") {
     return { ok: false, message: copy().errors.network, needsLateConsent: false, row: null };
@@ -51,12 +54,26 @@ async function checkBeforeSigning({ store, roundId, tickets, acceptLate }) {
     return { ok: false, message: copy().text.entry.gone, needsLateConsent: false, row: null };
   }
   const problem = entryProblem({
-    view: row.view, snapshot: row.snapshot, tickets, schedule: row.schedule,
+    view: row.view, snapshot: row.snapshot, tickets, schedule: row.schedule, sound: row.sound,
     nowEpoch: store.state.tip.epoch.number,
   });
   if (problem.block) return { ok: false, message: problem.block, needsLateConsent: false, row };
   if (problem.warn && !acceptLate) {
     return { ok: false, message: problem.warn, needsLateConsent: true, row };
+  }
+  // The total the player ticked is the total that gets signed. It is quoted
+  // again here from the fresh round and the wallet that will sign; a wallet
+  // swapped after the summary was drawn holds a different deposit per ticket.
+  let total = null;
+  try {
+    total = quote().quoteEntry({
+      config: row.snapshot.config, schedule: row.schedule, lockScript, tickets, feeShannons: 0n,
+    }).total;
+  } catch {
+    total = null;
+  }
+  if (total === null || shownTotal === undefined || shownTotal === null || total !== BigInt(shownTotal)) {
+    return { ok: false, message: copy().text.entry.changed, needsLateConsent: false, row };
   }
   return { ok: true, message: null, needsLateConsent: false, row };
 }

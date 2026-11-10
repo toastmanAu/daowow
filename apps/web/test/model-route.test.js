@@ -29,6 +29,9 @@ test("a non-hex round token is unknown, never a route", () => {
 });
 test("a round token that is too short or too long is unknown", () => {
   assert.strictEqual(parseRoute("#/round/abc/draw").unknown, true);
+  // Ids can be ground to share a short prefix, so a link must carry at least 8.
+  assert.strictEqual(parseRoute("#/round/affb66f/draw").unknown, true);
+  assert.strictEqual(parseRoute("#/round/affb66f7/draw").unknown, false);
   assert.strictEqual(parseRoute("#/round/" + "a".repeat(65) + "/draw").unknown, true);
 });
 test("markup in the hash is unknown", () => {

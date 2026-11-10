@@ -13,7 +13,9 @@
 
 const TABS = Object.freeze(["home", "rounds", "tickets", "how"]);
 const PANELS = Object.freeze(["enter", "draw"]);
-const ROUND_TOKEN = /^[0-9a-f]{4,64}$/i;
+// At least 8 characters: ids can be ground to collide on a short prefix, and
+// a link that could mean two rounds must mean neither.
+const ROUND_TOKEN = /^[0-9a-f]{8,64}$/i;
 
 const UNKNOWN = Object.freeze({ tab: "home", round: null, panel: null, unknown: true });
 

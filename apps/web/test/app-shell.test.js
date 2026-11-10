@@ -132,3 +132,15 @@ test("the draw screen falls back to the list for reduced motion and for a failed
   assert.match(src, /prefers-reduced-motion: reduce/);
   assert.match(src, /catch\s*\{[\s\S]*?asList\(/);
 });
+
+test("only the entry and refund views can reach the signing operations", () => {
+  const views = walk("dapp/app").filter((f) => f.endsWith(".js"));
+  const allowed = ["dapp/app/views/enter.js", "dapp/app/views/tickets.js", "dapp/app/main.js"];
+  for (const f of views) {
+    const touches = /signEntry|\.broadcast\(|signing\(/.test(code(read(f)));
+    assert.strictEqual(touches, allowed.includes(f), f);
+  }
+  for (const f of walk("dapp/model")) {
+    assert.doesNotMatch(code(read(f)), /signEntry|\.broadcast\(/, f);
+  }
+});

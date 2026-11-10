@@ -21,9 +21,30 @@ const REFRESH_MS = 60000;
 const TAB_VIEWS = { home, rounds, tickets };
 const PANEL_VIEWS = { enter, draw };
 
-function readers() {
+// The network's own Nervos DAO type, as a script hash, asked of the node once.
+// get_consensus reports the DAO's CODE hash; a round's config commits the hash
+// of the whole type SCRIPT (the 2026-10-05 trap), so it is built here.
+function daoTypeHashOnce(rpc) {
+  let pending = null;
+  return () => {
+    pending ??= rpc.call("get_consensus", []).then((consensus) => {
+      if (!consensus || !consensus.dao_type_hash) throw new Error("the node did not report the DAO type");
+      return window.DaowowRefundTx.scriptHash({
+        codeHash: consensus.dao_type_hash, hashType: "type", args: "0x",
+      });
+    });
+    // A failed read is retried on the next refresh rather than cached.
+    pending.catch(() => { pending = null; });
+    return pending;
+  };
+}
+
+function readers(manifest, rpc) {
   const cells = window.DaowowRoundCells;
+  const daoTypeHash = daoTypeHashOnce(rpc);
   return {
+    isTrustedRound: (config) => cells.matchesDeployment(config, manifest),
+    isSoundRound: async (config) => cells.usesNetworkDao(config, await daoTypeHash()),
     readTip: (rpc) => rpc.call("get_tip_header", []),
     readDeployment: cells.readDeployment,
     countEntries: cells.countEntries,
@@ -52,14 +73,15 @@ function showNotice(text) {
     h("button", { class: "link-button", type: "button", onclick: () => showNotice("") }, "Dismiss"));
 }
 
-// The wallet pill. The session lives in the store, inside this module's
-// closure; nothing is hung on `window`, so no other script can reach the
-// signing operations by reading a global.
+// The wallet pill. The store is told WHO is connected. The session that can
+// sign stays here, in this closure, and is handed only to the two views that
+// send transactions. Nothing is hung on `window`.
 function createWalletControl({ manifest, store }) {
   const button = el("wallet");
   const menu = el("wallet-menu");
   let wallet = null;
   let busy = false;
+  let signer = null; // the full session: signEntry and broadcast live here
   const ensure = () => (wallet ??= createWallet({ rpcUrl: manifest.rpcUrl }));
 
   async function paint() {
@@ -85,8 +107,9 @@ function createWalletControl({ manifest, store }) {
     await paint();
     try {
       const session = await ensure().connect();
+      signer = session;
       await store.setSession(session);
-      return session;
+      return store.state.session;
     } catch (e) {
       // Said on the page: a console-only failure is invisible to the player.
       showNotice(copy().errors.wallet(e?.message ?? String(e)));
@@ -100,6 +123,7 @@ function createWalletControl({ manifest, store }) {
   async function disconnect() {
     menu.hidden = true;
     try { await ensure().disconnect(); } catch { /* already gone */ }
+    signer = null;
     await store.setSession(null);
     await paint();
   }
@@ -107,7 +131,7 @@ function createWalletControl({ manifest, store }) {
   async function restore() {
     try {
       const session = await ensure().restore();
-      if (session) await store.setSession(session);
+      if (session) { signer = session; await store.setSession(session); }
     } catch {
       // No earlier connection to pick up.
     }
@@ -125,7 +149,14 @@ function createWalletControl({ manifest, store }) {
     if (event.key === "Escape") menu.hidden = true;
   });
 
-  return { connect, restore, paint };
+  // The signing session, but only while it is the wallet the page is showing.
+  const signing = () => {
+    const shown = store.state.session;
+    if (!signer || !shown || signer.address !== shown.address) return null;
+    return signer;
+  };
+
+  return { connect, restore, paint, signing };
 }
 
 function createApp({ manifest, store }) {
@@ -135,6 +166,11 @@ function createApp({ manifest, store }) {
     if (window.location.hash === hash) render(); else window.location.hash = hash;
   };
   const ctx = { manifest, store, rpc: store.rpc, nav, connect: null };
+  // What the entry and refund views get on top: the means to sign. No other
+  // view is handed this object.
+  const signingCtx = () => ({ ...ctx, signing: () => (ctx.wallet ? ctx.wallet.signing() : null) });
+  const SIGNING_PANELS = ["enter"];
+  const SIGNING_TABS = ["tickets"];
   let panel = null; // { key, handle }
   let shown = null;
 
@@ -183,7 +219,8 @@ function createApp({ manifest, store }) {
     const key = `${row.snapshot.config.roundId}/${r.panel}`;
     if (panel && panel.key === key) { panel.handle.update(row); return; }
     dropPanel();
-    panel = { key, handle: PANEL_VIEWS[r.panel].mount(node, ctx, row) };
+    const given = SIGNING_PANELS.includes(r.panel) ? signingCtx() : ctx;
+    panel = { key, handle: PANEL_VIEWS[r.panel].mount(node, given, row) };
   }
 
   function renderTab(tab) {
@@ -198,7 +235,7 @@ function createApp({ manifest, store }) {
       showRetry(node, copy().errors.network, () => store.refresh(), state.error);
       return;
     }
-    view.render(node, ctx);
+    view.render(node, SIGNING_TABS.includes(tab) ? signingCtx() : ctx);
   }
 
   function render() {
@@ -218,12 +255,13 @@ async function boot() {
     return;
   }
   const rpc = window.DaowowRpc.createRpc(manifest.rpcUrl);
-  const store = window.DaowowStore.createStore({ manifest, rpc, readers: readers() });
+  const store = window.DaowowStore.createStore({ manifest, rpc, readers: readers(manifest, rpc) });
   store.rpc = rpc;
 
   const app = createApp({ manifest, store });
   const wallet = createWalletControl({ manifest, store });
   app.ctx.connect = wallet.connect;
+  app.ctx.wallet = { signing: wallet.signing };
 
   store.subscribe(() => app.render());
   window.addEventListener("hashchange", () => app.render());

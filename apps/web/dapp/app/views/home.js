@@ -56,7 +56,7 @@ function prizes(row) {
 
 function enterButton(row) {
   const S = window.DaowowRoundState.PLAYER_STATE;
-  const open = row && row.view.state === S.OPEN && !row.view.full && row.schedule;
+  const open = row && row.view.state === S.OPEN && !row.view.full && row.schedule && row.sound;
   if (open) {
     return [h("a", {
       class: "primary-button",

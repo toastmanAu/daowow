@@ -189,6 +189,48 @@ async function findMyEntries(rpc, manifest, participantLockHash) {
   return found;
 }
 
+const HASH_TYPE_CODE = { data: 0, type: 1, data1: 2, data2: 4 };
+const CONFIG_SCRIPTS = Object.freeze({
+  "entry-lock": "entryLock",
+  "dao-lock": "daoLock",
+  "settlement-type": "settlementType",
+  "entry-shard-type": "entryShardType",
+});
+
+/**
+ * Is this round built on the contracts this site was deployed for?
+ *
+ * Anyone can create a cell under the round type, and the round-type script
+ * constrains a config's shape, not which scripts it points at. A round whose
+ * config names someone else's DAO lock would look like any other on the page
+ * while its deposits answered to that lock. So a round is only "ours" when
+ * every script reference in its config equals the manifest's.
+ */
+function matchesDeployment(config, manifest) {
+  for (const [name, field] of Object.entries(CONFIG_SCRIPTS)) {
+    const want = manifest.scripts[name];
+    const got = config[field];
+    if (!want || !got) return false;
+    if (strip(got.codeHash) !== strip(want.codeHash)) return false;
+    if (Number(got.hashType) !== HASH_TYPE_CODE[want.hashType]) return false;
+  }
+  return true;
+}
+
+/**
+ * Can this round ever run? Its config must commit the network's own Nervos
+ * DAO type, as the hash of the whole type SCRIPT. A round that commits
+ * anything else (two live rounds commit the DAO's CODE hash) can never place
+ * its tickets in savings, so nobody may be offered an entry to it. It is
+ * still ours: its entries can be refunded. Without `daoTypeHash` to compare
+ * against, no round is sound.
+ */
+function usesNetworkDao(config, daoTypeHash) {
+  if (!daoTypeHash) return false;
+  return strip(config.daoType.codeHash) === strip(daoTypeHash)
+    && Number(config.daoType.hashType) === 1;
+}
+
 /** How many entry cells each round still has on chain, keyed by commitment. */
 async function countEntries(rpc, manifest) {
   const entryLock = manifest.scripts["entry-lock"];
@@ -208,7 +250,9 @@ async function countEntries(rpc, manifest) {
   return counts;
 }
 
-const api = { readDeployment, findClaims, findMyEntries, countEntries, decodeClaimArgs };
+const api = {
+  readDeployment, findClaims, findMyEntries, countEntries, decodeClaimArgs, matchesDeployment, usesNetworkDao,
+};
 if (typeof module !== "undefined" && module.exports) module.exports = api;
 if (typeof window !== "undefined") window.DaowowRoundCells = api;
 })();

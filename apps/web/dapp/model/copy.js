@@ -200,6 +200,8 @@ const text = Object.freeze({
     none: "Choose at least one ticket.",
     late: "This round closes within the next few hours. An entry sent now may not arrive in time.",
     gone: "We couldn't find this round any more.",
+    unsound: "This round can't take entries.",
+    changed: "The total has changed since you confirmed it. Check the new total and try again.",
   }),
   refund: Object.freeze({
     confirm: "Confirm refund",

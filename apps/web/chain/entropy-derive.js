@@ -69,6 +69,11 @@ async function readEntropyHeaders(rpc, inclusionHeight) {
   for (const height of entropyBlockHeights(inclusionHeight)) {
     const header = await rpc.call("get_header_by_number", ["0x" + height.toString(16)]);
     if (!header) return null;
+    // The node is asked for a height and must answer for THAT height. A run
+    // shifted by one block is still four real hashes and would name winners.
+    if (BigInt(header.number) !== height) {
+      throw new Error(`asked for block ${height} and was given block ${BigInt(header.number)}`);
+    }
     headers.push({ number: header.number, hash: header.hash });
   }
   return { inclusionHeader: headers[0], entropyHeaders: headers.slice(1) };

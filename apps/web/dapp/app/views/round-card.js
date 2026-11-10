@@ -33,7 +33,7 @@ export function roundAction(row) {
   const s = S();
   const route = window.DaowowRoute.formatRoute;
   const round = row.snapshot.config.roundId;
-  if (row.view.state === s.OPEN && !row.view.full && row.schedule) {
+  if (row.view.state === s.OPEN && !row.view.full && row.schedule && row.sound) {
     return h("a", { class: "primary-button", href: route({ round, panel: "enter" }) },
       copy().text.enter);
   }
