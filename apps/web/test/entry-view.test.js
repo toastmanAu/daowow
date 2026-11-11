@@ -147,3 +147,19 @@ test("an uncapped round never reports itself full", () => {
   assert.strictEqual(r.tickets, 1000n);
   assert.strictEqual(r.full, false);
 });
+
+test("an empty round names the place after the first, not the first again", () => {
+  const sched = { version: 2, weights: [40n, 25n, 20n], thresholds: [1n, 8n, 20n] };
+  assert.strictEqual(describePayout(sched, 0n, 100n).summary,
+    "Paying 1 place. A further place opens at 8 tickets.");
+});
+
+test("a term that says when it ends is not prefixed with for", () => {
+  const sched = { version: 2, weights: [40n], thresholds: [1n] };
+  const cfg = { ticketPrice: 100n * 100000000n, maximumTickets: 10n };
+  const lock = { codeHash: "0x1", hashType: "type", args: "0x" + "ab".repeat(22) };
+  const q = require("../chain/quote.js").quoteEntry({ config: cfg, schedule: sched, lockScript: lock, tickets: 1n, feeShannons: 0n });
+  const notes = (term) => describeQuote(q, { term }).map((r) => r.note).join(" ");
+  assert.match(notes("until payout, about 30 days after the draw"), /Held until payout, about 30 days after the draw, then/);
+  assert.match(notes("about 30 days"), /Held for about 30 days, then/);
+});

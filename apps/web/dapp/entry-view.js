@@ -55,7 +55,8 @@ function describeQuote(quote, { term = "the length of the round" } = {}) {
     {
       label: "Total leaving your wallet now",
       value: `${formatCkb(quote.total)} CKB`,
-      note: `Held for ${term}, then returned except the fee.`,
+      // A term that already says when ("until payout, …") takes no "for".
+      note: `Held ${/^until /.test(term) ? term : `for ${term}`}, then returned except the fee.`,
     },
   ];
 }
@@ -67,13 +68,15 @@ function describePayout(sched, ticketsSold, maximumTickets) {
   const sold = BigInt(ticketsSold);
   const cap = BigInt(maximumTickets ?? 0n);
   const placesNow = schedule.placesFor(sched, sold === 0n ? 1n : sold);
-  let next = schedule.nextThreshold(sched, sold);
+  // An empty round is described as it will be once it has its first ticket,
+  // so the next place is the one after that, not the first.
+  let next = schedule.nextThreshold(sched, sold === 0n ? 1n : sold);
   if (next !== null && cap !== 0n && next > cap) next = null;
 
   const places = `${placesNow} place${placesNow === 1 ? "" : "s"}`;
   const summary = next === null
     ? `Paying ${places}.`
-    : `Paying ${places}. A further place opens at ${next} tickets.`;
+    : `Paying ${places}. A further place opens at ${next} ticket${next === 1n ? "" : "s"}.`;
 
   const rows = sched.thresholds.map((threshold, i) => ({
     place: i + 1,
