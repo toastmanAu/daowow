@@ -16,13 +16,18 @@
 //
 // Usage:
 //   node tools/create-demo-round.mjs <manifest.json> <funding-outpoint>
-//       [--out FILE] [--epochs N]
+//       [--out FILE] [--epochs N | --entry-end-epoch E]
+//       [--max-tickets N] [--min-tickets N]
 //     funding-outpoint is txhash:index, a plain cell under the operator lock
 //     big enough to cover the round's cells plus a fee.
 //     --epochs is how many epochs the entry window stays open (default 6,
 //     roughly a day on testnet), and --aggregation-epochs how many further
 //     epochs the keeper has to aggregate (default 30, about five days).
-//     Neither is part of the approved round shape; they exist so a demo is not
+//     --entry-end-epoch names the closing epoch outright, for a round that
+//     must close at a wall-clock time; it replaces --epochs.
+//     --max-tickets and --min-tickets replace the demo's 10 and 5. The prize
+//     schedule and ticket price are not changed by them.
+//     Neither window is part of the approved round shape; they exist so a demo is not
 //     run against a clock. Two epochs of aggregation, the original hardcoded
 //     value, is a trap: the keeper steps are three hand-signed transactions,
 //     and an entry cannot be released until the ledger is CLOSED.
@@ -70,6 +75,21 @@ const outFile = outAt === -1 ? "create-round.json" : rest[outAt + 1];
 const epochsAt = rest.indexOf("--epochs");
 const entryEpochs = epochsAt === -1 ? 6n : BigInt(rest[epochsAt + 1]);
 if (entryEpochs < 1n) throw new Error("--epochs must be at least 1");
+const wholeFlag = (name) => {
+  const at = rest.indexOf(name);
+  if (at === -1) return null;
+  if (!/^[1-9][0-9]*$/.test(rest[at + 1] ?? "")) throw new Error(`${name} needs a whole number above zero`);
+  return BigInt(rest[at + 1]);
+};
+const entryEndFlag = wholeFlag("--entry-end-epoch");
+if (entryEndFlag !== null && epochsAt !== -1) {
+  throw new Error("give --epochs or --entry-end-epoch, not both");
+}
+const maximumTickets = wholeFlag("--max-tickets") ?? DEMO.maximumTickets;
+const minimumTickets = wholeFlag("--min-tickets") ?? DEMO.minimumTickets;
+if (minimumTickets > maximumTickets) {
+  throw new Error(`--min-tickets ${minimumTickets} exceeds --max-tickets ${maximumTickets}; the round could never draw`);
+}
 // The aggregation window, in epochs AFTER entry_end. Two epochs was the
 // original hardcoded value and it is a trap: the keeper steps are three
 // separate transactions, each signed by hand, and the round's entries cannot
@@ -117,7 +137,10 @@ const tip = await rpc("get_tip_header", []);
 // the epoch NUMBER.
 const nowEpoch = BigInt(tip.epoch) & 0xffffffn;
 const entryStart = nowEpoch;
-const entryEnd = nowEpoch + entryEpochs;
+const entryEnd = entryEndFlag ?? nowEpoch + entryEpochs;
+if (entryEnd <= nowEpoch) {
+  throw new Error(`--entry-end-epoch ${entryEnd} is not after the current epoch ${nowEpoch}`);
+}
 const aggregationDeadline = entryEnd + aggEpochs;
 
 // --- the round id and config ----------------------------------------------
@@ -174,8 +197,8 @@ const config = {
   version: 1,
   roundId: roundId.replace(/^0x/, ""),
   ticketPrice: DEMO.ticketPriceCkb * CKB,
-  minimumTickets: DEMO.minimumTickets,
-  maximumTickets: DEMO.maximumTickets,
+  minimumTickets,
+  maximumTickets,
   entryStart,
   entryEnd,
   aggregationDeadline,
@@ -349,7 +372,7 @@ console.log(`round id            ${roundId}`);
 console.log(`config commitment   ${commitment}`);
 console.log(`schedule commitment ${scheduleCommitment}`);
 console.log(`ticket price        ${DEMO.ticketPriceCkb} CKB`);
-console.log(`tickets             min ${DEMO.minimumTickets}, max ${DEMO.maximumTickets}, ${DEMO.entryShardCount} shard`);
+console.log(`tickets             min ${minimumTickets}, max ${maximumTickets}, ${DEMO.entryShardCount} shard`);
 console.log(`payout thresholds   ${DEMO.thresholds.join(", ")}`);
 console.log(`entry window        epoch ${entryStart} to ${entryEnd}, aggregate by ${aggregationDeadline}`);
 console.log(`\ncapacity            config ${configCapacity / CKB} + shard ${shardCapacity / CKB} + fee 0.1, change ${change / CKB} CKB`);

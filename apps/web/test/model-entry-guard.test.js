@@ -54,7 +54,7 @@ test("asking for more tickets than remain is refused with the number left", () =
 });
 
 test("an uncapped round never runs out", () => {
-  assert.strictEqual(check({ view: view({ cap: null, ticketsSold: 5000n }), tickets: 100n }).block, null);
+  assert.strictEqual(check({ view: view({ cap: null, ticketsSold: 5000n }), tickets: 5n }).block, null);
 });
 
 test("zero or negative tickets is refused", () => {
@@ -179,4 +179,64 @@ test("a total that no longer matches the round stops the flow", async () => {
 
 test("signing without a confirmed total is refused", async () => {
   assert.strictEqual((await sign({ shownTotal: undefined })).ok, false);
+});
+
+// --- the per-wallet limit --------------------------------------------------
+// The chain has no such rule; the app is the only thing that applies it.
+const { TICKETS_PER_WALLET, heldIn } = require("../dapp/model/entry-guard.js");
+const copyLib = require("../dapp/model/copy.js");
+
+test("the limit is five tickets per wallet", () => {
+  assert.strictEqual(TICKETS_PER_WALLET, 5n);
+});
+
+test("a wallet may buy up to the limit and not one ticket more", () => {
+  assert.strictEqual(check({ tickets: 5n, held: 0n }).block, null);
+  assert.strictEqual(check({ tickets: 6n, held: 0n }).block, copyLib.walletLimit(5n, 0n));
+});
+
+test("tickets the wallet already holds count toward the limit", () => {
+  assert.strictEqual(check({ tickets: 2n, held: 3n }).block, null);
+  assert.strictEqual(check({ tickets: 3n, held: 3n }).block, copyLib.walletLimit(5n, 3n));
+  assert.match(copyLib.walletLimit(5n, 3n), /already holds 3/);
+});
+
+test("a connected wallet whose tickets could not be read is refused, not waved through", () => {
+  assert.strictEqual(check({ tickets: 1n, held: null }).block, copyLib.text.entry.holdingsUnknown);
+});
+
+test("before a wallet is connected only the size of the request is judged", () => {
+  assert.strictEqual(check({ tickets: 5n }).block, null);
+  assert.strictEqual(check({ tickets: 6n }).block, copyLib.walletLimit(5n, 0n));
+});
+
+test("a round with fewer tickets left than the limit says so first", () => {
+  const few = check({ view: view({ ticketsSold: 8n }), tickets: 4n, held: 4n });
+  assert.strictEqual(few.block, copyLib.ticketsLeft(2n));
+});
+
+test("held tickets are read per round, and unknown stays unknown", () => {
+  const mine = [{ roundId: "ab".repeat(32), ticketsHeld: 4 }, { roundId: "cd".repeat(32), ticketsHeld: 1 }];
+  assert.strictEqual(heldIn(mine, "ab".repeat(32)), 4n);
+  assert.strictEqual(heldIn(mine, "ef".repeat(32)), 0n);
+  assert.strictEqual(heldIn(null, "ab".repeat(32)), null);
+});
+
+test("the check before signing counts what the wallet holds after the fresh read", async () => {
+  const withHoldings = (mine) => {
+    const store = fakeStore({ snapshot, view: view(), schedule: SCHED, sound: true });
+    store.state.session = { address: "ckt1", lockScript: joyid };
+    store.state.mine = mine;
+    return store;
+  };
+  const ask = (mine) => checkBeforeSigning({
+    store: withHoldings(mine), roundId: snapshot.config.roundId, tickets: 2n, acceptLate: false, ...OFFER,
+  });
+  assert.strictEqual((await ask([])).ok, true);
+  const over = await ask([{ roundId: snapshot.config.roundId, ticketsHeld: 4 }]);
+  assert.strictEqual(over.ok, false);
+  assert.strictEqual(over.message, copyLib.walletLimit(5n, 4n));
+  const unknown = await ask(null);
+  assert.strictEqual(unknown.ok, false);
+  assert.strictEqual(unknown.message, copyLib.text.entry.holdingsUnknown);
 });

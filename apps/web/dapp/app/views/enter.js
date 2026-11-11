@@ -96,6 +96,7 @@ export function mount(node, ctx, firstRow) {
     const guard = window.DaowowEntryGuard.entryProblem({
       view: row.view, snapshot: row.snapshot, schedule: row.schedule, sound: row.sound,
       tickets: request.tickets ?? 1n, nowEpoch: ctx.store.state.tip.epoch.number,
+      held: session() ? window.DaowowEntryGuard.heldIn(ctx.store.state.mine, roundId) : undefined,
     });
     // One reason at a time: when the round itself is the problem, say that.
     ticketNote.textContent = guard.block ? "" : request.note;

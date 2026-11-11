@@ -136,6 +136,10 @@ const enterFor = (total) => `Enter for ${total} CKB`;
 const entryConfirmed = (n) => `Confirmed. Your ${plural(n, "ticket")} ${BigInt(n) === 1n ? "is" : "are"} in the round.`;
 const ticketsLeft = (left) =>
   `Only ${plural(left, "ticket")} ${BigInt(left) === 1n ? "is" : "are"} left in this round.`;
+const walletLimit = (limit, held) => {
+  const rule = `Each wallet can hold up to ${plural(limit, "ticket")} in a round.`;
+  return BigInt(held) === 0n ? rule : `${rule} This wallet already holds ${held}.`;
+};
 const heldFor = (termText) => `until payout, ${termText} after the draw`;
 
 const refundButton = (shannons) => `Refund ${ckb(shannons)} CKB`;
@@ -207,6 +211,7 @@ const text = Object.freeze({
     late: "This round closes within the next few hours. An entry sent now may not arrive in time.",
     gone: "We couldn't find this round any more.",
     unsound: "This round can't take entries.",
+    holdingsUnknown: "The tickets this wallet already holds could not be read, so the limit per wallet can't be checked. Try again shortly.",
     changed: "The total has changed since you confirmed it. Check the new total and try again.",
   }),
   refund: Object.freeze({
@@ -279,6 +284,7 @@ function ALL_SAMPLES() {
   out.push(placeLine(1, 50n, 1n, true, true), placeLine(2, 30n, 5n, false, true),
     placeLine(3, 20n, 99n, false, false), poolLine(100000000n));
   out.push(enterFor("10,459"), entryConfirmed(1n), entryConfirmed(5n), ticketsLeft(1n), ticketsLeft(3n),
+    walletLimit(5n, 0n), walletLimit(5n, 3n),
     heldFor("about 30 days"));
   out.push(refundButton(1n), refundReturns(1n), refundDone(1n));
   out.push(resultLine(1, "4", true), resultLine(2, "8", false), drawCountdown(1192n, 1200000n));
@@ -294,7 +300,7 @@ function ALL_SAMPLES() {
 const api = {
   ckb, ordinal, plural, shortAddress, stateBadge, ticketsLine, milestone, outcomeBadge, actionLabel,
   estimateLine, honestyLine, winLine, heldLine, costTicket, costDeposit, costStorage, costExample,
-  placeLine, poolLine, resultLine, drawCountdown, refundButton, refundReturns, refundDone, enterFor, entryConfirmed, ticketsLeft, heldFor, errors, text, ALL_SAMPLES,
+  placeLine, poolLine, resultLine, drawCountdown, refundButton, refundReturns, refundDone, enterFor, entryConfirmed, ticketsLeft, walletLimit, heldFor, errors, text, ALL_SAMPLES,
 };
 if (typeof module !== "undefined" && module.exports) module.exports = api;
 if (typeof window !== "undefined") window.DaowowCopy = api;

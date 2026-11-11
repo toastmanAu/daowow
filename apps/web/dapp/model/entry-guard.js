@@ -14,8 +14,29 @@ const roundState = () => lib("./round-state.js", "DaowowRoundState");
 const copy = () => lib("./copy.js", "DaowowCopy");
 const quote = () => lib("../../chain/quote.js", "DaowowQuote");
 
-/** `block` stops the entry; `warn` needs the player's explicit yes. */
-function entryProblem({ view, snapshot, tickets, nowEpoch, schedule, sound }) {
+// The most tickets one wallet may hold in a round. THE CHAIN HAS NO SUCH
+// RULE: this app is the only thing that applies it, so it is a courtesy
+// between players and not a guarantee. Several wallets get round it.
+const TICKETS_PER_WALLET = 5n;
+
+/**
+ * Tickets a wallet holds in one round, from the store's `mine`. Null when
+ * `mine` has not been read, which is not the same as holding none.
+ */
+function heldIn(mine, roundId) {
+  if (!Array.isArray(mine)) return null;
+  const card = mine.find((c) => c.roundId === roundId);
+  return card ? BigInt(card.ticketsHeld) : 0n;
+}
+
+/**
+ * `block` stops the entry; `warn` needs the player's explicit yes.
+ *
+ * `held` is what the connected wallet already holds in this round: leave it
+ * out when no wallet is connected, pass null when one is but its tickets
+ * could not be read.
+ */
+function entryProblem({ view, snapshot, tickets, nowEpoch, schedule, sound, held }) {
   const S = roundState().PLAYER_STATE;
   const words = copy().text.entry;
   const none = { block: null, warn: null };
@@ -31,6 +52,11 @@ function entryProblem({ view, snapshot, tickets, nowEpoch, schedule, sound }) {
   if (want <= 0n) return { ...none, block: words.none };
   if (view.cap !== null && view.ticketsSold + want > view.cap) {
     return { ...none, block: copy().ticketsLeft(view.cap - view.ticketsSold) };
+  }
+  if (held === null) return { ...none, block: words.holdingsUnknown };
+  const holds = held === undefined ? 0n : BigInt(held);
+  if (holds + want > TICKETS_PER_WALLET) {
+    return { ...none, block: copy().walletLimit(TICKETS_PER_WALLET, holds) };
   }
   // The window closes at the START of entry_end, so in the period before it
   // an entry races the clock.
@@ -59,6 +85,7 @@ async function checkBeforeSigning({ store, roundId, tickets, acceptLate, lockScr
   const problem = entryProblem({
     view: row.view, snapshot: row.snapshot, tickets, schedule: row.schedule, sound: row.sound,
     nowEpoch: store.state.tip.epoch.number,
+    held: store.state.session ? heldIn(store.state.mine, row.snapshot.config.roundId) : undefined,
   });
   if (problem.block) return { ok: false, message: problem.block, needsLateConsent: false, row };
   if (problem.warn && !acceptLate) {
@@ -81,7 +108,7 @@ async function checkBeforeSigning({ store, roundId, tickets, acceptLate, lockScr
   return { ok: true, message: null, needsLateConsent: false, row };
 }
 
-const api = { entryProblem, checkBeforeSigning };
+const api = { entryProblem, checkBeforeSigning, heldIn, TICKETS_PER_WALLET };
 if (typeof module !== "undefined" && module.exports) module.exports = api;
 if (typeof window !== "undefined") window.DaowowEntryGuard = api;
 })();
