@@ -11,7 +11,7 @@
 // Resolved from the chain rather than hardcoded, so this works on devnet, on
 // testnet and on mainnet without a table of magic out points.
 
-import { ccc } from "../apps/web/vendor/ccc-joyid.min.mjs";
+import { ccc } from "../apps/web/vendor/ccc.min.mjs";
 
 const HASH_TYPE_IS_DATA = { data: true, data1: true, data2: true, type: false };
 

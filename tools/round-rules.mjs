@@ -5,7 +5,7 @@
 // covers every failure in the creation branch — so the node's answer never
 // says which rule was broken. These functions do.
 
-import { ccc } from "../apps/web/vendor/ccc-joyid.min.mjs";
+import { ccc } from "../apps/web/vendor/ccc.min.mjs";
 
 export const MAX_EPOCH_NUMBER = 0x00ffffffn;   // epoch.rs:5
 export const ACC_IMT = 2;                      // encoding.rs:61

@@ -28,7 +28,7 @@ test("a session exposes only read operations", async () => {
   const wallet = createWallet({ rpcUrl: "http://node.invalid" });
   assert.deepStrictEqual(
     Object.keys(wallet).sort(),
-    ["client", "connect", "disconnect", "isConnected", "restore"],
+    ["client", "connect", "disconnect", "isConnected", "restore", "wallets", "watch"],
   );
   // The signer itself is never handed out, so its signing methods are
   // unreachable from anything the page holds.

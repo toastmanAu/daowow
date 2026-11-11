@@ -1,6 +1,7 @@
 # Multi-wallet connect — design
 
-Status: DRAFT for Phill's approval. Nothing is built.
+Status: APPROVED 2026-11-11, D3 changed by Phill to the full upstream list.
+Built on branch `feat/multi-wallet`; not merged, not published.
 Date: 2026-11-11.
 Ships: after Round 5 (`0x0526654b`) closes entries at epoch 14199, for the
 round that follows it. Not published while Round 5 is taking entries.
@@ -39,15 +40,19 @@ The controller is given the testnet client and a preferred-network list of
 testnet only. A signer whose network cannot be confirmed as testnet is not
 listed.
 
-### D3. A wallet is listed only once it has entered AND refunded on testnet
+### D3. The full CCC list, unfiltered (Phill, 2026-11-11)
 
-The list is an allow-list in the app, by wallet name and signer type. A wallet
-CCC detects but we have not run is not shown. Proposed first list, pending
-D-open-1: JoyID, MetaMask (EVM), one Bitcoin wallet.
+Every wallet and signer CCC's `SignersController` reports is offered. The app
+keeps no allow-list: which wallets exist is upstream's decision, and a wallet
+CCC adds appears when the vendored bundle is rebuilt. Wallets are shown one
+row each, as CCC's own connector does; a wallet with several signers opens
+onto them. Wallets that are not installed appear as download links.
 
-Why: the entry transaction carries the accumulator witness at index 0 and is
-fee-sized against the signer's own placeholder. A wallet whose real signature
-outgrows its placeholder is refused by the pool, and only a live send shows it.
+Consequence, accepted: a listed wallet has not necessarily been entered and
+refunded with by us. The guards that remain are generic: every session must
+give a testnet (`ckt`) address, and the entry is fee-sized by the signer's own
+`prepareTransaction`. Live runs with JoyID, one EVM wallet and one Bitcoin
+wallet are still made before publishing, as a check on the generic path.
 
 ### D4. The pre-connect quote says "from", not "with a JoyID wallet"
 

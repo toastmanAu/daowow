@@ -22,7 +22,11 @@
   <div class="wallet">
     <button id="wallet" class="wallet-button" type="button" aria-haspopup="true">Connect wallet</button>
     <div id="wallet-menu" class="wallet-menu" hidden>
-      <button id="disconnect" class="link-button" type="button">Disconnect</button>
+      <div id="wallet-choices"></div>
+      <div id="wallet-connected" hidden>
+        <p id="wallet-name" class="wallet-heading"></p>
+        <button id="disconnect" class="link-button" type="button">Disconnect</button>
+      </div>
     </div>
   </div>
 </header>
@@ -250,7 +254,7 @@
     <p>
       On CKB, storing anything on chain means locking capacity for as long as
       it exists. A claim NFT needs about <strong>222 CKB</strong> of capacity
-      with a JoyID wallet, and one is minted per ticket. An entry also needs
+      with most wallets, and one is minted per ticket. An entry also needs
       about 237 CKB for its own record. The other tabs call these the ticket
       deposit and the storage deposit.
     </p>
@@ -272,8 +276,10 @@
 
     <h2>Taking part in a test round</h2>
     <p>
-      You need a <strong>JoyID</strong> wallet and some testnet CKB. Connect
-      wallet creates a JoyID wallet if you don't have one. Testnet CKB is free
+      You need a wallet and some testnet CKB. Connect wallet lists the
+      wallets this browser can use: JoyID, which needs nothing installed, and
+      CKB, Ethereum and Bitcoin wallets such as MetaMask, OKX, UniSat and UTXO
+      Global. Testnet CKB is free
       from the Nervos faucet at
       <a href="https://faucet.nervos.org/" rel="noopener noreferrer">faucet.nervos.org</a>:
       paste your wallet address there. The entry screen lists what each ticket
@@ -334,6 +340,7 @@
 <script src="../chain/rpc.js"></script>
 <script src="../chain/discovery.js"></script>
 <script src="../chain/round-cells.js"></script>
+<script src="../chain/wallet-list.js"></script>
 <script src="../chain/schedule.js"></script>
 <script src="../chain/quote.js"></script>
 <script src="../chain/mmr-witness.js"></script>

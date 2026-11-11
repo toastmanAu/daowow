@@ -18,7 +18,7 @@
 // nothing ever will be: consuming a code cell is irreversible and the binary
 // would have to be redeployed.
 
-import { ccc } from "../apps/web/vendor/ccc-joyid.min.mjs";
+import { ccc } from "../apps/web/vendor/ccc.min.mjs";
 
 const ADDR = process.argv[2];
 const RPC = process.argv[3] ?? "https://testnet.ckb.dev/rpc";

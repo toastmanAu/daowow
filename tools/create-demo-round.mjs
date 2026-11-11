@@ -35,7 +35,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { ccc } from "../apps/web/vendor/ccc-joyid.min.mjs";
+import { ccc } from "../apps/web/vendor/ccc.min.mjs";
 import { resolveLockDep } from "./lock-deps.mjs";
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");

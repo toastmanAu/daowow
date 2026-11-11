@@ -119,7 +119,7 @@ const heldLine = (n) => `You hold ${plural(n, "ticket")}`;
 const costTicket = (price) =>
   `${ckb(price)} CKB per ticket. You get this back after the round, win or lose.`;
 const costDeposit = (amount, connected) =>
-  `${ckb(amount)} CKB ticket deposit per ticket${connected ? "" : " with a JoyID wallet"}. ` +
+  `${ckb(amount)} CKB ticket deposit per ticket${connected ? "" : " with most wallets"}. ` +
   "Held while the round runs, then returned.";
 const costStorage = (amount) =>
   `${ckb(amount)} CKB storage deposit, once per purchase. Returned after the round.`;
@@ -140,6 +140,8 @@ const walletLimit = (limit, held) => {
   const rule = `Each wallet can hold up to ${plural(limit, "ticket")} in a round.`;
   return BigInt(held) === 0n ? rule : `${rule} This wallet already holds ${held}.`;
 };
+const getWallet = (name) => `Get ${name}`;
+const walletSigners = (name) => `${name}: choose an address type`;
 const heldFor = (termText) => `until payout, ${termText} after the draw`;
 
 const refundButton = (shannons) => `Refund ${ckb(shannons)} CKB`;
@@ -171,6 +173,13 @@ const text = Object.freeze({
   loading: "Loading…",
   connect: "Connect wallet",
   connecting: "Connecting…",
+  wallets: {
+    choose: "Choose a wallet",
+    looking: "Looking for wallets…",
+    none: "No wallet was found in this browser.",
+    notInstalled: "Not installed",
+    back: "← All wallets",
+  },
   disconnect: "Disconnect",
   connectPrompt: "Connect your wallet to see your tickets.",
   noTickets: "No tickets yet. Pick a round to get started.",
@@ -284,7 +293,7 @@ function ALL_SAMPLES() {
   out.push(placeLine(1, 50n, 1n, true, true), placeLine(2, 30n, 5n, false, true),
     placeLine(3, 20n, 99n, false, false), poolLine(100000000n));
   out.push(enterFor("10,459"), entryConfirmed(1n), entryConfirmed(5n), ticketsLeft(1n), ticketsLeft(3n),
-    walletLimit(5n, 0n), walletLimit(5n, 3n),
+    walletLimit(5n, 0n), walletLimit(5n, 3n), getWallet("MetaMask"), walletSigners("JoyID Passkey"),
     heldFor("about 30 days"));
   out.push(refundButton(1n), refundReturns(1n), refundDone(1n));
   out.push(resultLine(1, "4", true), resultLine(2, "8", false), drawCountdown(1192n, 1200000n));
@@ -300,7 +309,7 @@ function ALL_SAMPLES() {
 const api = {
   ckb, ordinal, plural, shortAddress, stateBadge, ticketsLine, milestone, outcomeBadge, actionLabel,
   estimateLine, honestyLine, winLine, heldLine, costTicket, costDeposit, costStorage, costExample,
-  placeLine, poolLine, resultLine, drawCountdown, refundButton, refundReturns, refundDone, enterFor, entryConfirmed, ticketsLeft, walletLimit, heldFor, errors, text, ALL_SAMPLES,
+  placeLine, poolLine, resultLine, drawCountdown, refundButton, refundReturns, refundDone, enterFor, entryConfirmed, ticketsLeft, walletLimit, getWallet, walletSigners, heldFor, errors, text, ALL_SAMPLES,
 };
 if (typeof module !== "undefined" && module.exports) module.exports = api;
 if (typeof window !== "undefined") window.DaowowCopy = api;

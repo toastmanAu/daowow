@@ -291,3 +291,17 @@ main > section > h1:focus-visible { outline: none; }
 .rail li.mine { background: hsl(152 40% 24%); box-shadow: inset 0 0 0 2px var(--good); }
 .actions[hidden] { display: none; }
 @media (min-width: 720px) { .draw-stage { aspect-ratio: 16 / 10; } }
+
+/* The wallet picker, inside the wallet menu. */
+.wallet-menu { min-width: 248px; max-height: min(70vh, 480px); overflow-y: auto; }
+.wallet-heading { margin: 0; padding: 8px 16px 4px; font-size: 13px; color: var(--muted, hsl(220 20% 70%)); }
+#wallet-choices .muted { padding: 8px 16px; margin: 0; }
+.wallet-choice { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 48px; padding: 8px 16px;
+  background: transparent; border: 0; color: var(--paper); font: inherit; text-align: left; cursor: pointer; }
+.wallet-choice:hover:not(:disabled), .wallet-choice:focus-visible { background: hsl(220 50% 28%); }
+.wallet-choice:disabled { opacity: .5; cursor: default; }
+.wallet-choice img, .wallet-noicon { width: 24px; height: 24px; flex: none; border-radius: 6px; }
+.wallet-noicon { background: hsl(220 30% 40%); }
+#wallet-choices[hidden], #wallet-connected[hidden] { display: none; }
+/* The header sits above the tab bar so the wallet menu is not covered by it. */
+.site-header { z-index: 110; }

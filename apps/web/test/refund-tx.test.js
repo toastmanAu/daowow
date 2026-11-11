@@ -238,7 +238,7 @@ test("the aggregation witness refuses an empty proof", () => {
 });
 
 test("our script hash agrees with CCC, which is the on-chain definition", async () => {
-  const { ccc } = await import("../vendor/ccc-joyid.min.mjs");
+  const { ccc } = await import("../vendor/ccc.min.mjs");
   for (const hashType of ["data", "type", "data1", "data2"]) {
     const script = { ...participantLock, hashType };
     assert.strictEqual(

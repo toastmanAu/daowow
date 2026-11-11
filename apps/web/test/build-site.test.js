@@ -20,7 +20,7 @@ test("the site contains only allow-listed files", async () => {
     assert.doesNotMatch(f, /\.\./, f);
   }
   for (const needed of ["dapp/index.html", "dapp/manifest.json", "dapp/app/main.js", "core.js",
-    "chain/wallet.js", "vendor/ccc-joyid.min.mjs", "vendor/three.module.min.js", "_headers", "_redirects"]) {
+    "chain/wallet.js", "vendor/ccc.min.mjs", "vendor/three.module.min.js", "_headers", "_redirects"]) {
     assert.ok(files.includes(needed), `${needed} must be published`);
   }
 });
@@ -66,8 +66,8 @@ test("a file naming the private node stops the build", async () => {
   assert.deepStrictEqual(leaks("dapp/x.js", "http://localhost:8114"), ["localhost"]);
   assert.deepStrictEqual(leaks("dapp/x.js", "https://testnet.ckb.dev"), []);
   // The vendored wallet library mentions localhost in its own defaults.
-  assert.deepStrictEqual(leaks("vendor/ccc-joyid.min.mjs", "http://localhost:8114"), []);
-  assert.deepStrictEqual(leaks("vendor/ccc-joyid.min.mjs", "192.168.1.1"), ["192.168."]);
+  assert.deepStrictEqual(leaks("vendor/ccc.min.mjs", "http://localhost:8114"), []);
+  assert.deepStrictEqual(leaks("vendor/ccc.min.mjs", "192.168.1.1"), ["192.168."]);
 });
 
 test("no published file mentions the LAN node", async () => {

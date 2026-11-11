@@ -12,8 +12,8 @@ const crypto = require("node:crypto");
 const path = require("node:path");
 
 const VENDOR = path.join(__dirname, "..", "vendor");
-const ARTIFACT = path.join(VENDOR, "ccc-joyid.min.mjs");
-const LOCK = path.join(VENDOR, "ccc-joyid.lock.json");
+const ARTIFACT = path.join(VENDOR, "ccc.min.mjs");
+const LOCK = path.join(VENDOR, "ccc.lock.json");
 const VECTORS = path.join(
   __dirname, "..", "..", "..", "tests", "vectors", "daowow_core_vectors.json");
 
@@ -30,7 +30,7 @@ test("the vendored crypto agrees with the Rust oracle", async () => {
   // vendored bundle does not hash the way the contracts hash, everything
   // built on top of it is wrong, and this is the cheapest place to find out.
   const vectors = JSON.parse(fs.readFileSync(VECTORS, "utf8"));
-  const { ccc } = await import("../vendor/ccc-joyid.min.mjs");
+  const { ccc } = await import("../vendor/ccc.min.mjs");
   const got = ccc
     .hashCkb(ccc.bytesFrom(vectors.domain_hash.input, "utf8"))
     .replace(/^0x/, "");

@@ -85,7 +85,14 @@ function createWalletControl({ manifest, store }) {
   let wallet = null;
   let busy = false;
   let signer = null; // the full session: signEntry and broadcast live here
-  const ensure = () => (wallet ??= createWallet({ rpcUrl: manifest.rpcUrl }));
+  const ensure = () => {
+    if (!wallet) {
+      wallet = createWallet({ rpcUrl: manifest.rpcUrl });
+      // A wallet that announces itself late joins an open picker.
+      wallet.watch((choices) => { if (!menu.hidden && !store.state.session) paintChoices(choices); });
+    }
+    return wallet;
+  };
 
   async function paint() {
     const session = store.state.session;
@@ -103,24 +110,108 @@ function createWalletControl({ manifest, store }) {
     }
   }
 
-  async function connect() {
-    if (busy) return null;
+  // A view that asked to connect is waiting on this; choosing a wallet or
+  // closing the picker answers it.
+  let waiting = null;
+  const answer = (value) => { const tell = waiting; waiting = null; if (tell) tell(value); };
+  const closeMenu = () => { menu.hidden = true; answer(null); };
+
+  // Which wallet's signers are on show. Null is the list of wallets itself.
+  let openWallet = null;
+  let lastChoices = [];
+
+  // One row per wallet, as CCC's own connector does; a wallet with several
+  // signers opens onto them.
+  function paintChoices(choices) {
+    const words = copy().text.wallets;
+    const box = el("wallet-choices");
+    if (choices === null) { clear(box).append(h("p", { class: "muted" }, words.looking)); return; }
+    lastChoices = choices;
+    const icon = (c) => (c.icon
+      ? h("img", { src: c.icon, alt: "", width: "24", height: "24" })
+      : h("span", { class: "wallet-noicon", "aria-hidden": "true" }));
+    const row = (c, label, onclick) =>
+      h("button", { class: "wallet-choice", type: "button", disabled: busy, onclick }, icon(c), label);
+    const usable = choices.filter((c) => !c.install);
+    const inWallet = usable.filter((c) => c.wallet === openWallet);
+    clear(box);
+    if (openWallet !== null && inWallet.length > 0) {
+      box.append(
+        h("button", { class: "link-button", type: "button",
+          onclick: () => { openWallet = null; paintChoices(lastChoices); } }, words.back),
+        h("p", { class: "wallet-heading" }, copy().walletSigners(openWallet)),
+        ...inWallet.map((c) => row(c, c.label, () => choose(c.key))));
+      return;
+    }
+    openWallet = null;
+    const names = [...new Set(usable.map((c) => c.wallet))];
+    const links = choices.filter((c) => c.install);
+    box.append(h("p", { class: "wallet-heading" }, words.choose));
+    if (names.length === 0) box.append(h("p", { class: "muted" }, words.none));
+    for (const name of names) {
+      const mine = usable.filter((c) => c.wallet === name);
+      box.append(mine.length === 1
+        ? row(mine[0], name, () => choose(mine[0].key))
+        : row(mine[0], name, () => { openWallet = name; paintChoices(lastChoices); }));
+    }
+    if (links.length > 0) box.append(h("p", { class: "wallet-heading" }, words.notInstalled));
+    for (const c of links) box.append(row(c, copy().getWallet(c.label), () => choose(c.key)));
+  }
+
+  function paintMenu() {
+    const session = store.state.session;
+    el("wallet-choices").hidden = Boolean(session);
+    el("wallet-connected").hidden = !session;
+    if (session) el("wallet-name").textContent = signer && signer.wallet ? signer.wallet : "";
+  }
+
+  async function openPicker() {
+    showNotice("");
+    openWallet = null;
+    paintMenu();
+    paintChoices(null);
+    menu.hidden = false;
+    try {
+      paintChoices(await ensure().wallets());
+    } catch (e) {
+      closeMenu();
+      showNotice(copy().errors.wallet(e?.message ?? String(e)));
+    }
+  }
+
+  async function choose(key) {
+    if (busy) return;
     busy = true;
     showNotice("");
     await paint();
     try {
-      const session = await ensure().connect();
+      const session = await ensure().connect(key);
+      // A download link has nothing to connect to yet.
+      if (session === null) { closeMenu(); return; }
       signer = session;
       await store.setSession(session);
-      return store.state.session;
+      menu.hidden = true;
+      answer(store.state.session);
     } catch (e) {
       // Said on the page: a console-only failure is invisible to the player.
+      closeMenu();
       showNotice(copy().errors.wallet(e?.message ?? String(e)));
-      return null;
     } finally {
       busy = false;
       await paint();
     }
+  }
+
+  /** Opens the picker. Resolves with the session once a wallet is connected, or null. */
+  function connect() {
+    if (store.state.session) return Promise.resolve(store.state.session);
+    answer(null);
+    return new Promise((resolve) => {
+      waiting = resolve;
+      // After this click has finished bubbling: the click that asks to connect
+      // is also a click outside the menu, which would close it again at once.
+      setTimeout(openPicker, 0);
+    });
   }
 
   async function disconnect() {
@@ -142,14 +233,19 @@ function createWalletControl({ manifest, store }) {
   }
 
   button.addEventListener("click", () => {
-    if (store.state.session) menu.hidden = !menu.hidden; else connect();
+    if (!menu.hidden) { closeMenu(); return; }
+    if (store.state.session) { paintMenu(); menu.hidden = false; } else connect();
   });
   el("disconnect").addEventListener("click", disconnect);
+  // A click inside the menu never counts as a click outside it. The row just
+  // clicked may already have been repainted away, so asking whether the menu
+  // still contains it would answer no.
+  menu.addEventListener("click", (event) => event.stopPropagation());
   document.addEventListener("click", (event) => {
-    if (!menu.hidden && !menu.contains(event.target) && event.target !== button) menu.hidden = true;
+    if (!menu.hidden && !menu.contains(event.target) && event.target !== button) closeMenu();
   });
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") menu.hidden = true;
+    if (event.key === "Escape" && !menu.hidden) closeMenu();
   });
 
   // The signing session, but only while it is the wallet the page is showing.

@@ -5,7 +5,7 @@ bundle described first, and Three.js, described at the end.
 
 ## CCC + JoyID bundle
 
-`ccc-joyid.min.mjs` is
+`ccc.min.mjs` is
 a single browser ES module containing `@ckb-ccc/core` and `@ckb-ccc/joy-id`,
 built by `tools/build-vendor-ccc.sh`.
 
@@ -31,7 +31,7 @@ node --test apps/web/test/vendor.test.js
 ```
 
 The script installs with `--ignore-scripts`, bundles with esbuild, and writes
-`ccc-joyid.lock.json` recording the resolved package versions and the
+`ccc.lock.json` recording the resolved package versions and the
 artifact's sha256. The build is reproducible: rebuilding produces a
 byte-identical artifact and therefore the same hash.
 
@@ -40,7 +40,7 @@ byte-identical artifact and therefore the same hash.
 `apps/web/test/vendor.test.js` checks two independent properties, and each was
 confirmed to fail on its own by a mutation round trip:
 
-1. **Provenance.** The artifact's sha256 matches `ccc-joyid.lock.json`, so a
+1. **Provenance.** The artifact's sha256 matches `ccc.lock.json`, so a
    silent swap of the bundle fails the suite.
 2. **Agreement.** The bundled `hashCkb` reproduces the Rust-generated
    `domain_hash` vector. If the vendored crypto did not hash the way the

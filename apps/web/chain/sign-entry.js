@@ -19,7 +19,7 @@
 //     against a smaller transaction than the one broadcast. The wallet's own
 //     lock dep is added by prepareTransaction; ours come from buildEntryTx.
 
-import { ccc } from "../vendor/ccc-joyid.min.mjs";
+import { ccc } from "../vendor/ccc.min.mjs";
 
 const hexed = (value) => (value.startsWith("0x") ? value : `0x${value}`);
 

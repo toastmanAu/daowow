@@ -101,7 +101,7 @@ test("what a ticket costs is said in full, and says what comes back", () => {
   assert.strictEqual(copy.costTicket(10000n * CKB),
     "10,000 CKB per ticket. You get this back after the round, win or lose.");
   assert.strictEqual(copy.costDeposit(222n * CKB, false),
-    "222 CKB ticket deposit per ticket with a JoyID wallet. Held while the round runs, then returned.");
+    "222 CKB ticket deposit per ticket with most wallets. Held while the round runs, then returned.");
   assert.strictEqual(copy.costDeposit(220n * CKB, true),
     "220 CKB ticket deposit per ticket. Held while the round runs, then returned.");
   assert.strictEqual(copy.costStorage(237n * CKB),

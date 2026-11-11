@@ -62,7 +62,7 @@ const SECP = {
 const manifest = loadManifest(JSON.parse(fs.readFileSync(manifestPath, "utf8")));
 const fromTx = flag("--from-tx", null);
 
-const { ccc } = await import("../apps/web/vendor/ccc-joyid.min.mjs");
+const { ccc } = await import("../apps/web/vendor/ccc.min.mjs");
 
 // A node that knows about exactly one transaction: the one not sent yet. Its
 // out points are the real ones — the hash is computed from the transaction

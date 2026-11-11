@@ -1,6 +1,6 @@
 // Reads that need the vendored CKB library, kept out of the classic modules.
 
-import { ccc } from "../../vendor/ccc-joyid.min.mjs";
+import { ccc } from "../../vendor/ccc.min.mjs";
 
 // The config cell commits to the schedule's HASH, not its bytes: the schedule
 // itself travels in the round-creation transaction's witness, where
