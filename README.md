@@ -81,8 +81,11 @@ Testnet only. **Not audited. Do not use with real funds.**
 | Seal, entropy, draw | done | proven | live |
 | DAO withdrawal, prize and deposit payout | done | proven | tooling in progress |
 
-The app is browser-only and currently supports the JoyID wallet. Its limit of
-5 tickets per wallet is an app rule and is not enforced on chain.
+The app is browser-only. It offers every wallet the [CCC](https://github.com/ckb-devrel/ccc)
+library supports, including JoyID, MetaMask and other EVM wallets, OKX,
+UniSat, Xverse, UTXO Global, Rei and Nostr signers. JoyID is the most tested;
+the others are newer here. The limit of 5 tickets per wallet is an app rule
+and is not enforced on chain.
 
 ## Repository
 

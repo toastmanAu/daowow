@@ -1,15 +1,15 @@
 # Vendored third-party code
 
-Two artifacts, and nothing else third-party in this repository: the CCC + JoyID
+Two artifacts, and nothing else third-party in this repository: the CCC
 bundle described first, and Three.js, described at the end.
 
-## CCC + JoyID bundle
+## CCC bundle
 
-`ccc.min.mjs` is
-a single browser ES module containing `@ckb-ccc/core` and `@ckb-ccc/joy-id`,
-built by `tools/build-vendor-ccc.sh`.
+`ccc.min.mjs` is a single browser ES module containing the whole of
+`@ckb-ccc/ccc`, every wallet signer it ships included, built by
+`tools/build-vendor-ccc.sh`. `ccc.lock.json` lists the packages and versions.
 
-Size: 458K minified, 154K gzipped.
+Size: 776K minified, 250K gzipped.
 
 ## Why it is committed
 
@@ -49,7 +49,7 @@ confirmed to fail on its own by a mutation round trip:
 ## Known advisory, present in the shipped artifact
 
 `elliptic` (GHSA-848j-6mx2-7j84, **low**) reaches the bundle via
-`@joyid/ckb`. All 21 advisories in the install tree chain from that one
+`@joyid/ckb`. All 19 advisories in the install tree chain from that one
 package; none are moderate, high or critical.
 
 This is **runtime surface, not build-time only**: `elliptic` is bundled into
