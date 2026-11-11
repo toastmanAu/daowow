@@ -25,19 +25,18 @@ Thumbs.db
 .playwright-mcp/
 __pycache__/
 
-# ckb-cli transaction working files (operational scratch, not project state)
-reclaim-*.json
-
-# ckb-cli deploy working files (operational scratch, not project state)
-dev-deploy-*.json
+# ckb-cli working files: built, signed and sent transactions and deploy
+# recipes. Operational scratch, not project state. No JSON belongs at the root.
+/*.json
 deployments/dev-migration-*/
 
-# ckb-cli reclaim working file
-reclaim.json
-
-# round creation working file
-create-round.json
+# Agent and assistant session state
 .superpowers/
+.remember/
+.claude/
+.codex/
+.agents/
+.ruff_cache/
 
 # The assembled public site (tools/build-site.mjs)
 /dist/

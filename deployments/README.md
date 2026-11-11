@@ -40,7 +40,7 @@ future deployments require a new bundle and review.
 Run in your own terminal so the keystore password stays local:
 
 ```sh
-cd /home/phill/daowow
+cd daowow   # the repository root
 ckb-cli --url https://testnet.ckb.dev/rpc deploy sign-txs \
   --info-file deployments/testnet-deploy.local.json \
   --from-account 0x5ea0977c3cab6898817c9860fe70d26acf559f76 \
