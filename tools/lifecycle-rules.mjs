@@ -136,7 +136,7 @@ export function checkGenesis({
  */
 export function checkAggregate({
   config, before, after, entries, capacities,
-  ledgerOutCapacity, ledgerInCapacity, daoOutput, daoData, receiptOutput, proofs,
+  ledgerOutCapacity, ledgerInCapacity, daoOutput, daoData, receiptOutput, receiptData, proofs,
 }) {
   const bad = [];
   let computed = null;
@@ -201,6 +201,13 @@ export function checkAggregate({
     const want = receiptArgs(config, before.frozen.shardId, id, batch).toLowerCase();
     if ((receiptOutput.type?.args ?? "").toLowerCase() !== want) {
       bad.push("the receipt's args do not carry this batch's id and digest");
+    }
+    // ledger.rs compares the receipt's DATA with batch.encode(); anything
+    // else, an empty cell included, is -28 SHARD_ERROR_DATA.
+    const wantData = Array.from(ledgerCodec.encodeBatchCommitment(batch),
+      (x) => x.toString(16).padStart(2, "0")).join("");
+    if (String(receiptData ?? "").replace(/^0x/, "").toLowerCase() !== wantData) {
+      bad.push("the receipt's data is not this batch's 73-byte record");
     }
   }
 

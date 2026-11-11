@@ -319,6 +319,7 @@ if (config && protocolIn.length === 1 && protocolOut.length >= 1) {
       daoOutput: daoIdx === -1 ? null : camel(tx.outputs[daoIdx]),
       daoData: daoIdx === -1 ? null : tx.outputs_data[daoIdx],
       receiptOutput: receiptIdx === -1 ? null : camel(tx.outputs[receiptIdx]),
+      receiptData: receiptIdx === -1 ? null : tx.outputs_data[receiptIdx],
       proofs: decodeLedgerWitness(unhex(tx.witnesses[src.i])).map((r) => r.proof),
     });
     reasons.length ? reasons.forEach((r) => fail.push(`aggregate: ${r}`))

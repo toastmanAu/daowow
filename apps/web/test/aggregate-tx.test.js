@@ -380,3 +380,16 @@ test("the native DAO type's cell dep is required and lands among the deps", () =
   const { daoTypeDep, ...without } = base();
   assert.throws(() => buildAggregateTx(without), /native DAO|daoTypeDep/);
 });
+
+// The contract compares the receipt cell's data with the batch it computed
+// (daowow-contracts-common/src/ledger.rs, the receipt_count branch). An empty
+// receipt is -28 SHARD_ERROR_DATA; round 0xaffb66f7 found that on testnet.
+test("the receipt cell carries the 73-byte batch record and pays for it", () => {
+  const { encodeBatchCommitment } = require("../chain/ledger-codec.js");
+  const { tx, batch } = buildAggregateTx(base());
+  const want = "0x" + Buffer.from(encodeBatchCommitment(batch)).toString("hex");
+  assert.strictEqual(tx.outputsData[2], want);
+  assert.strictEqual(want.length, 2 + 73 * 2);
+  // 8 capacity + 73 data + 34 lock + 110 type
+  assert.strictEqual(BigInt(tx.outputs[2].capacity), 225n * 100000000n);
+});

@@ -11,7 +11,7 @@ const { decodeRoundConfigV1, decodeEntryShardDataV1 } = require("../chain/codec.
 const { decodeAggregationState } = require("../chain/ledger-codec.js");
 const { decodeEntryDataV1 } = require("../chain/entry-codec.js");
 const { daoLockArgs, receiptArgs, acceptBatch } = require("../chain/aggregate-tx.js");
-const { batchId } = require("../chain/ledger-codec.js");
+const { batchId, encodeBatchCommitment } = require("../chain/ledger-codec.js");
 const core = require("../core.js");
 const { scriptHash } = require("../chain/refund-tx.js");
 
@@ -150,6 +150,7 @@ const aggBase = () => ({
   },
   daoData: "0x" + "00".repeat(8),
   receiptOutput: { type: { args: receiptArgs(CONFIG, 0, ID, BATCH) } },
+  receiptData: "0x" + Buffer.from(encodeBatchCommitment(BATCH)).toString("hex"),
   proofs,
 });
 
@@ -203,6 +204,14 @@ const aggCases = [
    /does not verify/],
   ["a missing DAO deposit is reported",
    (b) => { b.daoOutput = null; }, /no DAO deposit/],
+  // Round 0xaffb66f7's first aggregate: an empty receipt cell, refused on
+  // chain with -28 after it had been signed.
+  ["an empty receipt cell is refused",
+   (b) => { b.receiptData = "0x"; }, /receipt's data/],
+  ["a receipt recording a different batch is refused",
+   (b) => { b.receiptData = b.receiptData.slice(0, -2) + "ff"; }, /receipt's data/],
+  ["a receipt whose data was not supplied is refused",
+   (b) => { delete b.receiptData; }, /receipt's data/],
   ["a missing receipt is reported",
    (b) => { b.receiptOutput = null; }, /no batch receipt/],
 ];

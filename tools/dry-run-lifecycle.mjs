@@ -556,6 +556,7 @@ if (step === "freeze") {
     daoOutput: built.tx.outputs[1],
     daoData: built.tx.outputsData[1],
     receiptOutput: built.tx.outputs[2],
+    receiptData: built.tx.outputsData[2],
     proofs: decodeLedgerWitness(unhex(built.tx.witnesses[0])).map((r) => r.proof),
   });
 }

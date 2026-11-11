@@ -39,8 +39,12 @@ const MIN_CELL_CKB = 61n * CKB;
 const MAX_BATCH_ENTRIES = 32;
 
 // The receipt cell's occupied capacity, in CKB:
-//   8 capacity + 0 data + 34 lock (32 + 1 + 1) + 110 type (32 + 1 + 77 args)
-const RECEIPT_CELL_CKB = 8n + 34n + 110n;
+//   8 capacity + 73 data + 34 lock (32 + 1 + 1) + 110 type (32 + 1 + 77 args)
+// The data is the batch record itself. An EMPTY receipt is refused with -28
+// SHARD_ERROR_DATA: the contract compares the cell's data with batch.encode()
+// (daowow-contracts-common/src/ledger.rs). Round 0xaffb66f7 found that on
+// testnet, after signing.
+const RECEIPT_CELL_CKB = 8n + 73n + 34n + 110n;
 
 const hex0x = (b) => "0x" + Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
 const hexRaw = (b) => Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
@@ -378,7 +382,7 @@ function buildAggregateTx({
       outputsData: [
         hex0x(ledgerCodec.encodeAggregationState(next)),
         "0x" + "00".repeat(8),   // the native DAO's deposit-block-number slot
-        "0x",
+        hex0x(ledgerCodec.encodeBatchCommitment(batch)),
         "0x",
       ],
       // The proofs go at the LEDGER input's index, which is 0. The remaining
