@@ -25,6 +25,42 @@ test("the vendored artifact matches its lock file", () => {
   assert.strictEqual(got, lock.artifactSha256);
 });
 
+// The bundle carries more than CCC: its own dependencies do the hashing and
+// the curve maths. Those are pinned by an npm lock file, and the bundle's lock
+// records WHICH npm lock it was built from, so neither can move alone.
+const PINS = path.join(__dirname, "..", "..", "..", "tools", "vendor-ccc");
+
+test("the bundle was built from the committed dependency lock", () => {
+  const lock = JSON.parse(fs.readFileSync(LOCK, "utf8"));
+  assert.strictEqual(lock.dependencyLock, "tools/vendor-ccc/package-lock.json");
+  const got = crypto.createHash("sha256")
+    .update(fs.readFileSync(path.join(PINS, "package-lock.json"))).digest("hex");
+  assert.strictEqual(got, lock.dependencyLockSha256,
+    "the dependency lock changed without a rebuild: run tools/build-vendor-ccc.sh");
+});
+
+test("every bundled dependency is pinned to an exact version and tarball hash", () => {
+  const manifest = JSON.parse(fs.readFileSync(path.join(PINS, "package.json"), "utf8"));
+  const pins = JSON.parse(fs.readFileSync(path.join(PINS, "package-lock.json"), "utf8"));
+  const exact = /^\d+\.\d+\.\d+$/;
+  for (const [name, range] of Object.entries(
+    { ...manifest.dependencies, ...manifest.devDependencies })) {
+    assert.match(range, exact, `${name} must be an exact version, not a range`);
+  }
+  const entries = Object.entries(pins.packages).filter(([where]) => where !== "");
+  assert.ok(entries.length > 0);
+  for (const [where, entry] of entries) {
+    assert.match(entry.integrity ?? "", /^sha512-/, `${where} has no tarball hash`);
+    assert.ok((entry.resolved ?? "").startsWith("https://registry.npmjs.org/"),
+      `${where} does not come from the npm registry`);
+  }
+  const lock = JSON.parse(fs.readFileSync(LOCK, "utf8"));
+  assert.strictEqual(pins.packages["node_modules/esbuild"].version, lock.esbuild);
+  for (const [name, version] of Object.entries(lock.packages)) {
+    assert.strictEqual(pins.packages[`node_modules/${name}`].version, version);
+  }
+});
+
 test("the vendored crypto agrees with the Rust oracle", async () => {
   // Positive control: a value impossible to produce by accident. If the
   // vendored bundle does not hash the way the contracts hash, everything

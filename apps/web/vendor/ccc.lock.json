@@ -18,6 +18,9 @@
       "@ckb-ccc/utxo-global": "1.2.6",
       "@ckb-ccc/xverse": "1.2.6"
   },
+  "dependencyLock": "tools/vendor-ccc/package-lock.json",
+  "dependencyLockSha256": "8b8f18ff2c0a2ac914ca7600c6cd02c14b8759bcb407595775d3ec68ec218b20",
+  "esbuild": "0.28.2",
   "builtWith": "esbuild --bundle --format=esm --platform=browser --target=es2022 --minify",
   "regenerate": "tools/build-vendor-ccc.sh"
 }

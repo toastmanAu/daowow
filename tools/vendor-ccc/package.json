@@ -1,0 +1,11 @@
+{
+  "name": "daowow-vendor-ccc",
+  "private": true,
+  "description": "Pinned inputs for tools/build-vendor-ccc.sh. Nothing here is installed at serve time.",
+  "dependencies": {
+    "@ckb-ccc/ccc": "1.3.6"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}
