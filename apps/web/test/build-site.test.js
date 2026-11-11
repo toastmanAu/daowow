@@ -95,3 +95,12 @@ test("the headers forbid framing, sniffing and referrers, for every path", () =>
   assert.match(h, /Referrer-Policy: no-referrer/);
   assert.match(h, /Permissions-Policy: camera=\(\), microphone=\(\), geolocation=\(\)/);
 });
+
+// A visitor must never run yesterday's scripts against today's page. The
+// daowow.org zone stretched Pages' own max-age=0 to four hours for scripts,
+// and a phone kept buying tickets with a build from before the per-wallet
+// limit. no-cache makes every load revalidate (a 304 when nothing changed).
+test("every file is served so that browsers revalidate it", () => {
+  const h = fs.readFileSync(path.join(__dirname, "..", "site", "_headers"), "utf8");
+  assert.match(h, /^\/\*\n(?:  .*\n)*  Cache-Control: no-cache$/m);
+});
