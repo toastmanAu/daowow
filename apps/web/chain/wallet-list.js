@@ -47,13 +47,32 @@ function describeWallets(wallets, isInstall) {
       });
     }
   }
-  return [...usable, ...links];
+  return [...disambiguate(usable), ...links];
 }
 
-/** The usable choice with this key, or null. A download link is never restored. */
+// Browser wallets name themselves, and nothing stops two of them giving the
+// same name. Such choices cannot be told apart by anything a player can read,
+// so each gets its own key (a click must reach the row that was clicked) and
+// is marked ambiguous, which keeps it from ever being restored unasked.
+function disambiguate(usable) {
+  const seen = new Map();
+  for (const o of usable) seen.set(o.key, (seen.get(o.key) ?? 0) + 1);
+  const nth = new Map();
+  return usable.map((o) => {
+    if (seen.get(o.key) === 1) return { ...o, ambiguous: false };
+    const n = (nth.get(o.key) ?? 0) + 1;
+    nth.set(o.key, n);
+    return { ...o, key: `${o.key}${SEPARATOR}${n}`, label: `${o.label} #${n}`, ambiguous: true };
+  });
+}
+
+/**
+ * The usable choice with this key, or null. A download link is never restored,
+ * and neither is a wallet that shares its name with another.
+ */
 function rememberedChoice(options, key) {
   if (typeof key !== "string") return null;
-  return options.find((o) => o.key === key && !o.install) ?? null;
+  return options.find((o) => o.key === key && !o.install && !o.ambiguous) ?? null;
 }
 
 const api = { describeWallets, rememberedChoice, optionKey };

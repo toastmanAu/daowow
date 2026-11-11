@@ -33,6 +33,12 @@ export function createWallet({ rpcUrl, appName = "DAOWOW", appIcon = "", storage
   let controller = null;
   let options = [];
   let current = null;
+  // Counts explicit choices. A restore that was still running when the player
+  // chose a wallet must not then replace that choice.
+  let chosen = 0;
+  // CCC's refresh resets its own listeners; two at once leave the older one's
+  // late callbacks overwriting the newer list. One at a time.
+  let refreshing = Promise.resolve();
   const watchers = new Set();
 
   const store = () => {
@@ -54,13 +60,18 @@ export function createWallet({ rpcUrl, appName = "DAOWOW", appIcon = "", storage
   });
   const choices = () => options.map(publicChoice);
 
-  async function refresh() {
-    controller ??= new ccc.SignersController();
-    await controller.refresh(client, (wallets) => {
-      options = list().describeWallets(wallets, (signer) => signer instanceof ccc.SignerDummy);
-      for (const tell of watchers) tell(choices());
-    }, { name: appName, icon: appIcon });
-    return choices();
+  function refresh() {
+    const run = async () => {
+      controller ??= new ccc.SignersController();
+      await controller.refresh(client, (wallets) => {
+        options = list().describeWallets(wallets, (signer) => signer instanceof ccc.SignerDummy);
+        for (const tell of watchers) tell(choices());
+      }, { name: appName, icon: appIcon });
+      return choices();
+    };
+    const next = refreshing.then(run, run);
+    refreshing = next.catch(() => {});
+    return next;
   }
 
   const session = async (option) => {
@@ -109,16 +120,27 @@ export function createWallet({ rpcUrl, appName = "DAOWOW", appIcon = "", storage
     async connect(key) {
       const option = find(key);
       if (!option) throw new Error("that wallet is no longer available");
+      const mine = ++chosen;
+      if (option.install) { await option.signer.connect(); return null; }
+      // One wallet at a time: the one before is let go first.
+      const before = current;
+      current = null;
+      if (before && before !== option) {
+        try { await before.signer.disconnect(); } catch { /* already gone */ }
+      }
       await option.signer.connect();
-      if (option.install) return null;
       const made = await session(option);
+      // Abandoned meanwhile (another choice, or a disconnect): not adopted.
+      if (mine !== chosen) return null;
       current = option;
-      remember(option.key);
+      // A wallet sharing its name with another is asked for again next time.
+      remember(option.ambiguous ? null : option.key);
       return made;
     },
     // Returns a session if the wallet used last time is still connected, else
     // null. Used on page load so a returning visitor is not asked again.
     async restore() {
+      const before = chosen;
       try {
         await refresh();
         const key = remembered();
@@ -130,6 +152,8 @@ export function createWallet({ rpcUrl, appName = "DAOWOW", appIcon = "", storage
         }
         if (!option || !(await option.signer.isConnected())) return null;
         const made = await session(option);
+        // The player chose a wallet while this was being looked up.
+        if (before !== chosen) return null;
         current = option;
         return made;
       } catch {
@@ -146,6 +170,7 @@ export function createWallet({ rpcUrl, appName = "DAOWOW", appIcon = "", storage
     async disconnect() {
       const was = current;
       current = null;
+      chosen += 1;
       remember(null);
       if (was) await was.signer.disconnect();
     },

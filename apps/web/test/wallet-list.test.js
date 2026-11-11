@@ -68,3 +68,26 @@ test("a wallet that is installed is not also offered as a download", () => {
   const options = describeWallets(mixed, isInstall);
   assert.deepStrictEqual(options.map((o) => [o.label, o.install]), [["OKX Wallet", false]]);
 });
+
+// Any extension can announce itself under any name (EIP-6963), including one
+// another wallet already uses.
+test("two wallets announcing the same name get separate keys and are never restored", () => {
+  const a = real("EVM"); const b = real("EVM");
+  const twins = [{ name: "MetaMask", icon: ICON, signers: [a] }, { name: "MetaMask", icon: ICON, signers: [b] }];
+  // CCC merges by name, so the same case arrives as one wallet with two signers of one name.
+  const merged = [{ name: "MetaMask", icon: ICON, signers: [a, b] }];
+  for (const reportOf of [twins, merged]) {
+    const options = describeWallets(reportOf, isInstall);
+    assert.strictEqual(options.length, 2);
+    assert.notStrictEqual(options[0].key, options[1].key);
+    assert.notStrictEqual(options[0].label, options[1].label);
+    assert.strictEqual(options[1].signer, b.signer, "the second row reaches the second wallet");
+    assert.ok(options.every((o) => o.ambiguous));
+    for (const o of options) assert.strictEqual(rememberedChoice(options, o.key), null);
+    assert.strictEqual(rememberedChoice(options, optionKey("MetaMask", "EVM")), null);
+  }
+});
+
+test("a wallet with a name of its own is not marked ambiguous", () => {
+  assert.ok(describeWallets(report, isInstall).filter((o) => !o.install).every((o) => o.ambiguous === false));
+});

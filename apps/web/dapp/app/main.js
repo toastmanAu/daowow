@@ -96,7 +96,7 @@ function createWalletControl({ manifest, store }) {
 
   async function paint() {
     const session = store.state.session;
-    button.disabled = busy;
+    // Never disabled: while a wallet is being asked, the pill is the way out.
     if (busy) { button.textContent = copy().text.connecting; return; }
     if (!session) { button.textContent = copy().text.connect; return; }
     button.textContent = copy().shortAddress(session.address);
@@ -114,7 +114,15 @@ function createWalletControl({ manifest, store }) {
   // closing the picker answers it.
   let waiting = null;
   const answer = (value) => { const tell = waiting; waiting = null; if (tell) tell(value); };
-  const closeMenu = () => { menu.hidden = true; answer(null); };
+  // Counts connection attempts. A wallet that never answers (a closed popup,
+  // a locked extension) is abandoned by closing the menu; its late answer, if
+  // one ever comes, belongs to an attempt nobody is waiting on.
+  let attempt = 0;
+  const closeMenu = () => {
+    menu.hidden = true;
+    answer(null);
+    if (busy) { attempt += 1; busy = false; paint(); }
+  };
 
   // Which wallet's signers are on show. Null is the list of wallets itself.
   let openWallet = null;
@@ -182,23 +190,32 @@ function createWalletControl({ manifest, store }) {
   async function choose(key) {
     if (busy) return;
     busy = true;
+    const mine = ++attempt;
     showNotice("");
     await paint();
+    paintChoices(lastChoices);
     try {
       const session = await ensure().connect(key);
+      if (mine !== attempt) {
+        // Abandoned while the wallet was thinking. Whatever it connected is
+        // let go, so the page and the wallet do not disagree about who is in.
+        if (session) { try { await ensure().disconnect(); } catch { /* already gone */ } }
+        return;
+      }
       // A download link has nothing to connect to yet.
-      if (session === null) { closeMenu(); return; }
+      if (session === null) { busy = false; closeMenu(); return; }
       signer = session;
       await store.setSession(session);
       menu.hidden = true;
       answer(store.state.session);
     } catch (e) {
+      if (mine !== attempt) return;
       // Said on the page: a console-only failure is invisible to the player.
+      busy = false;
       closeMenu();
       showNotice(copy().errors.wallet(e?.message ?? String(e)));
     } finally {
-      busy = false;
-      await paint();
+      if (mine === attempt) { busy = false; await paint(); }
     }
   }
 
@@ -225,7 +242,13 @@ function createWalletControl({ manifest, store }) {
   async function restore() {
     try {
       const session = await ensure().restore();
-      if (session) { signer = session; await store.setSession(session); }
+      // The player started choosing a wallet while the last one was being
+      // looked up: their choice stands, and this one is dropped.
+      if (session && !busy && !store.state.session) {
+        signer = session;
+        await store.setSession(session);
+        if (!menu.hidden) { menu.hidden = true; answer(store.state.session); }
+      }
     } catch {
       // No earlier connection to pick up.
     }
@@ -233,7 +256,7 @@ function createWalletControl({ manifest, store }) {
   }
 
   button.addEventListener("click", () => {
-    if (!menu.hidden) { closeMenu(); return; }
+    if (!menu.hidden || busy) { closeMenu(); return; }
     if (store.state.session) { paintMenu(); menu.hidden = false; } else connect();
   });
   el("disconnect").addEventListener("click", disconnect);
