@@ -107,3 +107,21 @@ export async function resolveLockDep(rpc, script) {
   }
   return fallbacks[0] ?? null;
 }
+
+/**
+ * The PLAIN CODE deps that provide `script`: a dep group is opened and each
+ * of its members returned as its own code dep.
+ *
+ * DAO phase one and two need this. The DAOWOW lock reads the transaction's
+ * cell deps by position and refuses any that is not a plain code dep, so the
+ * system lock's usual dep group cannot be used there. Opening the group keeps
+ * what the group exists for: the lock's code cell AND the data cell it loads.
+ */
+export async function resolveCodeDeps(rpc, script) {
+  const dep = await resolveLockDep(rpc, script);
+  if (!dep) return null;
+  if (dep.dep_type !== "dep_group") return [dep];
+  const group = await liveCell(rpc, dep.out_point);
+  return parseDepGroup(group.cell.data?.content ?? "0x")
+    .map((out_point) => ({ out_point, dep_type: "code" }));
+}

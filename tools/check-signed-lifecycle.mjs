@@ -18,6 +18,7 @@ import { fileURLToPath } from "node:url";
 import { ccc } from "../apps/web/vendor/ccc.min.mjs";
 import { depsProvide } from "./lock-deps.mjs";
 import { checkFreeze, checkGenesis, checkAggregate, checkClose, checkSeal, checkEntropy } from "./lifecycle-rules.mjs";
+import { fromRpc, checkSettlement } from "./settlement-io.mjs";
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const require_ = createRequire(path.join(ROOT, "tools/"));
@@ -151,6 +152,43 @@ for (const dep of tx.cell_deps ?? []) {
   const data = unhex(got.cell.data?.content ?? "0x");
   if (data.length === 358) { config = codec.decodeRoundConfigV1(data); break; }
 }
+
+// --- settlement: DAO phase one, DAO phase two, payout -----------------------
+// Told apart by what is SPENT: a cell under a DAOWOW dao-lock, or a cell of the
+// settlement type. A payout carries no config cell (its contract branch reads
+// none), so the round is found from the settlement cell's own type args.
+const daoLock = manifest.scripts["dao-lock"];
+const settlementType = manifest.scripts["settlement-type"];
+const spendsDao = resolved.some((c) => c.output.lock.code_hash === daoLock.codeHash);
+const settlementIn = resolved.find((c) => c.output.type
+  && c.output.type.code_hash === settlementType.codeHash && c.output.type.args.length === 2 + 144);
+if (spendsDao || settlementIn) {
+  if (!config && settlementIn) {
+    const discovery = require_("../apps/web/chain/discovery.js");
+    const commitment = settlementIn.output.type.args.slice(2, 66).toLowerCase();
+    const round = (await discovery.findRounds(rpc, manifest)).find((r) => r.config.commitment === commitment);
+    if (round) config = round.config;
+  }
+  if (!config) {
+    fail.push("the round this settlement transaction belongs to could not be found on chain");
+  } else {
+    const { step, reasons } = await checkSettlement(rpc, config, fromRpc(tx));
+    const label = step ?? "settlement";
+    reasons.length ? reasons.forEach((r) => fail.push(`${label}: ${r}`))
+                   : ok.push(`${label}: every rule passes`);
+    // The chain's own clock: a transaction can be right and still early.
+    const tipEpoch = BigInt((await rpc.call("get_tip_header", [])).epoch) & 0xffffffn;
+    for (const [i, input] of tx.inputs.entries()) {
+      const since = BigInt(input.since ?? 0);
+      if (since >> 56n === 0x20n && (since & 0xffffffn) > tipEpoch) {
+        fail.push(`${label}: input ${i} cannot be spent before epoch ${since & 0xffffffn}; ` +
+          `the chain is at ${tipEpoch} (${(since & 0xffffffn) - tipEpoch} epochs to go)`);
+      }
+    }
+  }
+  reportAndExit();
+}
+
 if (!config) {
   fail.push("no round config cell among the cell deps; the contract reads it from there");
 }
