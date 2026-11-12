@@ -160,7 +160,9 @@ function describeDraw(draw) {
   };
 }
 
-const api = { computeDraw, describeDraw, minViablePool, scheduleCommitment, MAX_POOL_BAR };
+const api = {
+  computeDraw, describeDraw, minViablePool, scheduleCommitment, encodeSchedule, MAX_POOL_BAR,
+};
 if (typeof module !== "undefined" && module.exports) module.exports = api;
 if (typeof window !== "undefined") window.DaowowDraw = api;
 })();

@@ -487,7 +487,7 @@ fn gen_vectors() {
     // A dedicated config whose prize_schedule_hash IS the demo schedule's
     // commitment: ComputedDraw refuses a schedule its config does not commit
     // to, and every other fixture here commits to a placeholder hash.
-    let build_draw = |minimum_tickets: u64| {
+    let build_draw = |minimum_tickets: u64, second: &[u8]| {
         let cfg = RoundConfigV1 {
             prize_schedule_hash: demo_schedule.commitment(),
             minimum_tickets,
@@ -498,7 +498,7 @@ fn gen_vectors() {
             accumulator_id: ACC_MMR,
             ..oracle_cfg
         };
-        let entries = [(0u64, 0u64, b"VECTOR-DRAW-A".as_slice()), (1, 5, b"VECTOR-DRAW-B".as_slice())]
+        let entries = [(0u64, 0u64, b"VECTOR-DRAW-A".as_slice()), (1, 5, second)]
             .map(|(nonce, base, who)| EntryDataV1 {
                 round_id,
                 shard_id: 0,
@@ -526,7 +526,7 @@ fn gen_vectors() {
         let caps: Vec<u64> = entries.iter().map(|e| e.principal + 23_700_000_000).collect();
         let proofs: Vec<Vec<u8>> = (0..2u64).map(|p| host.membership_proof(p).unwrap()).collect();
         let refs: Vec<&[u8]> = proofs.iter().map(|p| p.as_slice()).collect();
-        let (accepted, _) = daowow_core::lifecycle::AggregationState::new(&cfg, &frozen)
+        let (accepted, receipt) = daowow_core::lifecycle::AggregationState::new(&cfg, &frozen)
             .unwrap()
             .accept(&cfg, &entries, &caps, &refs)
             .unwrap();
@@ -543,7 +543,46 @@ fn gen_vectors() {
         .unwrap();
         let draw =
             daowow_core::computed_draw::ComputedDraw::new(&cfg, &record, &demo_schedule).unwrap();
+        // Gate 3c oracle: the settlement cell a batch's DAO withdrawal must
+        // create. The contract derives this and compares byte for byte, so a
+        // JS port has nothing else to be checked against. The realised total
+        // is odd on purpose: an even pool splits without a remainder and
+        // would hide the dust rule.
+        let realized_total = receipt.input_capacity + 123_456_789;
+        let derived = daowow_core::entitlements::InitialEntitlements::derive(
+            &cfg,
+            &record,
+            &demo_schedule,
+            &daowow_core::entitlements::EntitlementInput {
+                batch_id: 0,
+                receipt: &receipt,
+                entries: &entries,
+                capacities: &caps,
+                realized_total,
+            },
+        )
+        .unwrap();
+        let entitlements = json!({
+            "batch_id": "0",
+            "receipt": hex(&receipt.encode()),
+            "entries": entries.iter().map(|e| hex(&e.encode())).collect::<Vec<_>>(),
+            "capacities": caps.iter().map(|c| c.to_string()).collect::<Vec<_>>(),
+            "realized_total": realized_total.to_string(),
+            "funding": hex(&derived.funding().encode()),
+            "liabilities": derived.liabilities().iter().map(|l| json!({
+                "participant_lock_hash": hex(&l.participant_lock_hash),
+                "principal": l.principal.to_string(),
+                "prize": l.prize.to_string(),
+            })).collect::<Vec<_>>(),
+            "prizes": derived.prizes().iter().map(|p| json!({
+                "ticket": hex(&p.ticket),
+                "amount": p.amount.to_string(),
+            })).collect::<Vec<_>>(),
+            "witness": hex(&daowow_core::entitlement_witness::EntitlementWitness::encode(
+                &demo_schedule, &entries, &caps).unwrap()),
+        });
         json!({
+            "entitlements": entitlements,
             "config": hex(&cfg.encode()),
             "commitment": hex(&cfg.commitment()),
             "schedule": hex(&demo_schedule.encode()),
@@ -558,11 +597,14 @@ fn gen_vectors() {
         })
     };
     // Viable: 10 tickets clears a minimum of 5 and opens two places.
-    let computed_draw = build_draw(5);
+    let computed_draw = build_draw(5, b"VECTOR-DRAW-B");
+    // The same round with one participant holding both entries: their
+    // principal is consolidated into ONE liability.
+    let computed_draw_one_holder = build_draw(5, b"VECTOR-DRAW-A");
     // Failed: 10 tickets is below a minimum of 50. A failed round still has a
     // seed — it is derived regardless — but it draws NOTHING, and the wording
     // must not imply a draw happened.
-    let computed_draw_failed = build_draw(50);
+    let computed_draw_failed = build_draw(50, b"VECTOR-DRAW-B");
 
     let prize_schedule_v2 = json!({
         "note": "demo schedule; v1 wire is unchanged and lives in the v1 tests",
@@ -750,6 +792,7 @@ fn gen_vectors() {
         "entropy_heights": entropy_heights,
         "settlement_funding": settlement_funding_json,
         "computed_draw": computed_draw,
+        "computed_draw_one_holder": computed_draw_one_holder,
         "computed_draw_failed": computed_draw_failed,
     });
 
