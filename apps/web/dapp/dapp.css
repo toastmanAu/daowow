@@ -305,3 +305,42 @@ main > section > h1:focus-visible { outline: none; }
 #wallet-choices[hidden], #wallet-connected[hidden] { display: none; }
 /* The header sits above the tab bar so the wallet menu is not covered by it. */
 .site-header { z-index: 110; }
+
+/* --- ticket cards -------------------------------------------------------
+   The artwork is a resized copy of ticketBlank.png / ticketWinner.png from the
+   repository root (832x1280). Every measure below is a share of the ticket's
+   own width, so the printing keeps its place at any size. */
+.ticket-row { list-style: none; margin: 0; padding: 0 0 8px; display: flex; gap: 16px;
+  overflow-x: auto; scroll-snap-type: x proximity; }
+.ticket-slot { flex: 0 0 min(72vw, 300px); scroll-snap-align: start; display: grid; gap: 4px;
+  justify-items: center; }
+.ticket { width: 100%; aspect-ratio: 832 / 1280; position: relative; container-type: inline-size;
+  background: center / 100% 100% no-repeat; color: hsl(8 36% 21%);
+  font-family: Rockwell, 'Rockwell Nova', 'Roboto Slab', 'DejaVu Serif', Georgia, serif; }
+.ticket-blank { background-image: url(assets/ticket-blank.webp); }
+.ticket-winner { background-image: url(assets/ticket-winner.webp); }
+.ticket-face { position: absolute; inset: 24.5% 18% 13% 18%; display: flex; flex-direction: column;
+  align-items: center; text-align: center; }
+.ticket-face p, .ticket-facts, .ticket-facts dd { margin: 0; }
+.ticket-round { font-size: 5cqw; line-height: 1.2; }
+.ticket-number { font-size: 15cqw; font-weight: 700; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.ticket-bottom { margin-top: auto; width: 100%; display: grid; gap: 2cqw; }
+.ticket-result { font-size: 6.5cqw; font-weight: 700; line-height: 1.2; }
+.ticket-facts { display: grid; gap: 1.6cqw; font-size: 4cqw; line-height: 1.25; }
+.ticket-facts dt { font-size: 3.4cqw; letter-spacing: .04em; opacity: .8; }
+.ticket-facts dd { font-weight: 600; }
+.ticket-facts code { font-size: 4cqw; }
+/* The plain ticket has the whole middle to itself. */
+.ticket-blank .ticket-face { justify-content: space-between; }
+.ticket-blank .ticket-top { margin-top: 6cqw; }
+.ticket-blank .ticket-bottom { margin-top: 0; margin-bottom: 4cqw; gap: 4cqw; }
+.ticket-blank .ticket-facts { gap: 3cqw; }
+/* The winner's stamp crosses the middle: the number sits above it and the
+   rest below, one line to a fact. */
+.ticket-winner .ticket-number { font-size: 9cqw; }
+.ticket-winner .ticket-round { font-size: 4cqw; }
+.ticket-winner .ticket-facts { gap: .6cqw; font-size: 3.4cqw; }
+.ticket-winner .ticket-facts > div { display: flex; justify-content: space-between; gap: 2cqw; }
+.ticket-winner .ticket-facts dt, .ticket-winner .ticket-facts code { font-size: 3.4cqw; }
+.ticket-winner .ticket-result { font-size: 5cqw; }
+.ticket-copy { font-size: 14px; min-height: 44px; color: rgba(255, 255, 255, .8); }

@@ -135,6 +135,47 @@ function createStore({ manifest, rpc, readers, timeoutMs = READ_TIMEOUT_MS }) {
     };
   }
 
+  // When a block that exists was made can never change, so it is read once.
+  // Only a successful read is kept: a failure is tried again next time.
+  const pastTimes = new Map();
+  async function readOnce(key, read) {
+    if (pastTimes.has(key)) return { ms: pastTimes.get(key), exact: true };
+    try {
+      const ms = BigInt(await read());
+      pastTimes.set(key, ms);
+      return { ms, exact: true };
+    } catch {
+      // No date is better than a guessed one for something already past.
+      return null;
+    }
+  }
+  const tipTime = (tip) => (tip.header && tip.header.timestamp ? BigInt(tip.header.timestamp) : null);
+  const estimate = (tip, ms) => (tipTime(tip) === null ? null : { ms: tipTime(tip) + ms, exact: false });
+
+  // The dates printed on a ticket. One that has passed is read from its
+  // block; one still to come is worked out from the newest block's own clock
+  // and marked as an estimate.
+  async function readTimes(snapshot, tip) {
+    const { config } = snapshot;
+    const atEpoch = (epoch) => (BigInt(epoch) <= tip.epoch.number
+      ? readOnce(`epoch:${epoch}`, () => readers.readEpochStartTime(rpc, BigInt(epoch)))
+      : estimate(tip, time().msUntilEpoch(epoch, tip.epoch)));
+    const sealedAt = snapshot.record
+      ? snapshot.record.record.inclusionHeight
+      : snapshot.seal ? snapshot.seal.inclusionHeight : null;
+    let draw = null;
+    if (sealedAt !== null && sealedAt !== undefined) {
+      const drawHeight = entropy().lastEntropyHeight(sealedAt);
+      draw = tip.height >= drawHeight
+        ? readOnce(`block:${drawHeight}`, () => readers.readBlockTime(rpc, drawHeight))
+        : estimate(tip, time().msUntilBlock(drawHeight, tip.height));
+    }
+    const [opens, closes, drawn] = await Promise.all([
+      atEpoch(config.entryStart), atEpoch(config.entryEnd), draw,
+    ]);
+    return { opens, closes, draw: drawn };
+  }
+
   async function loadMine(rows, tip, session) {
     const lockHash = readers.scriptHash(session.lockScript);
     const [claims, entries] = await Promise.all([
@@ -143,9 +184,13 @@ function createStore({ manifest, rpc, readers, timeoutMs = READ_TIMEOUT_MS }) {
     ]);
     const draws = new Map();
     for (const row of rows) if (row.draw) draws.set(row.snapshot.config.commitment, row.draw);
-    return ticketsLib().buildMyTickets({
+    const cards = ticketsLib().buildMyTickets({
       rows, claims, entries, draws, nowEpoch: tip.epoch.number,
     });
+    return Promise.all(cards.map(async (card) => {
+      const row = rows.find((r) => r.snapshot.config.commitment === card.commitment);
+      return { ...card, times: await readTimes(row.snapshot, tip) };
+    }));
   }
 
   async function refreshMine() {

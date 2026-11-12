@@ -53,6 +53,8 @@ function readers(manifest, rpc) {
     readSchedule: fetchSchedule,
     readEntropyHeaders: window.DaowowEntropyDerive.readEntropyHeaders,
     readPoolSoFar: window.DaowowDaoYield.readPoolSoFar,
+    readEpochStartTime: cells.readEpochStartTime,
+    readBlockTime: cells.readBlockTime,
     findClaims: cells.findClaims,
     findMyEntries: cells.findMyEntries,
     scriptHash: window.DaowowRefundTx.scriptHash,

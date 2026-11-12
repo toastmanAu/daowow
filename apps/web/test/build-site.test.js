@@ -104,3 +104,15 @@ test("every file is served so that browsers revalidate it", () => {
   const h = fs.readFileSync(path.join(__dirname, "..", "site", "_headers"), "utf8");
   assert.match(h, /^\/\*\n(?:  .*\n)*  Cache-Control: private, no-cache$/m);
 });
+
+test("the ticket artwork is published byte for byte", async () => {
+  const { listSiteFiles, buildSite } = await load();
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), "daowow-site-art-"));
+  buildSite(out);
+  for (const name of ["ticket-blank.webp", "ticket-winner.webp"]) {
+    const entry = listSiteFiles().find((f) => f.to === `dapp/assets/${name}`);
+    assert.ok(entry, `${name} must be published`);
+    assert.ok(fs.readFileSync(entry.from).equals(fs.readFileSync(path.join(out, "dapp", "assets", name))));
+  }
+  fs.rmSync(out, { recursive: true, force: true });
+});

@@ -53,3 +53,19 @@ test("a date is approximate and names the day and month", () => {
   const now = Date.UTC(2026, 10, 10, 2, 0, 0);
   assert.strictEqual(describeDate(32n * 86400000n, now, "en-AU", "UTC"), "around 12 Dec");
 });
+
+const time = require("../dapp/model/time.js");
+
+test("a moment is said as a day and a time of day, in the zone asked for", () => {
+  const ms = BigInt(Date.UTC(2026, 10, 16, 1, 10));
+  const utc = time.formatMoment(ms, "en-AU", "UTC");
+  assert.match(utc, /16 Nov/);
+  assert.match(utc, /1:10/);
+  const adelaide = time.formatMoment(ms, "en-AU", "Australia/Adelaide");
+  assert.match(adelaide, /16 Nov/);
+  assert.match(adelaide, /11:40/);
+});
+
+test("the time until a period that has started is zero, never a past date", () => {
+  assert.strictEqual(time.msUntilEpoch(1000n, { number: 1005n, index: 0n, length: 1800n }), 0n);
+});

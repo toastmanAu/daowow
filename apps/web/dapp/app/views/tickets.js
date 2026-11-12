@@ -2,6 +2,7 @@
 // one action that applies sitting on the card.
 import { h, clear, errorBox, showRetry, badge } from "../dom.js";
 import { roundDetails } from "./round-card.js";
+import { ticketFace } from "./ticket-face.js";
 
 const copy = () => window.DaowowCopy;
 const T = () => window.DaowowTickets;
@@ -128,6 +129,11 @@ function ticketCard(ctx, card, row) {
       badge(copy().outcomeBadge(card.outcome), tone(card.outcome))),
   ];
   if (card.ticketsHeld > 0) parts.push(h("p", {}, copy().heldLine(card.ticketsHeld)));
+  const faces = window.DaowowTicketFace.buildTicketFaces({ card, label: row.label });
+  if (faces.length > 0) {
+    parts.push(h("ul", { class: "ticket-row", "aria-label": copy().text.face.listLabel },
+      faces.map(ticketFace)));
+  }
   if (card.multiShard) parts.push(h("p", { class: "muted" }, copy().errors.multiShard));
   if (row.drawError && row.view.state === window.DaowowRoundState.PLAYER_STATE.DRAWN) {
     parts.push(errorBox(copy().errors.draw, row.drawError));

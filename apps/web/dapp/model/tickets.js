@@ -110,6 +110,10 @@ function buildMyTickets({ rows, claims, entries, draws, nowEpoch }) {
       commitment: config.commitment,
       ticketsHeld: myClaims.length,
       positions,
+      // Where each ticket sits, which is what its identity is derived from.
+      tickets: myClaims
+        .map((c) => ({ shardId: c.shardId, position: BigInt(c.position) }))
+        .sort((a, b) => ascending(a.position, b.position)),
       outcome,
       actions,
       wins,

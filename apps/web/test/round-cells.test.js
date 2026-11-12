@@ -210,3 +210,47 @@ test("a round is sound only if its DAO type is the network's own, as a script ha
 test("without the network's DAO type to compare against, no round is sound", () => {
   assert.strictEqual(usesNetworkDao(deployedConfig(), null), false);
 });
+
+// ---- when a block was made -------------------------------------------------
+const { readEpochStartTime, readBlockTime } = require("../chain/round-cells.js");
+const clockRpc = (over = {}) => {
+  const asked = [];
+  return {
+    asked,
+    call: async (method, params) => {
+      asked.push([method, ...params]);
+      if (method === "get_epoch_by_number") {
+        return "epoch" in over ? over.epoch : { number: params[0], start_number: "0x64", length: "0x708" };
+      }
+      if (method === "get_header_by_number") {
+        return "header" in over ? over.header : { number: params[0], timestamp: "0x1a2b3c4d5e" };
+      }
+      throw new Error(`unexpected ${method}`);
+    },
+  };
+};
+
+test("a period's start is the time on its first block", async () => {
+  const rpc = clockRpc();
+  assert.strictEqual(await readEpochStartTime(rpc, 14168n), 0x1a2b3c4d5en);
+  assert.deepStrictEqual(rpc.asked, [
+    ["get_epoch_by_number", "0x3758"], ["get_header_by_number", "0x64"],
+  ]);
+});
+
+test("a period the node does not know has no start time", async () => {
+  await assert.rejects(readEpochStartTime(clockRpc({ epoch: null }), 99n), /has not started/);
+});
+
+test("a block's time is read from that block and no other", async () => {
+  assert.strictEqual(await readBlockTime(clockRpc(), 100n), 0x1a2b3c4d5en);
+  await assert.rejects(readBlockTime(clockRpc({ header: null }), 100n), /not available/);
+  await assert.rejects(
+    readBlockTime(clockRpc({ header: { number: "0x65", timestamp: "0x1" } }), 100n),
+    /asked for block 100 and was given block 101/);
+});
+
+test("a period answered for a different period is refused", async () => {
+  const rpc = clockRpc({ epoch: { number: "0x1", start_number: "0x64", length: "0x708" } });
+  await assert.rejects(readEpochStartTime(rpc, 14168n), /asked for period 14168 and was given 1/);
+});

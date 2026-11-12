@@ -166,3 +166,13 @@ test("cards come back newest round first", () => {
   });
   assert.deepStrictEqual(cards.map((c) => c.commitment), [C2, C1]);
 });
+
+test("each card lists the tickets held, with where each sits, lowest first", () => {
+  const cards = build({
+    rows: [row(C1, S.OPEN)],
+    claims: [{ ...claim(C1, 7), shardId: 3 }, { ...claim(C1, 2), shardId: 0 }],
+  });
+  assert.deepStrictEqual(cards[0].tickets, [
+    { shardId: 0, position: 2n }, { shardId: 3, position: 7n },
+  ]);
+});

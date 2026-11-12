@@ -53,7 +53,16 @@ function describeDate(ms, nowMs, locale = "en-AU", timeZone = undefined) {
   return `around ${text}`;
 }
 
-const api = { EPOCH_MS, parseEpoch, msUntilEpoch, msUntilBlock, describeDuration, describeDate };
+/** A day and a time of day, in the reader's own locale and zone by default. */
+function formatMoment(ms, locale = undefined, timeZone = undefined) {
+  return new Intl.DateTimeFormat(locale, {
+    day: "numeric", month: "short", hour: "numeric", minute: "2-digit", timeZone,
+  }).format(new Date(Number(BigInt(ms))));
+}
+
+const api = {
+  EPOCH_MS, parseEpoch, msUntilEpoch, msUntilBlock, describeDuration, describeDate, formatMoment,
+};
 if (typeof module !== "undefined" && module.exports) module.exports = api;
 if (typeof window !== "undefined") window.DaowowTime = api;
 })();

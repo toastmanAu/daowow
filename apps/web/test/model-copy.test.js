@@ -132,3 +132,26 @@ test("Home's fixed text covers the four things a first-timer must understand", (
     assert.match(home, new RegExp(`id="${id}"`), id);
   }
 });
+
+test("a date on a ticket says 'about' unless it was read from the chain", () => {
+  assert.strictEqual(copy.momentLine("16 Nov, 11:40 am", true), "16 Nov, 11:40 am");
+  assert.strictEqual(copy.momentLine("16 Nov, 11:40 am", false), "about 16 Nov, 11:40 am");
+});
+
+test("a ticket's result reads as a place, a miss, or a round that did not run", () => {
+  assert.strictEqual(copy.faceResult({ kind: "won", place: 2 }), "2nd place");
+  assert.strictEqual(copy.faceResult({ kind: "not-this-time" }), "Not this time");
+  assert.strictEqual(copy.faceResult({ kind: "did-not-run" }), "Round did not run");
+  assert.strictEqual(copy.faceResult(null), "");
+});
+
+test("a hash is shortened to its two ends", () => {
+  assert.strictEqual(copy.shortHash("0x" + "ab".repeat(30) + "cdef"), "0xabab…cdef");
+});
+
+test("the ticket face's words are in the jargon check", () => {
+  const samples = copy.ALL_SAMPLES();
+  for (const s of [copy.ticketNo("37"), copy.text.face.opens, copy.text.face.drawSoon, copy.faceResult({ kind: "did-not-run" })]) {
+    assert.ok(samples.includes(s), s);
+  }
+});

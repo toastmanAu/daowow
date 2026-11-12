@@ -203,3 +203,20 @@ test("the entry and refund screens run the tested send sequences, not their own"
   assert.match(enter, /isLive: \(\) => !disposed/);
   assert.match(enter, /beforeSign\(\);\s*say\(words\.approve\);\s*return who\.signEntry/);
 });
+
+test("the ticket artwork the stylesheet names is in the app and is small", () => {
+  const css = read("dapp/dapp.css");
+  const named = [...css.matchAll(/url\((assets\/[a-z-]+\.webp)\)/g)].map((m) => m[1]);
+  assert.deepStrictEqual(named.sort(), ["assets/ticket-blank.webp", "assets/ticket-winner.webp"]);
+  for (const file of named) {
+    const size = fs.statSync(path.join(__dirname, "..", "dapp", file)).size;
+    assert.ok(size > 10000 && size < 150000, `${file} is ${size} bytes`);
+  }
+});
+
+test("a ticket's printing is text on the page, and the copy button copies only its hash", () => {
+  const view = read("dapp/app/views/ticket-face.js");
+  assert.match(view, /clipboard\.writeText\(face\.ticketId\)/);
+  assert.strictEqual(view.match(/clipboard/g).length, 1);
+  assert.doesNotMatch(view, /canvas|<img|innerHTML/);
+});

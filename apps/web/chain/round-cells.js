@@ -250,8 +250,35 @@ async function countEntries(rpc, manifest) {
   return counts;
 }
 
+/**
+ * When block `height` was made, in milliseconds. The node is asked for a
+ * height and must answer for that height: a neighbouring block has a
+ * neighbouring time, and it would be shown as this one's.
+ */
+async function readBlockTime(rpc, height) {
+  const wanted = BigInt(height);
+  const header = await rpc.call("get_header_by_number", ["0x" + wanted.toString(16)]);
+  if (!header) throw new Error(`block ${wanted} is not available`);
+  if (BigInt(header.number) !== wanted) {
+    throw new Error(`asked for block ${wanted} and was given block ${BigInt(header.number)}`);
+  }
+  return BigInt(header.timestamp);
+}
+
+/** When period `epoch` began: the time on its first block. */
+async function readEpochStartTime(rpc, epoch) {
+  const wanted = BigInt(epoch);
+  const found = await rpc.call("get_epoch_by_number", ["0x" + wanted.toString(16)]);
+  if (!found) throw new Error(`period ${wanted} has not started`);
+  if (BigInt(found.number) !== wanted) {
+    throw new Error(`asked for period ${wanted} and was given ${BigInt(found.number)}`);
+  }
+  return readBlockTime(rpc, BigInt(found.start_number));
+}
+
 const api = {
   readDeployment, findClaims, findMyEntries, countEntries, decodeClaimArgs, matchesDeployment, usesNetworkDao,
+  readBlockTime, readEpochStartTime,
 };
 if (typeof module !== "undefined" && module.exports) module.exports = api;
 if (typeof window !== "undefined") window.DaowowRoundCells = api;
