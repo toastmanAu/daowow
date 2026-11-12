@@ -78,6 +78,43 @@ function encodeSettlementWitness(rows) {
   return core().concat(parts);
 }
 
+const HASH_TYPE_OF_BYTE = { 0: "data", 1: "type", 2: "data1", 4: "data2" };
+
+/** decode_settlement_witness (witness.rs), refusals included. */
+function decodeSettlementWitness(bytes) {
+  if (!(bytes instanceof Uint8Array) || bytes.length < 4) throw new Error("a payout witness is at least 4 bytes");
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const count = view.getUint32(0, true);
+  if (count > 128) throw new Error(`a payout witness lists at most 128 items; this claims ${count}`);
+  let at = 4;
+  const take = (n) => {
+    if (at + n > bytes.length) throw new Error("the payout witness is cut short");
+    const part = bytes.slice(at, at + n);
+    at += n;
+    return part;
+  };
+  const rows = [];
+  for (let i = 0; i < count; i += 1) {
+    const args = take(take(1)[0]);
+    const codeHash = take(32);
+    const hashType = HASH_TYPE_OF_BYTE[take(1)[0]];
+    if (hashType === undefined) throw new Error(`payout item ${i} names an unknown hash type`);
+    const item = take(48);
+    const itemView = new DataView(item.buffer);
+    const proof = take(new DataView(take(4).buffer).getUint32(0, true));
+    rows.push({
+      lock: { codeHash: "0x" + hex(codeHash), hashType, args: "0x" + hex(args) },
+      item: {
+        participantLockHash: hex(item.slice(0, 32)),
+        principal: itemView.getBigUint64(32, true), prize: itemView.getBigUint64(40, true),
+      },
+      proof,
+    });
+  }
+  if (at !== bytes.length) throw new Error("the payout witness has trailing bytes");
+  return rows;
+}
+
 /**
  * `funding` is { outPoint, capacity, lock, type, state } with `state` the
  * decoded settlement data. `liabilities` is the batch's COMPLETE list in
@@ -199,7 +236,7 @@ function buildPayoutTx({ manifest, funding, liabilities, locks, sponsor, count, 
 }
 
 const api = {
-  buildPayoutTx, encodeSettlementWitness, payoutWitnessBound,
+  buildPayoutTx, encodeSettlementWitness, decodeSettlementWitness, payoutWitnessBound,
   FUNDING_CELL_CKB, MAX_PAYOUTS_PER_TX, FEE_SHANNONS,
 };
 if (typeof module !== "undefined" && module.exports) module.exports = api;

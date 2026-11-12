@@ -272,3 +272,25 @@ test("each bound on where a batch may start is checked on its own", () => {
     () => checkBatch({ ...i, record: ledgerWith({ acceptedEntries: 1n }) }),
     /not a batch this round accepted/);
 });
+
+// ---- reading the evidence back ------------------------------------------------
+const { decodeEntitlementWitness } = require("../chain/entitlements.js");
+
+test("the batch evidence reads back to what was written, from Rust's bytes", () => {
+  const i = inputs(V.computed_draw);
+  const wire = unhex(V.computed_draw.entitlements.witness);
+  const back = decodeEntitlementWitness(wire);
+  assert.deepStrictEqual(back.capacities, i.capacities);
+  assert.deepStrictEqual(back.entries, i.entries);
+  assert.deepStrictEqual(back.schedule, i.schedule);
+  assert.strictEqual(hex(encodeEntitlementWitness(back.schedule, back.entries, back.capacities)), V.computed_draw.entitlements.witness);
+});
+
+test("malformed batch evidence is refused the way the contract refuses it", () => {
+  const good = unhex(V.computed_draw.entitlements.witness);
+  const v1 = Uint8Array.from(good); v1[0] = 1;
+  assert.throws(() => decodeEntitlementWitness(v1), /version 1/);
+  assert.throws(() => decodeEntitlementWitness(good.slice(0, good.length - 1)), /cut short/);
+  assert.throws(() => decodeEntitlementWitness(Uint8Array.from([...good, 0])), /trailing/);
+  assert.throws(() => decodeEntitlementWitness(new Uint8Array(160 * 1024 + 1)), /too large/);
+});

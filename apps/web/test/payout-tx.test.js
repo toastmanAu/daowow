@@ -305,3 +305,27 @@ test("a lock whose args do not fit the witness's one-byte length is refused", ()
   const fits = { ...long, args: "0x" + "ab".repeat(255) };
   assert.doesNotThrow(() => encodeSettlementWitness([{ lock: fits, item, proof: new Uint8Array(0) }]));
 });
+
+// ---- reading a witness back -------------------------------------------------
+const { decodeSettlementWitness } = require("../chain/payout-tx.js");
+
+test("a payout witness reads back to what was written, Rust's bytes included", () => {
+  const rows = decodeSettlementWitness(unhex(E.payout_witness));
+  assert.strictEqual(rows.length, 2);
+  assert.deepStrictEqual(rows.map((r) => r.item.participantLockHash), E.liabilities.map((l) => l.participant_lock_hash));
+  assert.deepStrictEqual(rows.map((r) => String(r.item.principal)), E.liabilities.map((l) => l.principal));
+  assert.deepStrictEqual(rows.map((r) => hex(r.proof)), E.payout_proofs);
+  assert.strictEqual(rows[1].lock.args, "0x" + "02".repeat(21));
+  assert.strictEqual(rows[1].lock.codeHash, "0x" + "c1".repeat(32));
+  assert.strictEqual(rows[1].lock.hashType, "type");
+  assert.strictEqual(hex(encodeSettlementWitness(rows)), E.payout_witness);
+});
+
+test("a malformed payout witness is refused the way the contract refuses it", () => {
+  const good = unhex(E.payout_witness);
+  assert.throws(() => decodeSettlementWitness(good.slice(0, 3)), /at least 4/);
+  assert.throws(() => decodeSettlementWitness(good.slice(0, good.length - 1)), /cut short/);
+  assert.throws(() => decodeSettlementWitness(Uint8Array.from([...good, 0])), /trailing/);
+  const many = Uint8Array.from(good); many[0] = 129;
+  assert.throws(() => decodeSettlementWitness(many), /at most 128/);
+});

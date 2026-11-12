@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 import unittest
 
+import js_settlement
 from node_harness import IsolatedNode
 from reorg_history import replace_entropy_branch
 from refund_history import refund_excluded_entry
@@ -124,6 +125,7 @@ class RoundCreationTests(unittest.TestCase):
         partial=False,
         partial_full=False,
         retire=False,
+        js=False,
     ):
         with IsolatedNode(daowow=True) as node:
             genesis = node.rpc("get_block_by_number", ["0x0"])
@@ -803,6 +805,58 @@ class RoundCreationTests(unittest.TestCase):
             missing_receipt["cell_deps"].pop()
             with self.assertRaisesRegex(RuntimeError, "ValidationFailure"):
                 node.rpc("send_transaction", [missing_receipt, "passthrough"])
+            if js:
+                # The same transaction from the JavaScript builder. Where the
+                # two must agree they are compared; then the JavaScript one is
+                # what the node is asked to take.
+                js_common = {
+                    "config": exported["config"],
+                    "scripts": js_settlement.script_points(node, genesis),
+                    "config_out_point": {"tx_hash": tx_hash, "index": "0x0"},
+                    "dao_type_dep": native_dao_dep,
+                    "dao_type": aggregate["outputs"][1]["type"],
+                }
+                js_lock_dep = js_settlement.fixture_lock_dep(node, genesis)
+                js_deposit = {
+                    key: aggregate["outputs"][1][key]
+                    for key in ("capacity", "lock", "type")
+                }
+                answer = js_settlement.built(
+                    self,
+                    "dao-phase-one",
+                    **js_common,
+                    sponsor=js_settlement.sponsor_of(
+                        sponsor_input["previous_output"],
+                        entropy_tx["outputs"][1],
+                        js_lock_dep,
+                    ),
+                    deposits=[
+                        {
+                            "out_point": {"tx_hash": aggregate_hash, "index": "0x1"},
+                            "receipt_out_point": receipt_dep["out_point"],
+                            **js_deposit,
+                        }
+                    ],
+                    deposit_headers=[aggregate_header],
+                )
+                js_tx = answer["tx"]
+                self.assertEqual(js_tx["outputs"][0], withdrawal["outputs"][0])
+                self.assertEqual(js_tx["outputs_data"][0], withdrawal["outputs_data"][0])
+                self.assertEqual(js_tx["header_deps"], withdrawal["header_deps"])
+                self.assertEqual(
+                    js_tx["inputs"][0]["previous_output"],
+                    withdrawal["inputs"][0]["previous_output"],
+                )
+                # The builder names the same epoch with no fraction.
+                self.assertEqual(
+                    int(js_tx["inputs"][0]["since"], 16),
+                    0x2000000000000000 | ((deposit_epoch & 0xFFFFFF) + 181),
+                )
+                self.assertEqual(
+                    answer["maturity_epochs"], [str((deposit_epoch & 0xFFFFFF) + 360)]
+                )
+                withdrawal = js_tx
+                print("DAOWOW JS builder: phase one built and matched", flush=True)
             withdrawal_hash, withdrawal_header = commit(node, withdrawal)
             print(
                 "DAOWOW withdrawal preparation committed",
@@ -907,7 +961,79 @@ class RoundCreationTests(unittest.TestCase):
             ] + ("00" if forged_funding["outputs_data"][0][-2:] != "00" else "01")
             with self.assertRaisesRegex(RuntimeError, "ValidationFailure"):
                 node.rpc("send_transaction", [forged_funding, "passthrough"])
+            if js:
+                js_evidence = {
+                    "creation_witness": exported["witness"],
+                    "aggregate_inputs": js_settlement.spent_cells(node, aggregate),
+                    "record": node.rpc(
+                        "get_live_cell",
+                        [{"tx_hash": entropy_hash, "index": "0x0"}, True],
+                    )["cell"]["data"]["content"],
+                    "receipt": aggregate["outputs_data"][2],
+                }
+                answer = js_settlement.built(
+                    self,
+                    "dao-phase-two",
+                    **js_common,
+                    **js_evidence,
+                    sponsor=js_settlement.sponsor_of(
+                        {"tx_hash": withdrawal_hash, "index": "0x1"},
+                        withdrawal["outputs"][1],
+                        js_lock_dep,
+                    ),
+                    withdrawing={
+                        "out_point": {"tx_hash": withdrawal_hash, "index": "0x0"},
+                        "receipt_out_point": receipt_dep["out_point"],
+                        "data": withdrawing_data,
+                        **js_deposit,
+                    },
+                    deposit_header=aggregate_header,
+                    withdraw_header=withdrawal_header,
+                    record_out_point={"tx_hash": entropy_hash, "index": "0x0"},
+                )
+                js_tx = answer["tx"]
+                # Everything the contracts read must be identical to the
+                # transaction assembled from the Rust exporter's bytes.
+                self.assertEqual(int(answer["realized"]), realized)
+                self.assertEqual(js_tx["inputs"][0], funding_tx["inputs"][0])
+                self.assertEqual(js_tx["header_deps"], funding_tx["header_deps"])
+                self.assertEqual(js_tx["outputs"][0], funding_tx["outputs"][0])
+                self.assertEqual(js_tx["outputs_data"][0], funding_tx["outputs_data"][0])
+                self.assertEqual(js_tx["witnesses"][0], funding_tx["witnesses"][0])
+                funding_tx = js_tx
+                print(
+                    "DAOWOW JS builder: phase two built and matched, realized",
+                    answer["realized"],
+                    "liabilities",
+                    len(answer["liabilities"]),
+                    "prizes",
+                    len(answer["prizes"]),
+                    flush=True,
+                )
             funding_hash, _ = commit(node, funding_tx)
+            if js:
+                # Prizes are unredeemed and far below the settlement cell's own
+                # floor, so the only participant is the LAST one and cannot be
+                # paid yet. The builder must say so rather than build it.
+                refused = js_settlement.build(
+                    "payout",
+                    **js_common,
+                    **js_evidence,
+                    sponsor=js_settlement.sponsor_of(
+                        {"tx_hash": funding_hash, "index": "0x1"},
+                        funding_tx["outputs"][1],
+                        js_lock_dep,
+                    ),
+                    funding={
+                        "out_point": {"tx_hash": funding_hash, "index": "0x0"},
+                        **funding_tx["outputs"][0],
+                        "data": funding_tx["outputs_data"][0],
+                    },
+                    participant_locks=[fixture["lock"]],
+                )
+                self.assertFalse(refused["ok"], "a payout before redemption was built")
+                self.assertIn("redeemed", refused["error"])
+                print("DAOWOW JS builder: payout before redemption refused", flush=True)
             live = node.rpc(
                 "get_live_cell", [{"tx_hash": funding_hash, "index": "0x0"}, True]
             )
@@ -1068,6 +1194,36 @@ class RoundCreationTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(RuntimeError, "ValidationFailure"):
                 node.rpc("send_transaction", [underpaid, "passthrough"])
+            if js:
+                funding_live = node.rpc(
+                    "get_live_cell", [{"tx_hash": redeem_hash, "index": "0x0"}, True]
+                )["cell"]
+                answer = js_settlement.built(
+                    self,
+                    "payout",
+                    **js_common,
+                    **js_evidence,
+                    sponsor=js_settlement.sponsor_of(
+                        payout["inputs"][1]["previous_output"],
+                        redeem["outputs"][3],
+                        js_lock_dep,
+                        change_lock=payout_change["lock"],
+                    ),
+                    funding={
+                        "out_point": {"tx_hash": redeem_hash, "index": "0x0"},
+                        **funding_live["output"],
+                        "data": funding_live["data"]["content"],
+                    },
+                    participant_locks=[fixture["lock"]],
+                )
+                js_tx = answer["tx"]
+                self.assertTrue(answer["final"], "the last payout must close the cell")
+                self.assertEqual(answer["paid"], 1)
+                self.assertEqual(js_tx["inputs"][0], payout["inputs"][0])
+                self.assertEqual(js_tx["outputs"][0], payout["outputs"][0])
+                self.assertEqual(js_tx["witnesses"][0], payout["witnesses"][0])
+                payout = js_tx
+                print("DAOWOW JS builder: final payout built and matched", flush=True)
             payout_hash, payout_header = commit(node, payout)
             live = node.rpc(
                 "get_live_cell", [{"tx_hash": payout_hash, "index": "0x0"}, True]

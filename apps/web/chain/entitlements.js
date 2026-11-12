@@ -246,8 +246,48 @@ function encodeEntitlementWitness(schedule, entries, capacities) {
   return out;
 }
 
+/** EntitlementWitness::decode, refusals included: what the contract will read. */
+function decodeEntitlementWitness(bytes) {
+  if (!(bytes instanceof Uint8Array) || bytes.length > MAX_ENTITLEMENT_BYTES) {
+    throw new Error("the entitlement witness is too large");
+  }
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let at = 0;
+  const need = (n) => {
+    if (at + n > bytes.length) throw new Error("the entitlement witness is cut short");
+  };
+  need(1);
+  if (bytes[0] !== ENTITLEMENT_WIRE_VERSION) {
+    throw new Error(`entitlement witness version ${bytes[0]} is not ${ENTITLEMENT_WIRE_VERSION}`);
+  }
+  at = 1;
+  need(4);
+  const scheduleLength = view.getUint32(at, true);
+  at += 4;
+  need(scheduleLength);
+  const schedule = scheduleLib().decodeSchedule(bytes.slice(at, at + scheduleLength));
+  at += scheduleLength;
+  need(4);
+  const count = view.getUint32(at, true);
+  at += 4;
+  if (count === 0 || count > MAX_BATCH_ENTRIES) {
+    throw new Error(`an entitlement witness lists 1 to ${MAX_BATCH_ENTRIES} entries; this lists ${count}`);
+  }
+  const size = entryCodec().ENTRY_DATA_SIZE;
+  const entries = [];
+  const capacities = [];
+  for (let i = 0; i < count; i += 1) {
+    need(size + 8);
+    entries.push(entryCodec().decodeEntryDataV1(bytes.slice(at, at + size)));
+    capacities.push(view.getBigUint64(at + size, true));
+    at += size + 8;
+  }
+  if (at !== bytes.length) throw new Error("the entitlement witness has trailing bytes");
+  return { schedule, entries, capacities };
+}
+
 const api = {
-  deriveEntitlements, encodeEntitlementWitness, locatePosition, allocatePrizes, checkBatch,
+  deriveEntitlements, encodeEntitlementWitness, decodeEntitlementWitness, locatePosition, allocatePrizes, checkBatch,
   MAX_BATCH_ENTRIES, MAX_ENTITLEMENT_BYTES,
 };
 if (typeof module !== "undefined" && module.exports) module.exports = api;
