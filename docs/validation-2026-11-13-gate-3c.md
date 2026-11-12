@@ -21,7 +21,7 @@ the Nervos DAO: DAO phase one, DAO phase two, and payout. It proves the
 | Phase one for the live round `0xaffb66f7…` | built from testnet, then run under `ckb-debugger` against the **deployed** binaries: `dao-lock` returns 0, the native DAO type returns 0. With the output data zeroed the lock returns -58, so the harness can fail |
 | The pre-signing checker | 61 rule guards and the money checks, each turned red by its own mutation |
 
-Web suite: 921 passing. Devnet: `tests/devnet/test_js_lifecycle.py`, one
+Web suite: 932 passing. Devnet: `tests/devnet/test_js_lifecycle.py`, one
 history (one deposit, one participant, two shards).
 
 ## Three things the contracts fix that the plan and the app did not say
