@@ -562,7 +562,44 @@ fn gen_vectors() {
             },
         )
         .unwrap();
+        // The payout witness for every liability of the batch, in order,
+        // with made-up lock scripts: the encoder does not check that a lock
+        // hashes to its participant, the contract does. Proofs come from a
+        // host tree over the liability leaves.
+        let mut liability_host = mmr::host::MmrHost::new();
+        for l in derived.liabilities() {
+            liability_host
+                .append(&liability_leaf(&l.participant_lock_hash, l.principal, l.prize))
+                .unwrap();
+        }
+        let payout_proofs: Vec<Vec<u8>> = (0..derived.liabilities().len() as u64)
+            .map(|i| liability_host.membership_proof(i).unwrap())
+            .collect();
+        let payout_args: Vec<Vec<u8>> = (0..derived.liabilities().len())
+            .map(|i| vec![i as u8 + 1; 20 + i])
+            .collect();
+        let payout_codes: Vec<[u8; 32]> = (0..derived.liabilities().len())
+            .map(|i| [0xc0 + i as u8; 32])
+            .collect();
+        let payout_rows: Vec<_> = derived
+            .liabilities()
+            .iter()
+            .enumerate()
+            .map(|(i, item)| {
+                (
+                    payout_args[i].as_slice(),
+                    payout_codes[i].as_slice(),
+                    1u8,
+                    item,
+                    payout_proofs[i].as_slice(),
+                )
+            })
+            .collect();
+        let payout_witness = daowow_core::witness::encode_settlement_witness(&payout_rows);
+        assert_eq!(liability_host.root().unwrap(), derived.funding().liabilities_root);
         let entitlements = json!({
+            "payout_witness": hex(&payout_witness),
+            "payout_proofs": payout_proofs.iter().map(|p| hex(p)).collect::<Vec<_>>(),
             "batch_id": "0",
             "receipt": hex(&receipt.encode()),
             "entries": entries.iter().map(|e| hex(&e.encode())).collect::<Vec<_>>(),
