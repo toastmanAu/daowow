@@ -223,7 +223,9 @@ const clockRpc = (over = {}) => {
         return "epoch" in over ? over.epoch : { number: params[0], start_number: "0x64", length: "0x708" };
       }
       if (method === "get_header_by_number") {
-        return "header" in over ? over.header : { number: params[0], timestamp: "0x1a2b3c4d5e" };
+        // First block of period 14168 unless the test says otherwise.
+        const epoch = "0x" + ((0x708n << 40n) | ((over.index ?? 0n) << 24n) | (over.headerEpoch ?? 14168n)).toString(16);
+        return "header" in over ? over.header : { number: params[0], timestamp: "0x1a2b3c4d5e", epoch };
       }
       throw new Error(`unexpected ${method}`);
     },
@@ -253,4 +255,10 @@ test("a block's time is read from that block and no other", async () => {
 test("a period answered for a different period is refused", async () => {
   const rpc = clockRpc({ epoch: { number: "0x1", start_number: "0x64", length: "0x708" } });
   await assert.rejects(readEpochStartTime(rpc, 14168n), /asked for period 14168 and was given 1/);
+});
+
+test("a period's first block must say it is that period's first block", async () => {
+  // The node names the block itself, so the block has to vouch for the period.
+  await assert.rejects(readEpochStartTime(clockRpc({ headerEpoch: 14167n }), 14168n), /is not the first block of period 14168/);
+  await assert.rejects(readEpochStartTime(clockRpc({ index: 5n }), 14168n), /is not the first block of period 14168/);
 });

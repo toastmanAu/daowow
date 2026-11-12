@@ -17,12 +17,20 @@ export function ticketFace(face) {
   if (face.draw) facts.push(fact(words.draw, when(face.draw)));
   else if (face.drawPending) facts.push(fact(words.draw, words.drawSoon));
 
-  const copyButton = h("button", { class: "link-button ticket-copy", type: "button" },
-    `${words.copyHash} ${words.hash.toLowerCase()}`);
-  copyButton.addEventListener("click", async () => {
-    let said = words.copied;
-    try { await navigator.clipboard.writeText(face.ticketId); } catch { said = words.copyFailed; }
-    copyButton.textContent = said;
+  // Each button names its own ticket, and what happened is announced beside
+  // it, so the button goes on saying what it does.
+  const said = h("span", { class: "ticket-copied", role: "status" });
+  let clearing = null;
+  const copyButton = h("button", {
+    class: "link-button ticket-copy", type: "button", "aria-label": copy().copyHashOf(face.number),
+  }, `${words.copyHash} ${words.hash.toLowerCase()}`);
+  copyButton.addEventListener("click", () => {
+    const say = (text) => {
+      said.textContent = text;
+      clearTimeout(clearing);
+      clearing = setTimeout(() => { said.textContent = ""; }, 4000);
+    };
+    navigator.clipboard.writeText(face.ticketId).then(() => say(words.copied), () => say(words.copyFailed));
   });
 
   return h("li", { class: "ticket-slot" },
@@ -30,9 +38,10 @@ export function ticketFace(face) {
       h("div", { class: "ticket-face" },
         h("div", { class: "ticket-top" },
           h("p", { class: "ticket-round" }, face.roundLabel),
-          h("p", { class: "ticket-number" }, copy().ticketNo(face.number))),
+          h("p", { class: face.longNumber ? "ticket-number ticket-number-long" : "ticket-number" },
+            copy().ticketNo(face.number))),
         h("div", { class: "ticket-bottom" },
           face.result ? h("p", { class: "ticket-result" }, copy().faceResult(face.result)) : null,
           h("dl", { class: "ticket-facts" }, facts)))),
-    copyButton);
+    h("div", { class: "ticket-tools" }, copyButton, said));
 }

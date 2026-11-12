@@ -69,3 +69,7 @@ test("a moment is said as a day and a time of day, in the zone asked for", () =>
 test("the time until a period that has started is zero, never a past date", () => {
   assert.strictEqual(time.msUntilEpoch(1000n, { number: 1005n, index: 0n, length: 1800n }), 0n);
 });
+
+test("a moment that is not a real date is said as nothing, and never throws", () => {
+  assert.strictEqual(time.formatMoment(0xffffffffffffffffn, "en-AU", "UTC"), "");
+});

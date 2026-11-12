@@ -31,8 +31,16 @@ const message = (e) => (e && e.message ? e.message : String(e));
 const MAX_INDEXER_LAG = 8n;
 const DRAW_CONFIRMATIONS = 3n;
 const READ_TIMEOUT_MS = 20000;
+const DATE_TIMEOUT_MS = 8000;
+// 1 Jan 2019 and 1 Jan 2100: before the first CKB chain, and far past this one.
+const EARLIEST_MS = 1546300800000n;
+const LATEST_MS = 4102444800000n;
+// How far past the newest block's clock a block's own time may honestly sit.
+const CLOCK_SLACK_MS = 3600000n;
 
-function createStore({ manifest, rpc, readers, timeoutMs = READ_TIMEOUT_MS }) {
+function createStore({
+  manifest, rpc, readers, timeoutMs = READ_TIMEOUT_MS, dateTimeoutMs = DATE_TIMEOUT_MS,
+}) {
   const state = {
     status: "loading",
     error: null,
@@ -136,12 +144,32 @@ function createStore({ manifest, rpc, readers, timeoutMs = READ_TIMEOUT_MS }) {
   }
 
   // When a block that exists was made can never change, so it is read once.
-  // Only a successful read is kept: a failure is tried again next time.
+  // Only a believable, successful read is kept: anything else is tried again.
+  // The node is not trusted with the clock. A time from before any CKB chain
+  // existed, or from after the newest block, is not a time this chain had.
   const pastTimes = new Map();
-  async function readOnce(key, read) {
+  const believable = (ms) => ms >= EARLIEST_MS && ms < LATEST_MS;
+  function tipTime(tip) {
+    try {
+      const ms = BigInt(tip.header.timestamp);
+      return believable(ms) ? ms : null;
+    } catch {
+      return null;
+    }
+  }
+  const inTime = (promise) => {
+    let timer = null;
+    const slow = new Promise((resolve, reject) => {
+      timer = setTimeout(() => reject(new Error("the date took too long to read")), dateTimeoutMs);
+    });
+    return Promise.race([promise, slow]).finally(() => clearTimeout(timer));
+  };
+  async function readOnce(key, tip, read) {
     if (pastTimes.has(key)) return { ms: pastTimes.get(key), exact: true };
     try {
-      const ms = BigInt(await read());
+      const ms = BigInt(await inTime(Promise.resolve().then(read)));
+      const now = tipTime(tip);
+      if (!believable(ms) || (now !== null && ms > now + CLOCK_SLACK_MS)) return null;
       pastTimes.set(key, ms);
       return { ms, exact: true };
     } catch {
@@ -149,7 +177,6 @@ function createStore({ manifest, rpc, readers, timeoutMs = READ_TIMEOUT_MS }) {
       return null;
     }
   }
-  const tipTime = (tip) => (tip.header && tip.header.timestamp ? BigInt(tip.header.timestamp) : null);
   const estimate = (tip, ms) => (tipTime(tip) === null ? null : { ms: tipTime(tip) + ms, exact: false });
 
   // The dates printed on a ticket. One that has passed is read from its
@@ -158,22 +185,28 @@ function createStore({ manifest, rpc, readers, timeoutMs = READ_TIMEOUT_MS }) {
   async function readTimes(snapshot, tip) {
     const { config } = snapshot;
     const atEpoch = (epoch) => (BigInt(epoch) <= tip.epoch.number
-      ? readOnce(`epoch:${epoch}`, () => readers.readEpochStartTime(rpc, BigInt(epoch)))
+      ? readOnce(`epoch:${epoch}`, tip, () => readers.readEpochStartTime(rpc, BigInt(epoch)))
       : estimate(tip, time().msUntilEpoch(epoch, tip.epoch)));
     const sealedAt = snapshot.record
       ? snapshot.record.record.inclusionHeight
       : snapshot.seal ? snapshot.seal.inclusionHeight : null;
     let draw = null;
+    let drawPassed = false;
     if (sealedAt !== null && sealedAt !== undefined) {
       const drawHeight = entropy().lastEntropyHeight(sealedAt);
-      draw = tip.height >= drawHeight
-        ? readOnce(`block:${drawHeight}`, () => readers.readBlockTime(rpc, drawHeight))
-        : estimate(tip, time().msUntilBlock(drawHeight, tip.height));
+      drawPassed = tip.height >= drawHeight;
+      // A block at the very tip can still be replaced, and its time with it:
+      // until a few blocks sit on top, the draw's time is "about now".
+      if (tip.height >= drawHeight + DRAW_CONFIRMATIONS) {
+        draw = readOnce(`block:${drawHeight}`, tip, () => readers.readBlockTime(rpc, drawHeight));
+      } else {
+        draw = estimate(tip, time().msUntilBlock(drawHeight, tip.height));
+      }
     }
     const [opens, closes, drawn] = await Promise.all([
       atEpoch(config.entryStart), atEpoch(config.entryEnd), draw,
     ]);
-    return { opens, closes, draw: drawn };
+    return { opens, closes, draw: drawn, drawPassed };
   }
 
   async function loadMine(rows, tip, session) {
@@ -189,11 +222,19 @@ function createStore({ manifest, rpc, readers, timeoutMs = READ_TIMEOUT_MS }) {
     });
     return Promise.all(cards.map(async (card) => {
       const row = rows.find((r) => r.snapshot.config.commitment === card.commitment);
-      return { ...card, times: await readTimes(row.snapshot, tip) };
+      // The dates are a courtesy. Whatever goes wrong reading them costs the
+      // dates and never the tickets. Every failure known today is already
+      // handled inside readTimes, so no test can reach this catch: it is
+      // there for the failure nobody has thought of.
+      let times = null;
+      try { times = await readTimes(row.snapshot, tip); } catch { times = null; }
+      return { ...card, times };
     }));
   }
 
+  let mineRun = 0;
   async function refreshMine() {
+    const run = ++mineRun;
     const session = state.session;
     if (!session || !state.tip) { state.mine = null; state.mineError = null; return; }
     let mine = null;
@@ -206,6 +247,8 @@ function createStore({ manifest, rpc, readers, timeoutMs = READ_TIMEOUT_MS }) {
     // The wallet changed while this was loading: these are someone else's
     // tickets now, and must not be shown under the new wallet.
     if (state.session !== session) return;
+    // A newer read has started since: this one describes an older chain.
+    if (run !== mineRun) return;
     state.mine = mine;
     state.mineError = error;
   }

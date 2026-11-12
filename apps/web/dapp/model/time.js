@@ -55,9 +55,12 @@ function describeDate(ms, nowMs, locale = "en-AU", timeZone = undefined) {
 
 /** A day and a time of day, in the reader's own locale and zone by default. */
 function formatMoment(ms, locale = undefined, timeZone = undefined) {
+  const when = new Date(Number(BigInt(ms)));
+  // Not every number is a date, and formatting one that is not throws.
+  if (Number.isNaN(when.getTime())) return "";
   return new Intl.DateTimeFormat(locale, {
     day: "numeric", month: "short", hour: "numeric", minute: "2-digit", timeZone,
-  }).format(new Date(Number(BigInt(ms))));
+  }).format(when);
 }
 
 const api = {

@@ -53,8 +53,10 @@ function buildTicketFaces({ card, label }) {
         closes: times.closes,
         // A round that did not run had no draw to date.
         draw: result && result.kind === RESULT.DID_NOT_RUN ? null : times.draw,
-        // No date and no result: the draw is still to come.
-        drawPending: !times.draw && result === null,
+        // Said only when the draw's block is known to be still to come.
+        drawPending: Boolean(card.times) && !times.draw && !times.drawPassed && result === null,
+        // More digits than the large print has room for.
+        longNumber: String(position + 1n).length > 3,
         result,
         art: result && result.kind === RESULT.WON ? ART.WINNER : ART.BLANK,
       };

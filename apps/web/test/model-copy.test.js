@@ -155,3 +155,8 @@ test("the ticket face's words are in the jargon check", () => {
     assert.ok(samples.includes(s), s);
   }
 });
+
+test("each copy button names the ticket it copies", () => {
+  assert.strictEqual(copy.copyHashOf("5"), "Copy hash of ticket 5");
+  assert.ok(copy.ALL_SAMPLES().includes(copy.copyHashOf("37")));
+});

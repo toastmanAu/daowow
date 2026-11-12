@@ -397,11 +397,15 @@ test("the store never reads the page's address", () => {
 // ---- the dates printed on a ticket ----------------------------------------
 const TIP_MS = 1800000000000n;
 const SESSION = { address: "ckt1x", lockScript: { codeHash: "0x1", hashType: "type", args: "0x" } };
+// Believable clock values: 2023, well before the tip's 2027.
+const CLOCK_BASE = 1700000000000n;
+const epochAt = (epoch) => CLOCK_BASE + 1000n * BigInt(epoch);
+const blockAt = (height) => CLOCK_BASE + 7n * BigInt(height);
 const timedTip = () => ({ ...tipHeader(2000000n), timestamp: "0x" + TIP_MS.toString(16) });
 const withTimes = (over = {}) => make({
   readTip: async () => timedTip(),
-  readEpochStartTime: async (rpc, epoch) => 1000n * BigInt(epoch),
-  readBlockTime: async (rpc, height) => 7n * BigInt(height),
+  readEpochStartTime: async (rpc, epoch) => epochAt(epoch),
+  readBlockTime: async (rpc, height) => blockAt(height),
   ...over,
 });
 const mineAfter = async (store) => { await store.refresh(); await store.setSession(SESSION); return store.state.mine; };
@@ -409,10 +413,10 @@ const mineAfter = async (store) => { await store.refresh(); await store.setSessi
 test("dates already in the past are read from the chain and marked exact", async () => {
   const { store } = withTimes();
   const [card] = await mineAfter(store);
-  assert.deepStrictEqual(card.times.opens, { ms: 1000n * A.entryStart, exact: true });
-  assert.deepStrictEqual(card.times.closes, { ms: 1000n * A.entryEnd, exact: true });
+  assert.deepStrictEqual(card.times.opens, { ms: epochAt(A.entryStart), exact: true });
+  assert.deepStrictEqual(card.times.closes, { ms: epochAt(A.entryEnd), exact: true });
   // The draw is the last block its result depends on: 192 after the seal's.
-  assert.deepStrictEqual(card.times.draw, { ms: 7n * (1234567n + 192n), exact: true });
+  assert.deepStrictEqual(card.times.draw, { ms: blockAt(1234567n + 192n), exact: true });
 });
 
 test("dates still to come are estimated from the newest block's own clock", async () => {
@@ -442,7 +446,7 @@ test("a past date that cannot be read is left out, never guessed", async () => {
     readBlockTime: async () => { throw new Error("node busy"); },
   });
   const [card] = await mineAfter(store);
-  assert.deepStrictEqual(card.times, { opens: null, closes: null, draw: null });
+  assert.deepStrictEqual([card.times.opens, card.times.closes, card.times.draw], [null, null, null]);
   assert.strictEqual(store.state.mineError, null, "the tickets still show");
 });
 
@@ -452,29 +456,29 @@ test("with no clock on the newest block, future dates are left out", async () =>
     findClaims: async () => [{ commitment: B.commitment, shardId: 0, position: 0n, capacity: 1n }],
   });
   const [card] = await mineAfter(store);
-  assert.deepStrictEqual(card.times, { opens: null, closes: null, draw: null });
+  assert.deepStrictEqual([card.times.opens, card.times.closes, card.times.draw], [null, null, null]);
 });
 
 test("a past date is read once and kept: it cannot change", async () => {
   let reads = 0;
   const { store } = withTimes({
-    readEpochStartTime: async (rpc, epoch) => { reads += 1; return 1000n * BigInt(epoch); },
+    readEpochStartTime: async (rpc, epoch) => { reads += 1; return epochAt(epoch); },
   });
   await mineAfter(store);
   await store.refresh();
   assert.strictEqual(reads, 2);
-  assert.deepStrictEqual(store.state.mine[0].times.opens, { ms: 1000n * A.entryStart, exact: true });
+  assert.deepStrictEqual(store.state.mine[0].times.opens, { ms: epochAt(A.entryStart), exact: true });
 });
 
 test("a failed read of a past date is tried again on the next refresh", async () => {
   let fail = true;
   const { store } = withTimes({
-    readEpochStartTime: async (rpc, epoch) => { if (fail) throw new Error("busy"); return 1000n * BigInt(epoch); },
+    readEpochStartTime: async (rpc, epoch) => { if (fail) throw new Error("busy"); return epochAt(epoch); },
   });
   await mineAfter(store);
   fail = false;
   await store.refresh();
-  assert.deepStrictEqual(store.state.mine[0].times.opens, { ms: 1000n * A.entryStart, exact: true });
+  assert.deepStrictEqual(store.state.mine[0].times.opens, { ms: epochAt(A.entryStart), exact: true });
 });
 
 test("a period that has just begun is past: its start is read, not estimated", async () => {
@@ -482,5 +486,87 @@ test("a period that has just begun is past: its start is read, not estimated", a
     readTip: async () => ({ ...tipHeader(2000000n, A.entryEnd), timestamp: "0x" + TIP_MS.toString(16) }),
   });
   const [card] = await mineAfter(store);
-  assert.deepStrictEqual(card.times.closes, { ms: 1000n * A.entryEnd, exact: true });
+  assert.deepStrictEqual(card.times.closes, { ms: epochAt(A.entryEnd), exact: true });
+});
+
+// ---- a node that lies or stalls about dates --------------------------------
+test("a time outside any real chain's life is refused and not kept", async () => {
+  for (const bad of [0n, 0xffffffffffffffffn, TIP_MS + 86400000n]) {
+    let lie = true;
+    const { store } = withTimes({
+      readEpochStartTime: async (rpc, epoch) => (lie ? bad : epochAt(epoch)),
+      readBlockTime: async () => bad,
+    });
+    const [card] = await mineAfter(store);
+    assert.deepStrictEqual([card.times.opens, card.times.closes, card.times.draw], [null, null, null], String(bad));
+    lie = false;
+    await store.refresh();
+    assert.strictEqual(store.state.mine[0].times.opens.exact, true, "the lie was not cached");
+  }
+});
+
+test("a newest block with a nonsense clock gives no estimates and breaks nothing", async () => {
+  for (const timestamp of ["0xffffffffffffffff", "not-a-number", "0x0"]) {
+    const { store } = withTimes({
+      readTip: async () => ({ ...tipHeader(2000000n), timestamp }),
+      findClaims: async () => [{ commitment: B.commitment, shardId: 0, position: 0n, capacity: 1n }],
+    });
+    const [card] = await mineAfter(store);
+    assert.strictEqual(store.state.mineError, null, timestamp);
+    assert.deepStrictEqual([card.times.opens, card.times.closes], [null, null], timestamp);
+  }
+});
+
+test("a date read that never answers costs the date, not the tickets", async () => {
+  const { store } = make({
+    readTip: async () => timedTip(),
+    readEpochStartTime: () => new Promise(() => {}),
+    readBlockTime: () => new Promise(() => {}),
+  }, { dateTimeoutMs: 20 });
+  const [card] = await mineAfter(store);
+  assert.deepStrictEqual([card.times.opens, card.times.closes, card.times.draw], [null, null, null]);
+  assert.strictEqual(store.state.mineError, null);
+});
+
+test("the draw's time is exact only once its block can no longer be replaced", async () => {
+  const at = (behind) => withTimes({
+    readDeployment: async () => [snap(B, { seal: { seal: SEAL, inclusionHeight: 2000000n - 192n - behind } })],
+    findClaims: async () => [{ commitment: B.commitment, shardId: 0, position: 0n, capacity: 1n }],
+  });
+  const [fresh] = await mineAfter(at(2n).store);
+  assert.strictEqual(fresh.times.draw.exact, false);
+  assert.strictEqual(fresh.times.drawPassed, true);
+  const [settled] = await mineAfter(at(3n).store);
+  assert.deepStrictEqual(settled.times.draw, { ms: blockAt(2000000n - 3n), exact: true });
+  const [waiting] = await mineAfter(at(-50n).store);
+  assert.strictEqual(waiting.times.drawPassed, false);
+});
+
+test("an unsealed round's draw has not passed", async () => {
+  const { store } = withTimes({
+    findClaims: async () => [{ commitment: B.commitment, shardId: 0, position: 0n, capacity: 1n }],
+  });
+  const [card] = await mineAfter(store);
+  assert.strictEqual(card.times.drawPassed, false);
+});
+
+test("an older wallet read that finishes late does not replace a newer one", async () => {
+  let call = 0;
+  let releaseOld;
+  const claimAt = (position) => [{ commitment: A.commitment, shardId: 0, position, capacity: 1n }];
+  const { store } = withTimes({
+    findClaims: async () => {
+      call += 1;
+      if (call === 1) { await new Promise((r) => { releaseOld = r; }); return claimAt(0n); }
+      return claimAt(5n);
+    },
+  });
+  await store.refresh();
+  const old = store.setSession(SESSION);
+  await new Promise((r) => setTimeout(r, 5));
+  await store.refresh();
+  assert.deepStrictEqual(store.state.mine[0].positions, [5n]);
+  releaseOld();
+  await old;
+  assert.deepStrictEqual(store.state.mine[0].positions, [5n]);
 });

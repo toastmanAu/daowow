@@ -312,24 +312,27 @@ main > section > h1:focus-visible { outline: none; }
    own width, so the printing keeps its place at any size. */
 .ticket-row { list-style: none; margin: 0; padding: 0 0 8px; display: flex; gap: 16px;
   overflow-x: auto; scroll-snap-type: x proximity; }
-.ticket-slot { flex: 0 0 min(72vw, 300px); scroll-snap-align: start; display: grid; gap: 4px;
+.ticket-slot { flex: 0 0 min(80vw, 320px); scroll-snap-align: start; display: grid; gap: 4px;
   justify-items: center; }
 .ticket { width: 100%; aspect-ratio: 832 / 1280; position: relative; container-type: inline-size;
-  background: center / 100% 100% no-repeat; color: hsl(8 36% 21%);
+  background: center / 100% 100% no-repeat; color: hsl(8 40% 16%);
   font-family: Rockwell, 'Rockwell Nova', 'Roboto Slab', 'DejaVu Serif', Georgia, serif; }
 .ticket-blank { background-image: url(assets/ticket-blank.webp); }
 .ticket-winner { background-image: url(assets/ticket-winner.webp); }
-.ticket-face { position: absolute; inset: 24.5% 18% 13% 18%; display: flex; flex-direction: column;
+.ticket-face { position: absolute; inset: 24.5% 17% 13% 17%; display: flex; flex-direction: column;
   align-items: center; text-align: center; }
 .ticket-face p, .ticket-facts, .ticket-facts dd { margin: 0; }
-.ticket-round { font-size: 5cqw; line-height: 1.2; }
-.ticket-number { font-size: 15cqw; font-weight: 700; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.ticket-round { font-size: max(12px, 5cqw); line-height: 1.2; }
+.ticket-number { font-size: 15cqw; font-weight: 700; line-height: 1.1; font-variant-numeric: tabular-nums;
+  white-space: nowrap; }
+.ticket-number-long { font-size: 10cqw; }
 .ticket-bottom { margin-top: auto; width: 100%; display: grid; gap: 2cqw; }
-.ticket-result { font-size: 6.5cqw; font-weight: 700; line-height: 1.2; }
-.ticket-facts { display: grid; gap: 1.6cqw; font-size: 4cqw; line-height: 1.25; }
-.ticket-facts dt { font-size: 3.4cqw; letter-spacing: .04em; opacity: .8; }
+.ticket-result { font-size: max(14px, 6.5cqw); font-weight: 700; line-height: 1.2; }
+/* Small print has a floor: on a narrow phone it wraps before it shrinks. */
+.ticket-facts { display: grid; gap: 1.6cqw; font-size: max(12px, 4cqw); line-height: 1.25; }
+.ticket-facts dt { font-size: max(11px, 3.4cqw); letter-spacing: .04em; }
 .ticket-facts dd { font-weight: 600; }
-.ticket-facts code { font-size: 4cqw; }
+.ticket-facts code { font-size: inherit; }
 /* The plain ticket has the whole middle to itself. */
 .ticket-blank .ticket-face { justify-content: space-between; }
 .ticket-blank .ticket-top { margin-top: 6cqw; }
@@ -337,10 +340,15 @@ main > section > h1:focus-visible { outline: none; }
 .ticket-blank .ticket-facts { gap: 3cqw; }
 /* The winner's stamp crosses the middle: the number sits above it and the
    rest below, one line to a fact. */
+.ticket-winner .ticket-face { inset: 24.5% 19% 14.5% 19%; }
 .ticket-winner .ticket-number { font-size: 9cqw; }
-.ticket-winner .ticket-round { font-size: 4cqw; }
-.ticket-winner .ticket-facts { gap: .6cqw; font-size: 3.4cqw; }
-.ticket-winner .ticket-facts > div { display: flex; justify-content: space-between; gap: 2cqw; }
-.ticket-winner .ticket-facts dt, .ticket-winner .ticket-facts code { font-size: 3.4cqw; }
-.ticket-winner .ticket-result { font-size: 5cqw; }
-.ticket-copy { font-size: 14px; min-height: 44px; color: rgba(255, 255, 255, .8); }
+.ticket-winner .ticket-number-long { font-size: 7.5cqw; }
+.ticket-winner .ticket-round { font-size: max(11px, 4cqw); }
+.ticket-winner .ticket-facts { gap: .4cqw; font-size: max(11px, 3.4cqw); line-height: 1.15; }
+.ticket-winner .ticket-facts > div { display: flex; justify-content: space-between; gap: 2cqw; text-align: left; }
+.ticket-winner .ticket-facts dt { font-size: inherit; }
+.ticket-winner .ticket-facts dd { text-align: right; }
+.ticket-winner .ticket-result { font-size: max(13px, 5cqw); }
+.ticket-tools { display: flex; align-items: center; gap: 8px; min-height: 44px; }
+.ticket-copy { font-size: 14px; min-height: 44px; color: var(--paper); }
+.ticket-copied { font-size: 14px; color: var(--good); }

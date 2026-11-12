@@ -91,17 +91,27 @@ test("a round in several parts shows no faces: its numbers are not draw numbers"
   assert.deepStrictEqual(faces({ multiShard: true }), []);
 });
 
-test("'soon' is said about the draw only while there is no result yet", () => {
+test("'soon' is said about the draw only when its block is known to be still to come", () => {
+  const before = { opens: null, closes: null, draw: null, drawPassed: false };
   for (const outcome of [O.IN_ROUND, O.WAITING]) {
-    for (const f of faces({ outcome })) assert.strictEqual(f.drawPending, true, outcome);
+    for (const f of faces({ outcome, times: before })) assert.strictEqual(f.drawPending, true, outcome);
   }
-  // A drawn round whose draw time could not be read has had its draw: saying
-  // "soon" would be false. A round that did not run has none to wait for.
+  // The draw's block has come, though no result is in hand: not "soon".
+  for (const f of faces({ outcome: O.WAITING, times: { ...before, drawPassed: true } })) {
+    assert.strictEqual(f.drawPending, false);
+  }
+  // Nothing known about the round's dates: nothing is claimed.
+  for (const f of faces({ outcome: O.WAITING, times: null })) assert.strictEqual(f.drawPending, false);
   for (const outcome of [O.WON, O.NOT_THIS_TIME, O.DID_NOT_RUN, O.REFUNDABLE, O.REFUND_LATER]) {
-    for (const f of faces({ outcome })) assert.strictEqual(f.drawPending, false, outcome);
+    for (const f of faces({ outcome, times: before })) assert.strictEqual(f.drawPending, false, outcome);
   }
-  const dated = { opens: null, closes: null, draw: { ms: 5n, exact: false } };
+  const dated = { ...before, draw: { ms: 5n, exact: false } };
   for (const f of faces({ outcome: O.WAITING, times: dated })) assert.strictEqual(f.drawPending, false);
+});
+
+test("a number too long for the big print is flagged for the small one", () => {
+  const long = buildTicketFaces({ card: card({ tickets: [{ shardId: 0, position: 999n }, { shardId: 0, position: 998n }] }), label: "R" });
+  assert.deepStrictEqual(long.map((f) => [f.number, f.longNumber]), [["999", false], ["1000", true]]);
 });
 
 test("a round that did not run shows no draw date, even if one exists on the chain", () => {

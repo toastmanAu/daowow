@@ -118,6 +118,7 @@ const ticketNo = (number) => `No. ${number}`;
 const shortHash = (hash) => `${hash.slice(0, 6)}…${hash.slice(-4)}`;
 // A date worked out from the chain's pace is a guess and says so; one read
 // from a block that exists is not.
+const copyHashOf = (number) => `Copy hash of ticket ${number}`;
 const momentLine = (text, exact) => (exact ? text : `about ${text}`);
 function faceResult(result) {
   if (!result) return "";
@@ -321,7 +322,7 @@ function ALL_SAMPLES() {
     heldFor("about 30 days"));
   out.push(refundButton(1n), refundReturns(1n), refundDone(1n));
   out.push(resultLine(1, "4", true), resultLine(2, "8", false), drawCountdown(1192n, 1200000n));
-  out.push(ticketNo("37"), shortHash("0x" + "ab".repeat(32)), momentLine("16 Nov, 11:40 am", false));
+  out.push(copyHashOf("37"), ticketNo("37"), shortHash("0x" + "ab".repeat(32)), momentLine("16 Nov, 11:40 am", false));
   for (const kind of ["won", "not-this-time", "did-not-run"]) out.push(faceResult({ kind, place: 1 }));
   out.push(honestyLine(1192n), winLine(1, 50n, 100n), heldLine(1), heldLine(5), ckb(1n), ordinal(2));
   for (const v of Object.values(errors)) out.push(typeof v === "function" ? v("popup closed") : v);
@@ -334,7 +335,7 @@ function ALL_SAMPLES() {
 
 const api = {
   ckb, ordinal, plural, shortAddress, stateBadge, ticketsLine, milestone, outcomeBadge, actionLabel,
-  estimateLine, honestyLine, winLine, heldLine, ticketNo, shortHash, momentLine, faceResult, costTicket, costDeposit, costStorage, costExample,
+  estimateLine, honestyLine, winLine, heldLine, ticketNo, shortHash, copyHashOf, momentLine, faceResult, costTicket, costDeposit, costStorage, costExample,
   placeLine, poolLine, resultLine, drawCountdown, refundButton, refundReturns, refundDone, enterFor, entryConfirmed, ticketsLeft, walletLimit, getWallet, walletSigners, heldFor, errors, text, ALL_SAMPLES,
 };
 if (typeof module !== "undefined" && module.exports) module.exports = api;
