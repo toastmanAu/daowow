@@ -16,6 +16,16 @@ const entropy = () => lib("../../chain/entropy-derive.js", "DaowowEntropyDerive"
 // One native savings cycle is 180 four-hour periods.
 const PERIODS_PER_TERM = 180n;
 
+/**
+ * How long a ticket's deposit is held from the moment it goes into savings.
+ * One cycle MORE than the round commits: a withdrawal cannot be started until
+ * the committed term is over, and it then pays out at the end of the next
+ * cycle. (Interest stops when the withdrawal is started.)
+ */
+function heldMs(config) {
+  return (BigInt(config.daoTermPeriods) + 1n) * PERIODS_PER_TERM * time().EPOCH_MS;
+}
+
 function buildTimeline({ snapshot, view, tip }) {
   const S = roundState().PLAYER_STATE;
   const t = time();
@@ -34,7 +44,7 @@ function buildTimeline({ snapshot, view, tip }) {
   if (view.state === S.WAITING && seal) {
     drawWhen = inAbout(t.msUntilBlock(entropy().lastEntropyHeight(seal.inclusionHeight), tip.height));
   }
-  const termMs = BigInt(config.daoTermPeriods) * PERIODS_PER_TERM * t.EPOCH_MS;
+  const termMs = heldMs(config);
 
   const order = [
     ["opens", "Entries open", view.state === S.UPCOMING
@@ -54,7 +64,7 @@ function buildTimeline({ snapshot, view, tip }) {
   return { steps, ended };
 }
 
-const api = { buildTimeline, PERIODS_PER_TERM };
+const api = { buildTimeline, heldMs, PERIODS_PER_TERM };
 if (typeof module !== "undefined" && module.exports) module.exports = api;
 if (typeof window !== "undefined") window.DaowowTimeline = api;
 })();

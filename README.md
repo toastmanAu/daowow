@@ -17,8 +17,9 @@ deposit back. Prizes are paid from interest, never from other players' money.
    claim NFT per ticket into your own wallet.
 2. **The pool earns interest.** When entries close, every ticket's deposit goes
    into the [Nervos DAO](https://github.com/nervosnetwork/rfcs/blob/master/rfcs/0023-dao-deposit-withdraw/0023-dao-deposit-withdraw.md),
-   CKB's built-in savings mechanism, for one or two 180-epoch cycles (about 30
-   days each).
+   CKB's built-in savings mechanism. A round commits to one or two 180-epoch
+   cycles (about 30 days each) and its deposits are held for one cycle more,
+   so a one-cycle round pays out about 60 days after its deposit.
 3. **Winners are drawn.** Winning ticket positions come from block hashes that
    did not exist when entries closed.
 4. **Everyone is paid back.** Each depositor receives their full deposit.
@@ -79,7 +80,8 @@ Testnet only. **Not audited. Do not use with real funds.**
 | Refund of entries a round did not accept | done | proven | live |
 | Freeze, aggregate into the Nervos DAO | done | proven | live |
 | Seal, entropy, draw | done | proven | live |
-| DAO withdrawal, prize and deposit payout | done | proven | tooling in progress |
+| DAO withdrawal and deposit payout | done | proven | tooling built; first withdrawal opens December 2026 |
+| Prize redemption by ticket holders | done | proven | tooling not started |
 
 The app is browser-only. It offers every wallet the [CCC](https://github.com/ckb-devrel/ccc)
 library supports, including JoyID, MetaMask and other EVM wallets, OKX,

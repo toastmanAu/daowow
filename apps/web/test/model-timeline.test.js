@@ -64,11 +64,18 @@ test("a round that didn't go ahead is marked ended, so no payout is implied", ()
   assert.strictEqual(buildTimeline(fixture(S.DRAWN)).ended, false);
 });
 
-test("the term length comes from the round, 180 four-hour periods each", () => {
+test("the time held is one savings cycle MORE than the round commits", () => {
+  // The contract refuses to start a withdrawal until the committed term is
+  // over, and the savings mechanism then pays out at the end of the NEXT
+  // 180-period cycle. A one-term round is held about 60 days, not 30. See
+  // docs/validation-2026-11-13-gate-3c.md.
   const term = (periods) =>
     buildTimeline(fixture(S.OPEN, { config: { daoTermPeriods: periods } })).steps[3].when;
-  assert.strictEqual(term(1), "about 30 days");
-  assert.strictEqual(term(2), "about 60 days");
+  assert.strictEqual(term(1), "about 60 days");
+  assert.strictEqual(term(2), "about 90 days");
+  const { heldMs, PERIODS_PER_TERM } = require("../dapp/model/timeline.js");
+  assert.strictEqual(PERIODS_PER_TERM, 180n);
+  assert.strictEqual(heldMs({ daoTermPeriods: 1 }), 360n * 14400000n);
 });
 
 test("timeline wording carries no banned word, and every time says 'about'", () => {

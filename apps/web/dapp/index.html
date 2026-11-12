@@ -156,7 +156,10 @@
       Every ticket's principal is deposited into the
       <strong>Nervos DAO</strong>, the protocol-level savings mechanism built
       into CKB. A deposit earns yield over 180-epoch cycles, roughly a month
-      each. A round runs for one or two of those cycles.
+      each. A round commits to one or two of those cycles, and its deposits
+      are held for one more: a withdrawal can only be started once the
+      committed cycles are over, and it pays out at the end of the next. A
+      one-cycle round is held for about two months.
     </p>
     <p>
       When the round settles, the principal returns to whoever deposited it,

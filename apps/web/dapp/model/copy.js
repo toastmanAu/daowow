@@ -319,7 +319,7 @@ function ALL_SAMPLES() {
     placeLine(3, 20n, 99n, false, false), poolLine(100000000n));
   out.push(enterFor("10,459"), entryConfirmed(1n), entryConfirmed(5n), ticketsLeft(1n), ticketsLeft(3n),
     walletLimit(5n, 0n), walletLimit(5n, 3n), getWallet("MetaMask"), walletSigners("JoyID Passkey"),
-    heldFor("about 30 days"));
+    heldFor("about 60 days"));
   out.push(refundButton(1n), refundReturns(1n), refundDone(1n));
   out.push(resultLine(1, "4", true), resultLine(2, "8", false), drawCountdown(1192n, 1200000n));
   out.push(copyHashOf("37"), ticketNo("37"), shortHash("0x" + "ab".repeat(32)), momentLine("16 Nov, 11:40 am", false));

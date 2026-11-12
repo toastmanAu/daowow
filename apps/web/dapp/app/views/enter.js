@@ -24,9 +24,7 @@ function summaryList(rows) {
 
 function termText(row) {
   const t = window.DaowowTime;
-  const ms = BigInt(row.snapshot.config.daoTermPeriods)
-    * window.DaowowTimeline.PERIODS_PER_TERM * t.EPOCH_MS;
-  return copy().heldFor(t.describeDuration(ms));
+  return copy().heldFor(t.describeDuration(window.DaowowTimeline.heldMs(row.snapshot.config)));
 }
 
 export function mount(node, ctx, firstRow) {
