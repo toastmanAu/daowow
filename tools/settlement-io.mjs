@@ -3,7 +3,15 @@
 // applies. Used by dry-run-settlement.mjs (before signing) and
 // check-signed-lifecycle.mjs (after), so both judge a transaction the same way.
 
+import { createRequire } from "node:module";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { checkDaoPhaseOne, checkDaoPhaseTwo, checkPayout } from "./settlement-rules.mjs";
+
+const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
+const require_ = createRequire(path.join(ROOT, "tools/"));
+const { decodeSettlementWitness } = require_("../apps/web/chain/payout-tx.js");
+const unhexBytes = (s) => Uint8Array.from(String(s ?? "").replace(/^0x/, "").match(/../g) ?? [], (b) => parseInt(b, 16));
 
 const HASH_TYPE_NAME = { 0: "data", 1: "type", 2: "data1", 4: "data2" };
 const strip = (s) => String(s ?? "").replace(/^0x/, "").toLowerCase();
@@ -101,6 +109,52 @@ export function settlementStepOf(config, inputCells) {
   return null;
 }
 
+const MAX_FEE = 100000000n; // 1 CKB; the builders pay a tenth of that
+
+/**
+ * Where the money goes, beyond what the contracts check: the fee, and that
+ * nothing leaves for a lock that neither funded the transaction nor is owed.
+ *
+ * Phase two creates value: the DAO pays interest, so its outputs exceed its
+ * inputs. The DAO input is counted at what the settlement cell receives,
+ * which the rules have already tied to the DAO's own figure.
+ */
+export function moneyReasons({ config, step, tx, inputCells }) {
+  const under = (script, ref) => Boolean(script) && strip(script.codeHash) === ref.codeHash.toLowerCase()
+    && script.hashType === HASH_TYPE_NAME[Number(ref.hashType)];
+  const bad = [];
+  let inTotal = inputCells.reduce((s, c) => s + BigInt(c.capacity), 0n);
+  const outTotal = tx.outputs.reduce((s, o) => s + BigInt(o.capacity), 0n);
+  if (step === "phase-two") {
+    const dao = inputCells.find((c) => under(c.lock, config.daoLock));
+    const funding = tx.outputs.find((o) => under(o.type, config.settlementType));
+    if (dao && funding) inTotal += BigInt(funding.capacity) - BigInt(dao.capacity);
+  }
+  const fee = inTotal - outTotal;
+  if (fee <= 0n) bad.push(`the fee is ${fee} shannons; the pool refuses a transaction that pays none`);
+  if (fee > MAX_FEE) bad.push(`the fee is ${fee} shannons, more than 1 CKB: value is leaving the transaction`);
+
+  // Plain outputs may go only to a lock that funded the transaction or, in a
+  // payout, to a participant the witness names.
+  const key = (s) => `${strip(s.codeHash)}:${s.hashType}:${strip(s.args)}`;
+  const funders = new Set(inputCells
+    .filter((c) => !under(c.lock, config.daoLock) && !under(c.type, config.settlementType))
+    .map((c) => key(c.lock)));
+  // Only a payout spends a settlement cell, so only a payout has anyone owed.
+  const owed = new Set();
+  const at = inputCells.findIndex((c) => under(c.type, config.settlementType));
+  try {
+    for (const row of decodeSettlementWitness(unhexBytes(tx.witnesses[at]))) owed.add(key(row.lock));
+  } catch { /* not a payout, or a witness the rules will report as unreadable */ }
+  tx.outputs.forEach((o, i) => {
+    if (o.type) return;
+    if (!funders.has(key(o.lock)) && !owed.has(key(o.lock))) {
+      bad.push(`output ${i} sends ${BigInt(o.capacity)} shannons to a lock that neither funded this transaction nor is owed by it`);
+    }
+  });
+  return bad;
+}
+
 /** The reasons a settlement transaction would be refused; empty if none. */
 export async function checkSettlement(rpc, config, tx) {
   const resolved = await resolveForRules(rpc, tx);
@@ -111,5 +165,11 @@ export async function checkSettlement(rpc, config, tx) {
   const step = settlementStepOf(config, resolved.inputCells);
   const check = { "phase-one": checkDaoPhaseOne, "phase-two": checkDaoPhaseTwo, payout: checkPayout }[step];
   if (!check) return { step: null, reasons: ["this is not a settlement transaction"] };
-  return { step, reasons: check({ config, tx, ...resolved }) };
+  return {
+    step,
+    reasons: [
+      ...check({ config, tx, ...resolved }),
+      ...moneyReasons({ config, step, tx, inputCells: resolved.inputCells }),
+    ],
+  };
 }

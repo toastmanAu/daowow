@@ -186,7 +186,9 @@ if (spendsDao || settlementIn) {
       }
     }
   }
-  reportAndExit();
+  // Settlement has its own account of the money (phase two's outputs exceed
+  // its inputs by the DAO's interest), made inside checkSettlement.
+  reportAndExit({ conservation: false });
 }
 
 if (!config) {
@@ -382,10 +384,12 @@ if (config && protocolIn.length === 1 && protocolOut.length >= 1) {
 }
 
 // --- capacity conservation ------------------------------------------------
-function reportAndExit() {
+function reportAndExit({ conservation = true } = {}) {
   const inCap = resolved.reduce((s, c) => s + BigInt(c.output.capacity), 0n);
   const outCap = tx.outputs.reduce((s, o) => s + BigInt(o.capacity), 0n);
-  if (outCap > inCap) {
+  if (!conservation) {
+    // Judged by the caller.
+  } else if (outCap > inCap) {
     fail.push(`outputs exceed inputs by ${outCap - inCap} shannons`);
   } else if (inCap === outCap) {
     fail.push("the fee is zero; the pool refuses such a transaction before any script runs");

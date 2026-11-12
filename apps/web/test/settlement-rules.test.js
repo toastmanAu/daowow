@@ -284,40 +284,41 @@ const rewitness = (c, change) => {
   const rows = decodeSettlementWitness(unhex(c.tx.witnesses[0]));
   c.tx.witnesses[0] = "0x" + hex(encodeSettlementWitness(change(rows)));
 };
+// A two-payment payout is laid out: payment, payment, settlement cell, change.
 const restate = (c, change) => {
-  const state = decodeSettlementFunding(unhex(c.tx.outputsData[0]));
-  c.tx.outputsData[0] = "0x" + hex(encodeSettlementFunding({ ...state, ...change }, { unchecked: true }));
+  const state = decodeSettlementFunding(unhex(c.tx.outputsData[2]));
+  c.tx.outputsData[2] = "0x" + hex(encodeSettlementFunding({ ...state, ...change }, { unchecked: true }));
 };
 const PAY = [
-  ["an underpaid participant", (c) => { c.tx.outputs[1].capacity -= 1n; c.tx.outputs[3].capacity += 1n; }, /holds less than/],
+  ["an underpaid participant", (c) => { c.tx.outputs[0].capacity -= 1n; c.tx.outputs[3].capacity += 1n; }, /holds less than/],
   ["a skipped participant", (c) => rewitness(c, (rows) => rows.slice(1)), /not the liability at position 0/],
   ["a proof for another position", (c) => rewitness(c, (rows) => [{ ...rows[0], proof: rows[1].proof }, rows[1]]), /proof does not verify/],
   ["an inflated amount", (c) => rewitness(c, (rows) => [{ ...rows[0], item: { ...rows[0].item, principal: rows[0].item.principal + 1n } }, rows[1]]), /proof does not verify/],
   ["participants out of order", (c) => rewitness(c, (rows) => [rows[1], rows[0]]), /out of order/],
-  ["a payment with a type script", (c) => { c.tx.outputs[1].type = NATIVE_DAO; }, /not an ordinary empty cell/],
-  ["a payment carrying data", (c) => { c.tx.outputsData[1] = "0x00"; }, /not an ordinary empty cell/],
-  ["a payment to another lock", (c) => { c.tx.outputs[1].lock = sponsorCell.lock; }, /no output is under that participant's lock/],
+  ["a payment with a type script", (c) => { c.tx.outputs[0].type = NATIVE_DAO; }, /not an ordinary empty cell/],
+  ["a payment carrying data", (c) => { c.tx.outputsData[0] = "0x00"; }, /not an ordinary empty cell/],
+  ["a payment to another lock", (c) => { c.tx.outputs[0].lock = sponsorCell.lock; }, /no output is under that participant's lock/],
   ["a witness declaring another lock", (c) => rewitness(c, (rows) => [{ ...rows[0], lock: { ...rows[0].lock, hashType: "data1" } }, rows[1]]), /declares a different lock/],
   ["a cursor that did not advance", (c) => restate(c, { payoutCursor: 1n }), /cursor must advance to 2/],
   ["a cursor that jumped", (c) => restate(c, { payoutCursor: 3n }), /cursor must advance to 2/],
   ["prizes marked paid by a payout", (c) => restate(c, { prizePaid: 1n }), /must not change the prizes paid/],
   ["a changed liabilities root", (c) => restate(c, { liabilitiesRoot: "ab".repeat(32) }), /liabilitiesRoot changed/],
-  ["a shannon skimmed from the settlement cell", (c) => { c.tx.outputs[0].capacity -= 1n; }, /conservation/],
-  ["a settlement cell moved to another lock", (c) => { c.tx.outputs[0].lock = sponsorCell.lock; }, /lock changed/],
+  ["a shannon skimmed from the settlement cell", (c) => { c.tx.outputs[2].capacity -= 1n; }, /conservation/],
+  ["a settlement cell moved to another lock", (c) => { c.tx.outputs[2].lock = sponsorCell.lock; }, /lock changed/],
   ["a settlement cell under a private lock", (c) => { c.inputCells[0] = { ...c.inputCells[0], lock: sponsorCell.lock }; }, /not under the public settlement lock/],
   ["two settlement cells among the outputs", (c) => {
-    c.tx.outputs.unshift({ ...c.tx.outputs[0] }); c.tx.outputsData.unshift(c.tx.outputsData[0]);
+    c.tx.outputs.push({ ...c.tx.outputs[2] }); c.tx.outputsData.push(c.tx.outputsData[2]);
   }, /more than one settlement cell/],
   ["more participants than the batch has", (c) => rewitness(c, (rows) => [
     ...rows, { ...rows[1], item: { ...rows[1].item, participantLockHash: "fe".repeat(32) } },
     { ...rows[1], item: { ...rows[1].item, participantLockHash: "ff".repeat(32) } },
   ]), /more participants are paid than the batch has/],
-  ["a payment below its own cell floor", (c) => { c.tx.outputs[1].capacity = 10n * CKB; }, /below its own cell floor/],
+  ["a payment below its own cell floor", (c) => { c.tx.outputs[0].capacity = 10n * CKB; }, /below its own cell floor/],
   ["an empty witness", (c) => rewitness(c, () => []), /lists nobody/],
   ["a sponsor output ahead of a payment under the same lock", (c) => {
     // The contract takes the FIRST output under the participant's lock.
-    c.tx.outputs.splice(1, 0, { capacity: 100n * CKB, lock: c.tx.outputs[1].lock, type: NATIVE_DAO });
-    c.tx.outputsData.splice(1, 0, "0x");
+    c.tx.outputs.unshift({ capacity: 100n * CKB, lock: c.tx.outputs[0].lock, type: NATIVE_DAO });
+    c.tx.outputsData.unshift("0x");
   }, /FIRST output under that lock/],
 ];
 for (const [name, breakIt, reason] of PAY) {
@@ -334,11 +335,11 @@ test("payout refuses closing the cell early, or keeping it when it must close", 
   const { checkPayout } = await load();
   // Closing with a participant unpaid: drop the successor from a part payout.
   const early = payout({ count: 2 });
-  early.tx.outputs.shift(); early.tx.outputsData.shift();
+  early.tx.outputs.splice(2, 1); early.tx.outputsData.splice(2, 1);
   assert.ok(checkPayout(early).some((r) => /closed before every participant is paid/.test(r)));
   // Closing while prizes are unredeemed.
   const unredeemed = payout();
-  unredeemed.tx.outputs.shift(); unredeemed.tx.outputsData.shift();
+  unredeemed.tx.outputs.splice(3, 1); unredeemed.tx.outputsData.splice(3, 1);
   assert.ok(checkPayout(unredeemed).some((r) => /closed while prizes are still unredeemed/.test(r)));
   // Keeping the cell when everyone is paid and nothing is outstanding.
   const kept = payout({ state: { prizePaid: 900n * CKB, payoutCursor: 2n } });
@@ -353,6 +354,74 @@ test("payout refuses a settlement cell left below its own floor", async () => {
   const { checkPayout } = await load();
   // Everyone paid with 306 CKB of prizes unredeemed: the cell cannot hold it.
   const c = payout({ state: { realizedTotal: PRINCIPAL + 900n * CKB }, count: 3 });
-  c.tx.outputs[0].capacity = 306n * CKB;
+  c.tx.outputs[3].capacity = 306n * CKB;
   assert.ok(checkPayout(c).some((r) => /below its own floor.*prizes are redeemed/.test(r)));
+});
+
+// ---- where the money goes ----------------------------------------------------
+const io = () => import(path.join(ROOT, "tools", "settlement-io.mjs"));
+const money = async (step, c) => (await io()).moneyReasons({ config: CONFIG, step, tx: c.tx, inputCells: c.inputCells });
+
+test("the builders' transactions account for every shannon but a small fee", async () => {
+  assert.deepStrictEqual(await money("phase-one", phaseOne()), []);
+  assert.deepStrictEqual(await money("phase-two", phaseTwo()), []);
+  assert.deepStrictEqual(await money("payout", payout({ count: 2 })), []);
+  assert.deepStrictEqual(await money("payout", payout({ state: { prizePaid: 900n * CKB, payoutCursor: 2n } })), []);
+});
+
+test("phase two is not mistaken for creating money: the DAO's interest is counted", async () => {
+  // Its outputs exceed its raw inputs by the interest. Judged raw, every real
+  // phase two would read as "outputs exceed inputs".
+  const c = phaseTwo();
+  const rawIn = c.inputCells.reduce((s, x) => s + x.capacity, 0n);
+  const out = c.tx.outputs.reduce((s, o) => s + o.capacity, 0n);
+  assert.ok(out > rawIn, "the fixture really does pay out more than it takes in");
+  assert.deepStrictEqual(await money("phase-two", c), []);
+  // Read as any other step, the same transaction would be refused.
+  assert.ok((await money("phase-one", c)).some((r) => /pays none/.test(r)));
+});
+
+test("a fee that is missing, or far too large, is refused", async () => {
+  for (const [step, make] of [["phase-one", phaseOne], ["phase-two", phaseTwo], ["payout", () => payout({ count: 2 })]]) {
+    const none = make();
+    const last = none.tx.outputs.length - 1;
+    none.tx.outputs[last].capacity += 10000000n;
+    assert.ok((await money(step, none)).some((r) => /pays none/.test(r)), `${step}: zero fee`);
+    const huge = make();
+    huge.tx.outputs[last].capacity -= 2n * CKB;
+    assert.ok((await money(step, huge)).some((r) => /more than 1 CKB/.test(r)), `${step}: large fee`);
+    const edge = make();
+    edge.tx.outputs[last].capacity -= CKB - 10000000n;
+    assert.deepStrictEqual(await money(step, edge), [], `${step}: exactly 1 CKB is allowed`);
+  }
+});
+
+test("change sent to a lock that did not fund the transaction is refused", async () => {
+  const stranger = { codeHash: "0x" + "22".repeat(32), hashType: "type", args: "0x" + "cd".repeat(20) };
+  for (const [step, make] of [["phase-one", phaseOne], ["phase-two", phaseTwo], ["payout", () => payout({ count: 2 })]]) {
+    const c = make();
+    c.tx.outputs[c.tx.outputs.length - 1].lock = stranger;
+    assert.ok((await money(step, c)).some((r) => /neither funded this transaction nor is owed/.test(r)), step);
+  }
+});
+
+test("in a payout, the participants the witness names may be paid, and nobody else", async () => {
+  const c = payout({ count: 2 });
+  assert.deepStrictEqual(await money("payout", c), []);
+  // A third plain output to someone the witness does not name.
+  c.tx.outputs.push({ capacity: 61n * CKB, lock: lockOf(9), type: null });
+  c.tx.outputsData.push("0x");
+  c.tx.outputs[3].capacity -= 61n * CKB;
+  assert.ok((await money("payout", c)).some((r) => /output 4 sends/.test(r)));
+});
+
+test("a protocol cell's own lock does not count as having funded the transaction", async () => {
+  // Value parked in a plain cell under the round's DAO lock, or under the
+  // public settlement lock, is value nobody can be sure of getting back.
+  const one = phaseOne();
+  one.tx.outputs[1].lock = DAO_LOCK;
+  assert.ok((await money("phase-one", one)).some((r) => /neither funded/.test(r)));
+  const pay = payout({ count: 2 });
+  pay.tx.outputs[3].lock = pay.inputCells[0].lock;
+  assert.ok((await money("payout", pay)).some((r) => /neither funded/.test(r)));
 });

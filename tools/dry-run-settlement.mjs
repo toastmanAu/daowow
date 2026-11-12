@@ -85,8 +85,13 @@ const rounds = await discovery.findRounds(rpc, manifest);
 if (!roundPrefix) {
   stop("Pass --round <id prefix>. On chain: " + rounds.map((r) => r.config.roundId.slice(0, 10)).join(", "), 1);
 }
-const round = rounds.find((r) => r.config.roundId.startsWith(strip(roundPrefix)));
-if (!round) stop(`No round on chain starts with ${roundPrefix}.`, 1);
+const matching = rounds.filter((r) => r.config.roundId.startsWith(strip(roundPrefix)));
+if (matching.length === 0) stop(`No round on chain starts with ${roundPrefix}.`, 1);
+if (matching.length > 1) {
+  stop(`${matching.length} rounds start with ${roundPrefix}; give more of the id: ` +
+    matching.map((r) => r.config.roundId.slice(0, 16)).join(", "), 1);
+}
+const [round] = matching;
 const config = round.config;
 const commitment = config.commitment.toLowerCase();
 console.log(`round       ${config.roundId.slice(0, 16)}…  (${config.daoTermPeriods} term(s) committed)`);
@@ -124,11 +129,25 @@ for (const cell of await scan(config.entryShardType, "type", "02" + commitment))
     ...shaped(cell), digest: args.slice(90), receipt: decodeBatchCommitment(unhex(cell.output_data)),
   });
 }
+// Anyone can create a cell under a batch's DAOWOW lock: a lock's args are not
+// checked when a cell is made. So a cell counts as the batch's DAO cell only
+// if it is a native DAO cell and, while still a deposit, was created by the
+// same transaction as the batch's receipt. (A withdrawing cell can only come
+// from spending the real deposit, which the lock guards.) Two candidates for
+// one batch is something to stop and look at, not to choose between.
 const daoCells = new Map();
 for (const cell of await scan(config.daoLock, "lock", config.roundId)) {
   const args = strip(cell.output.lock.args);
   if (args.length !== 208 || args.slice(80, 144) !== commitment) continue;
-  daoCells.set(leToBig(args.slice(64, 80)), shaped(cell));
+  const id = leToBig(args.slice(64, 80));
+  const receipt = receipts.get(id);
+  const type = scriptFromRpc(cell.output.type);
+  if (!receipt || receipt.digest !== args.slice(144)) continue;
+  if (!type || scriptHash(type) !== config.daoType.codeHash.toLowerCase()) continue;
+  const isDeposit = strip(cell.output_data ?? "0x") === "00".repeat(8);
+  if (isDeposit && cell.out_point.tx_hash.toLowerCase() !== receipt.outPoint.txHash.toLowerCase()) continue;
+  if (daoCells.has(id)) stop(`Batch ${id} has more than one DAO cell that looks genuine. Stopping: look at both before going on.`, 1);
+  daoCells.set(id, shaped(cell));
 }
 const fundingCells = new Map();
 for (const cell of await scan(config.settlementType, "type", commitment)) {
@@ -147,8 +166,10 @@ const batches = [];
 for (const id of [...receipts.keys()].sort((a, b) => (a < b ? -1 : 1))) {
   const receipt = receipts.get(id);
   const batch = { id, receipt, stage: "settled", cell: null };
-  const dao = daoCells.get(id);
   const funding = fundingCells.get(id);
+  // A settlement cell can only be created by the contract, from the batch's
+  // real withdrawal. Once it exists, nothing under the DAO lock matters.
+  const dao = funding ? null : daoCells.get(id);
   if (dao && strip(dao.data) === "00".repeat(8)) {
     batch.stage = "deposit";
     batch.cell = dao;
@@ -205,8 +226,14 @@ const SECP = {
 async function findSponsor() {
   if (sponsorRef) {
     const [tx_hash, idx] = sponsorRef.split(":");
-    const got = await rpc.call("get_live_cell", [{ tx_hash, index: "0x" + Number(idx).toString(16) }, false]);
+    const got = await rpc.call("get_live_cell", [{ tx_hash, index: "0x" + Number(idx).toString(16) }, true]);
     if (got.status !== "live") throw new Error(`sponsor cell is ${got.status}`);
+    if (got.cell.output.type || (got.cell.data?.content ?? "0x") !== "0x") {
+      throw new Error("that sponsor cell carries a type script or data; a sponsor must be a plain cell");
+    }
+    if (scriptHash(scriptFromRpc(got.cell.output.lock)) !== scriptHash(SECP)) {
+      throw new Error("that sponsor cell is not under the operator's lock");
+    }
     return { outPoint: { txHash: tx_hash, index: Number(idx) }, capacity: BigInt(got.cell.output.capacity), lock: SECP };
   }
   // Small pages, and the first adequate cell: a full scan of the operator's
@@ -308,24 +335,38 @@ if (step === "phase-one") {
   console.log(`            ${f.liabilityCount} participant(s) to repay, ${f.prizeCount} prize(s) for ticket holders to redeem`);
 } else if (step === "payout") {
   if (!recordCell) stop("A payout needs the round's recorded result to re-derive who is owed what.", 1);
-  const [batch] = inStage("settlement").filter((b) => b.cell.state.payoutCursor < b.cell.state.liabilityCount);
-  if (!batch) stop("No settlement cell of this round has anyone left to pay.");
-  const evidence = await batchEvidence(batch);
-  const state = batch.cell.state;
-  const { liabilities } = deriveEntitlements({
-    config, record: recordCell.record, batchId: state.batchId, realizedTotal: state.realizedTotal,
-    schedule: evidence.schedule, receipt: evidence.receipt, entries: evidence.entries, capacities: evidence.capacities,
-  });
-  // A participant's lock script is not in their entry, only its hash. It is
-  // on the transaction that made the entry: their tickets were minted under it.
-  const locks = {};
-  for (const tx of evidence.entryTxs) {
-    for (const output of tx.outputs) {
-      const lock = scriptFromRpc(output.lock);
-      locks[scriptHash(lock)] = lock;
+  const candidates = inStage("settlement").filter((b) => b.cell.state.payoutCursor < b.cell.state.liabilityCount);
+  if (candidates.length === 0) stop("No settlement cell of this round has anyone left to pay.");
+  // The first batch that can pay. One waiting on its prizes must not hide
+  // another that is ready.
+  let batch = null;
+  const waiting = [];
+  for (const candidate of candidates) {
+    const evidence = await batchEvidence(candidate);
+    const state = candidate.cell.state;
+    const { liabilities } = deriveEntitlements({
+      config, record: recordCell.record, batchId: state.batchId, realizedTotal: state.realizedTotal,
+      schedule: evidence.schedule, receipt: evidence.receipt, entries: evidence.entries, capacities: evidence.capacities,
+    });
+    // A participant's lock script is not in their entry, only its hash. It is
+    // on the transaction that made the entry: their tickets were minted under it.
+    const locks = {};
+    for (const entryTx of evidence.entryTxs) {
+      for (const output of entryTx.outputs) {
+        const lock = scriptFromRpc(output.lock);
+        locks[scriptHash(lock)] = lock;
+      }
+    }
+    try {
+      built = buildPayoutTx({ manifest, funding: candidate.cell, liabilities, locks, sponsor, count });
+      batch = candidate;
+      break;
+    } catch (e) {
+      waiting.push(`  batch ${candidate.id}: ${e.message}`);
     }
   }
-  built = buildPayoutTx({ manifest, funding: batch.cell, liabilities, locks, sponsor, count });
+  if (!batch) stop("No batch can pay anyone right now.\n" + waiting.join("\n"), 1);
+  for (const line of waiting) console.log(line);
   console.log(`  batch ${batch.id}  paying ${built.paid.length} participant(s)` +
     (built.final ? ", which closes the settlement cell" : ""));
   if (built.held > 0 && count === undefined) {

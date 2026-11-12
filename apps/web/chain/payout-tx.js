@@ -20,10 +20,19 @@
 //  - What stays behind must be exact: capacity in = owed + capacity out.
 //
 // One rule orders the whole settlement. While prizes are unredeemed the cell
-// must survive the last payout, and a cell cannot hold less than its own 307
-// CKB floor. So unless at least 307 CKB of prizes are still unredeemed, the
-// LAST participant of a batch cannot be paid until every prize owed by that
-// batch has been redeemed. The builder pays everyone it can and says so.
+// must survive every payout AND every redemption but the last, and a cell
+// cannot hold less than its own 307 CKB floor. A payout is therefore allowed
+// only if it leaves the cell in a state that can still be finished:
+//
+//   - it closes the cell (everyone paid, no prize outstanding); or
+//   - at least 307 CKB of PRINCIPAL is still unpaid, so each winner can
+//     redeem alone and the cell stays alive; or
+//   - everyone is paid and at least 307 CKB of prizes remain to be redeemed.
+//
+// What it must never leave is a little unpaid principal next to a little
+// unredeemed prize, each below the floor: then neither the last payout nor
+// the last redemption could ever be made. So the tail of a batch waits until
+// that batch's prizes are redeemed, and the builder says so.
 
 const lib = (path, name) => (typeof require === "function" ? require(path) : window[name]);
 const core = () => lib("../core.js", "DaowowCore");
@@ -163,11 +172,22 @@ function buildPayoutTx({ manifest, funding, liabilities, locks, sponsor, count, 
   const leftAfter = (n) =>
     inCap - liabilities.slice(cursor, cursor + n).reduce((s, l) => s + owedOf(l), 0n);
   const closes = (n) => cursor + n === total && !prizesOutstanding;
-  const allowed = (n) => closes(n) || leftAfter(n) >= floor;
-  const waiting =
-    "the last participant of this batch cannot be paid yet: the settlement cell must stay " +
-    "open until its prizes are redeemed, and what would be left is below the cell's own " +
-    `${FUNDING_CELL_CKB} CKB floor. Once this batch's prizes have been redeemed, pay again`;
+  const unpaidAfter = (n) => liabilities.slice(cursor + n).reduce((s, l) => s + owedOf(l), 0n);
+  const allowed = (n) => {
+    if (closes(n)) return true;
+    if (leftAfter(n) < floor) return false;
+    // With no prize outstanding the cell holds only unpaid principal, so the
+    // floor check above has already settled it.
+    if (!prizesOutstanding) return true;
+    const unpaid = unpaidAfter(n);
+    return unpaid === 0n || unpaid >= floor;
+  };
+  const waiting = !prizesOutstanding
+    ? "that would leave the settlement cell holding less than its own " +
+      `${FUNDING_CELL_CKB} CKB floor without closing it: pay the remaining participants together`
+    : "the last participant(s) of this batch cannot be paid yet: the settlement cell must stay " +
+    "open and finishable until its prizes are redeemed, and what would be left is below the " +
+    `cell's own ${FUNDING_CELL_CKB} CKB floor. Once this batch's prizes have been redeemed, pay again`;
 
   let n = Math.min(count ?? remaining, MAX_PAYOUTS_PER_TX);
   if (count === undefined) while (n > 0 && !allowed(n)) n -= 1;
@@ -220,10 +240,13 @@ function buildPayoutTx({ manifest, funding, liabilities, locks, sponsor, count, 
         { previousOutput: funding.outPoint, since: 0n },
         { previousOutput: sponsor.outPoint, since: 0n },
       ],
-      // Payments before the sponsor's change: the contract takes the FIRST
-      // output under a participant's lock as their payment.
-      outputs: [...successor, ...payments, { capacity: change, lock: sponsor.lock, type: null }],
-      outputsData: [...successorData, ...payments.map(() => "0x"), "0x"],
+      // Payments FIRST: the contract takes the first output under a
+      // participant's lock as their payment, so nothing that could share a
+      // lock with one (the settlement cell's public lock, the sponsor's
+      // change) may come before them. The contract finds the settlement
+      // cell's successor by its type, at any index.
+      outputs: [...payments, ...successor, { capacity: change, lock: sponsor.lock, type: null }],
+      outputsData: [...payments.map(() => "0x"), ...successorData, "0x"],
       // Raw bytes at the settlement cell's own input index, not a WitnessArgs.
       witnesses: ["0x" + hex(encodeSettlementWitness(rows)), "0x"],
     },

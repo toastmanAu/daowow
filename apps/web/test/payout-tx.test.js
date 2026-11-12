@@ -97,10 +97,10 @@ test("each participant is paid exactly what they are owed, to their own lock", (
   const { tx, paid } = buildPayoutTx(base({ count: 3 }));
   assert.strictEqual(paid.length, 3);
   [0, 1, 2].forEach((i) => {
-    const out = tx.outputs[1 + i];
+    const out = tx.outputs[i];
     assert.deepStrictEqual(out.lock, people[i].lock);
     assert.strictEqual(out.type, null, "an ordinary cell");
-    assert.strictEqual(tx.outputsData[1 + i], "0x", "with no data");
+    assert.strictEqual(tx.outputsData[i], "0x", "with no data");
     assert.strictEqual(BigInt(out.capacity), PRINCIPALS[i]);
   });
 });
@@ -108,7 +108,7 @@ test("each participant is paid exactly what they are owed, to their own lock", (
 test("the cursor advances once per participant paid, and nothing immutable moves", () => {
   const before = stateWith();
   const { tx } = buildPayoutTx(base({ count: 3 }));
-  const after = decodeSettlementFunding(unhex(tx.outputsData[0]));
+  const after = decodeSettlementFunding(unhex(tx.outputsData[3]));
   assert.strictEqual(after.payoutCursor, 3n);
   assert.strictEqual(after.prizePaid, before.prizePaid);
   for (const field of IMMUTABLE_FIELDS) assert.strictEqual(after[field], before[field], field);
@@ -117,10 +117,10 @@ test("the cursor advances once per participant paid, and nothing immutable moves
 test("the settlement cell keeps its lock and type, and exactly what is left", () => {
   const input = base({ count: 3 });
   const { tx } = buildPayoutTx(input);
-  assert.deepStrictEqual(tx.outputs[0].lock, input.funding.lock);
-  assert.deepStrictEqual(tx.outputs[0].type, input.funding.type);
+  assert.deepStrictEqual(tx.outputs[3].lock, input.funding.lock);
+  assert.deepStrictEqual(tx.outputs[3].type, input.funding.type);
   const paidOut = PRINCIPALS.slice(0, 3).reduce((a, b) => a + b, 0n);
-  assert.strictEqual(BigInt(tx.outputs[0].capacity), input.funding.capacity - paidOut);
+  assert.strictEqual(BigInt(tx.outputs[3].capacity), input.funding.capacity - paidOut);
 });
 
 test("the sponsor pays the fee and nothing else moves value", () => {
@@ -150,8 +150,8 @@ test("payment resumes from the cursor, never from the start", () => {
   const state = stateWith({ payoutCursor: 2n });
   const { tx, paid } = buildPayoutTx(base({ state, count: 1 }));
   assert.deepStrictEqual(paid.map((p) => p.participantLockHash), [people[2].hash]);
-  assert.deepStrictEqual(tx.outputs[1].lock, people[2].lock);
-  assert.strictEqual(decodeSettlementFunding(unhex(tx.outputsData[0])).payoutCursor, 3n);
+  assert.deepStrictEqual(tx.outputs[0].lock, people[2].lock);
+  assert.strictEqual(decodeSettlementFunding(unhex(tx.outputsData[1])).payoutCursor, 3n);
   // The proof is for position 2 of the tree, not position 0 of this payout.
   const row = { lock: people[2].lock, item: liabilities[2], proof: tree.membershipProof(2) };
   assert.strictEqual(tx.witnesses[0], "0x" + hex(encodeSettlementWitness([row])));
@@ -171,7 +171,7 @@ test("with prizes unredeemed, the last participant waits unless 307 CKB of prize
   const all = buildPayoutTx(base());
   assert.strictEqual(all.paid.length, 4);
   assert.strictEqual(all.final, false, "the cell stays open for the prizes");
-  assert.strictEqual(BigInt(all.tx.outputs[0].capacity), 900n * CKB);
+  assert.strictEqual(BigInt(all.tx.outputs[4].capacity), 900n * CKB);
 });
 
 test("with too little left to keep the cell alive, the builder pays everyone but the last", () => {
@@ -179,7 +179,7 @@ test("with too little left to keep the cell alive, the builder pays everyone but
   const { paid, held, tx } = buildPayoutTx(base({ state }));
   assert.strictEqual(paid.length, 3);
   assert.strictEqual(held, 1);
-  assert.strictEqual(BigInt(tx.outputs[0].capacity), PRINCIPALS[3] + 306n * CKB);
+  assert.strictEqual(BigInt(tx.outputs[3].capacity), PRINCIPALS[3] + 306n * CKB);
   // Asking for all four by name is refused, and says what has to happen first.
   assert.throws(() => buildPayoutTx(base({ state, count: 4 })), /prizes.*redeemed/s);
   const exactly = stateWith({ realizedTotal: PRINCIPAL + 307n * CKB, prizePool: 307n * CKB });
@@ -265,9 +265,9 @@ test("a payment below its own cell's floor is topped up by the sponsor, never by
   const input = base({ state, liabilities: tiny, capacity: 910n * CKB });
   const { tx, fee, gift } = buildPayoutTx(input);
   const floor = (8n + 33n + 20n) * CKB;
-  assert.strictEqual(BigInt(tx.outputs[1].capacity), floor);
+  assert.strictEqual(BigInt(tx.outputs[0].capacity), floor);
   assert.strictEqual(gift, floor - 10n * CKB);
-  assert.strictEqual(BigInt(tx.outputs[0].capacity), 900n * CKB, "only the 10 CKB owed left the cell");
+  assert.strictEqual(BigInt(tx.outputs[1].capacity), 900n * CKB, "only the 10 CKB owed left the cell");
   assert.strictEqual(BigInt(tx.outputs[2].capacity), sponsor.capacity - fee - gift);
 });
 
@@ -291,9 +291,9 @@ test("on a round that did not draw, each participant is paid principal AND their
     prizePool: pool, realizedTotal: PRINCIPAL + pool,
   });
   const { tx, final } = buildPayoutTx(base({ state, liabilities: shared, capacity: PRINCIPAL + pool, count: 2 }));
-  assert.strictEqual(BigInt(tx.outputs[1].capacity), PRINCIPALS[0] + 7n * CKB);
-  assert.strictEqual(BigInt(tx.outputs[2].capacity), PRINCIPALS[1] + 14n * CKB);
-  assert.strictEqual(BigInt(tx.outputs[0].capacity), PRINCIPALS[2] + PRINCIPALS[3] + 49n * CKB);
+  assert.strictEqual(BigInt(tx.outputs[0].capacity), PRINCIPALS[0] + 7n * CKB);
+  assert.strictEqual(BigInt(tx.outputs[1].capacity), PRINCIPALS[1] + 14n * CKB);
+  assert.strictEqual(BigInt(tx.outputs[2].capacity), PRINCIPALS[2] + PRINCIPALS[3] + 49n * CKB);
   assert.strictEqual(final, false);
   assert.strictEqual(buildPayoutTx(base({ state, liabilities: shared, capacity: PRINCIPAL + pool })).final, true);
 });
@@ -328,4 +328,76 @@ test("a malformed payout witness is refused the way the contract refuses it", ()
   assert.throws(() => decodeSettlementWitness(Uint8Array.from([...good, 0])), /trailing/);
   const many = Uint8Array.from(good); many[0] = 129;
   assert.throws(() => decodeSettlementWitness(many), /at most 128/);
+});
+
+// ---- output order, and states that could never be finished -------------------
+test("payments come before the settlement cell, so nothing can stand in for one", () => {
+  // The contract takes the FIRST output under a participant's lock. The
+  // settlement cell's own lock is a lock like any other; a participant who
+  // entered under it would otherwise be matched to the settlement cell.
+  const { tx } = buildPayoutTx(base({ count: 2 }));
+  assert.strictEqual(tx.outputs[0].type, null);
+  assert.strictEqual(tx.outputs[1].type, null);
+  assert.deepStrictEqual(tx.outputs[2].lock, { codeHash: ST.codeHash, hashType: ST.hashType, args: "0x00" });
+  assert.ok(tx.outputs[2].type, "the settlement cell follows the payments");
+  assert.deepStrictEqual(tx.outputs[3].lock, sponsor.lock);
+});
+
+test("a participant under the settlement cell's own lock is still paid by their own output", () => {
+  const publicLock = { codeHash: ST.codeHash, hashType: ST.hashType, args: "0x00" };
+  const item = { participantLockHash: scriptHash(publicLock), principal: 5000n * CKB, prize: 0n };
+  const t = new core.MmrHost();
+  t.append(core.liabilityLeaf(unhex(item.participantLockHash), item.principal, 0n));
+  const state = stateWith({
+    liabilityCount: 1n, liabilitiesRoot: hex(t.root()), principalLiability: 5000n * CKB, realizedTotal: 5900n * CKB,
+  });
+  const { tx } = buildPayoutTx(base({
+    state, liabilities: [item], capacity: 5900n * CKB, locks: { [item.participantLockHash]: publicLock },
+  }));
+  const first = tx.outputs.findIndex((o) => scriptHash(o.lock) === item.participantLockHash);
+  assert.strictEqual(first, 0);
+  assert.strictEqual(tx.outputs[0].type, null);
+  assert.strictEqual(BigInt(tx.outputs[0].capacity), 5000n * CKB);
+});
+
+// Small principals, so the floor binds on principal as well as on prizes.
+const SMALL = [100n * CKB, 100n * CKB, 100n * CKB, 100n * CKB];
+const smallLiabilities = people.map((p, i) => ({ participantLockHash: p.hash, principal: SMALL[i], prize: 0n }));
+const smallTree = new core.MmrHost();
+for (const l of smallLiabilities) smallTree.append(core.liabilityLeaf(unhex(l.participantLockHash), l.principal, 0n));
+const smallBase = (pool, over = {}) => {
+  const state = stateWith({
+    liabilitiesRoot: hex(smallTree.root()), principalLiability: 400n * CKB, prizePool: pool,
+    realizedTotal: 400n * CKB + pool, ...over,
+  });
+  return base({ state, liabilities: smallLiabilities, capacity: 400n * CKB + pool - state.prizePaid });
+};
+
+test("a payout never leaves a little principal beside a little prize: that could not be finished", () => {
+  // 400 CKB of principal in four, 200 CKB of prizes unredeemed. Paying three
+  // would leave 100 + 200: the last payout would leave 200 (below the floor,
+  // not final) and the last redemption would leave 100 (the same). Stuck for
+  // good. Paying none keeps 400 of principal, so every winner can redeem.
+  assert.throws(() => buildPayoutTx(smallBase(200n * CKB)), /prizes.*redeemed/s);
+  for (const count of [1, 2, 3, 4]) {
+    assert.throws(() => buildPayoutTx({ ...smallBase(200n * CKB), count }), /prizes.*redeemed/s, String(count));
+  }
+});
+
+test("with enough prize money left the whole batch is paid, never all but a sliver", () => {
+  // 400 of prizes: paying all four leaves 400, which is fine. Paying three
+  // would leave 100 of principal, below the floor on its own.
+  const { paid } = buildPayoutTx(smallBase(400n * CKB));
+  assert.strictEqual(paid.length, 4);
+  assert.throws(() => buildPayoutTx({ ...smallBase(400n * CKB), count: 3 }), /prizes.*redeemed/s);
+  assert.throws(() => buildPayoutTx({ ...smallBase(400n * CKB), count: 1 }), /prizes.*redeemed/s);
+});
+
+test("once prizes are all redeemed the batch pays out, in steps that never starve the cell", () => {
+  const done = { prizePaid: 200n * CKB };
+  // One of four would leave 300 CKB in a cell that needs 307 and is not closing.
+  assert.throws(() => buildPayoutTx({ ...smallBase(200n * CKB, done), count: 1 }), /pay the remaining participants together/);
+  const all = buildPayoutTx(smallBase(200n * CKB, done));
+  assert.strictEqual(all.paid.length, 4);
+  assert.strictEqual(all.final, true);
 });
