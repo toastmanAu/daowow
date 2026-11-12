@@ -24,8 +24,8 @@
 //  4. Every epoch here is measured from the DEPOSIT's block, never from the
 //     withdrawing cell's own.
 
-const refundTx = () =>
-  typeof require === "function" ? require("./refund-tx.js") : window.DaowowRefundTx;
+const lib = (path, name) => (typeof require === "function" ? require(path) : window[name]);
+const refundTx = () => lib("./refund-tx.js", "DaowowRefundTx");
 
 const CKB = 100000000n;
 const FEE_SHANNONS = 10000000n;
@@ -200,7 +200,205 @@ function buildDaoPhaseOneTx({
   };
 }
 
-const api = { buildDaoPhaseOneTx, phaseOneSince, checkedDeps, EPOCHS_PER_TERM, FEE_SHANNONS };
+// ---------------------------------------------------------------------------
+// Phase two
+// ---------------------------------------------------------------------------
+
+/**
+ * When a withdrawing cell matures (RFC 0023). The stay is counted from the
+ * DEPOSIT's block to the withdrawal's block, rounded UP to whole 180-epoch
+ * cycles, and the cell matures that many epochs after the deposit, at the
+ * same fraction of its epoch. Fractions compare by cross-multiplication.
+ * Returns { epoch, since }.
+ */
+function maturityOf(depositEpochField, withdrawEpochField) {
+  const parts = (field) => {
+    const v = BigInt(field);
+    return { number: v & 0xffffffn, index: (v >> 24n) & 0xffffn, length: (v >> 40n) & 0xffffn };
+  };
+  const d = parts(depositEpochField);
+  const w = parts(withdrawEpochField);
+  const dLength = d.length === 0n ? 1n : d.length;
+  const wLength = w.length === 0n ? 1n : w.length;
+  const past = w.index * dLength > d.index * wLength ? 1n : 0n;
+  const elapsed = w.number - d.number + past;
+  if (elapsed < 0n) throw new Error("the withdrawal header is older than the deposit header");
+  const cycles = (elapsed + EPOCHS_PER_TERM - 1n) / EPOCHS_PER_TERM;
+  const epoch = d.number + cycles * EPOCHS_PER_TERM;
+  return {
+    epoch,
+    since: ABSOLUTE_EPOCH_FLAG | (d.length << 40n) | (d.index << 24n) | epoch,
+  };
+}
+
+/**
+ * Occupied capacity of a DAO cell in shannons: 8 for the capacity field, each
+ * script as code hash + hash type + args, and its 8 data bytes. Interest
+ * accrues only on what is above this.
+ */
+function withdrawingCellOccupied(cell) {
+  const scriptBytes = (s) => 33n + BigInt(strip(s.args).length / 2);
+  return (8n + scriptBytes(cell.lock) + scriptBytes(cell.type) + 8n) * CKB;
+}
+
+// Accumulated rate: little-endian u64 at bytes 8..16 of a header's dao field.
+function accumulatedRate(header) {
+  const field = strip(header.dao);
+  if (field.length !== 64) throw new Error("a header's dao field is 32 bytes");
+  let value = 0n;
+  for (let i = 15; i >= 8; i -= 1) value = (value << 8n) | BigInt(parseInt(field.substr(i * 2, 2), 16));
+  return value;
+}
+
+/** A molecule WitnessArgs: a table of three optional byte strings. */
+function encodeWitnessArgs({ lock, inputType, outputType }) {
+  const field = (bytes) => {
+    if (bytes === undefined || bytes === null) return new Uint8Array(0);
+    const out = new Uint8Array(4 + bytes.length);
+    new DataView(out.buffer).setUint32(0, bytes.length, true);
+    out.set(bytes, 4);
+    return out;
+  };
+  const fields = [field(lock), field(inputType), field(outputType)];
+  const total = 16 + fields.reduce((n, f) => n + f.length, 0);
+  const out = new Uint8Array(total);
+  const view = new DataView(out.buffer);
+  view.setUint32(0, total, true);
+  let at = 16;
+  fields.forEach((f, i) => {
+    view.setUint32(4 + i * 4, at, true);
+    out.set(f, at);
+    at += f.length;
+  });
+  return out;
+}
+
+const hex0x = (b) => "0x" + Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
+
+/**
+ * Phase two for ONE batch: its withdrawing cell becomes its settlement cell.
+ * `withdrawing` is { outPoint, receiptOutPoint, capacity, lock, type, data };
+ * `record` is the round's decoded entropy record and `recordOutPoint` the
+ * cell holding it; `receipt`, `entries` and `capacities` describe the batch.
+ */
+function buildDaoPhaseTwoTx({
+  manifest, config, withdrawing, depositHeader, withdrawHeader, record, recordOutPoint,
+  schedule, receipt, entries, capacities, configCellOutPoint, daoTypeDep, sponsor,
+  feeShannons = FEE_SHANNONS,
+}) {
+  const entitlementsLib = lib("./entitlements.js", "DaowowEntitlements");
+  const settlementCodec = lib("./settlement-codec.js", "DaowowSettlementCodec");
+  if (!configCellOutPoint || !configCellOutPoint.txHash) {
+    throw new Error("the round config cell out point is required as a cell dep");
+  }
+  // validate_initial_funding needs the entropy record as a cell dep: a batch
+  // cannot be settled until the round's result is fixed on chain.
+  if (!record || !recordOutPoint || !recordOutPoint.txHash) {
+    throw new Error(
+      "the round's recorded result is required (record, recordOutPoint): a deposit " +
+      "cannot be withdrawn into settlement before the round is sealed and its result recorded",
+    );
+  }
+  const daoType = requireDaoType(config, daoTypeDep);
+  const change = requireSponsor(sponsor, feeShannons);
+  checkDepositLock(config, withdrawing);
+  if (!withdrawing.type || refundTx().scriptHash(withdrawing.type) !== refundTx().scriptHash(daoType)) {
+    throw new Error("this cell is not a native DAO cell of the type the round commits to");
+  }
+  if (!withdrawing.receiptOutPoint || !withdrawing.receiptOutPoint.txHash) {
+    throw new Error("the batch receipt is required as a cell dep (receiptOutPoint)");
+  }
+
+  // A deposit carries eight zero bytes; a withdrawing cell carries the block
+  // number of its deposit.
+  const data = strip(withdrawing.data ?? "0x");
+  if (data.length !== 16 || data === "00".repeat(8)) {
+    throw new Error("this cell is still a deposit: phase one must be committed before phase two");
+  }
+  if ("0x" + data !== u64leHex(BigInt(depositHeader.number))) {
+    throw new Error("this is not the deposit header the withdrawing cell names");
+  }
+
+  const args = strip(withdrawing.lock.args);
+  const batchId = BigInt("0x" + args.slice(64, 80).match(/../g).reverse().join(""));
+  const digest = args.slice(144, 208);
+  if (digest !== receipt.digest.toLowerCase()) {
+    throw new Error("this withdrawing cell is not the one this batch receipt belongs to");
+  }
+  if (BigInt(withdrawing.capacity) !== BigInt(receipt.inputCapacity)) {
+    throw new Error("the withdrawing cell's capacity is not the capacity its receipt records");
+  }
+
+  // The settlement script as the config commits to it. The manifest says
+  // where its code lives; it must be the same script.
+  const settlement = manifest.scripts["settlement-type"];
+  if (strip(settlement.codeHash) !== config.settlementType.codeHash.toLowerCase()
+    || settlement.hashType !== HASH_TYPE_NAME[Number(config.settlementType.hashType)]) {
+    throw new Error("the manifest's settlement script is not the one this round's config commits to");
+  }
+
+  const depositAr = accumulatedRate(depositHeader);
+  const withdrawAr = accumulatedRate(withdrawHeader);
+  if (depositAr === 0n || withdrawAr < depositAr) {
+    throw new Error("the withdrawal's accumulated rate is below the deposit's: the headers are the wrong way round");
+  }
+  const occupied = withdrawingCellOccupied(withdrawing);
+  const realized = occupied + ((BigInt(withdrawing.capacity) - occupied) * withdrawAr) / depositAr;
+
+  const entitlements = entitlementsLib.deriveEntitlements({
+    config, record, schedule, batchId, receipt, entries, capacities, realizedTotal: realized,
+  });
+  const maturity = maturityOf(depositHeader.epoch, withdrawHeader.epoch);
+  const evidence = entitlementsLib.encodeEntitlementWitness(schedule, entries, capacities);
+  const lockScript = manifest.scripts["dao-lock"];
+
+  return {
+    tx: {
+      cellDeps: checkedDeps([
+        { outPoint: lockScript.outPoint, depType: lockScript.depType },
+        { outPoint: settlement.outPoint, depType: settlement.depType },
+        { outPoint: configCellOutPoint, depType: "code" },
+        daoTypeDep,
+        { outPoint: withdrawing.receiptOutPoint, depType: "code" },
+        { outPoint: recordOutPoint, depType: "code" },
+        ...sponsor.lockDeps,
+      ]),
+      // The deposit's block first: the witness below names it by index.
+      headerDeps: [depositHeader.hash, withdrawHeader.hash],
+      inputs: [
+        { previousOutput: withdrawing.outPoint, since: maturity.since },
+        { previousOutput: sponsor.outPoint, since: 0n },
+      ],
+      outputs: [
+        {
+          // Exactly what the DAO pays. The fee is the sponsor's alone.
+          capacity: realized,
+          lock: { codeHash: settlement.codeHash, hashType: settlement.hashType, args: "0x00" },
+          type: {
+            codeHash: settlement.codeHash, hashType: settlement.hashType,
+            args: "0x" + config.commitment + args.slice(64, 80) + digest,
+          },
+        },
+        { capacity: change, lock: sponsor.lock, type: null },
+      ],
+      outputsData: [hex0x(settlementCodec.encodeSettlementFunding(entitlements.funding)), "0x"],
+      witnesses: [
+        // input_type: the deposit header's index in header_deps, as the native
+        // DAO requires. output_type: the evidence the settlement type derives
+        // the cell's contents from.
+        hex0x(encodeWitnessArgs({ inputType: new Uint8Array(8), outputType: evidence })),
+        "0x",
+      ],
+    },
+    maturity, realized, entitlements, batchId,
+    fee: BigInt(feeShannons),
+  };
+}
+
+const api = {
+  buildDaoPhaseOneTx, buildDaoPhaseTwoTx, phaseOneSince, maturityOf, checkedDeps,
+  encodeWitnessArgs, withdrawingCellOccupied, accumulatedRate, EPOCHS_PER_TERM, FEE_SHANNONS,
+};
 if (typeof module !== "undefined" && module.exports) module.exports = api;
 if (typeof window !== "undefined") window.DaowowDaoTx = api;
 })();

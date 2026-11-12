@@ -231,3 +231,255 @@ test("a DAO script the config does not commit to is refused, even if the deposit
     deposits: deposits.map((d) => ({ ...d, type: other })),
   })), /commits to/);
 });
+
+// ===========================================================================
+// DAO phase two: the withdrawing cell becomes the batch's settlement cell.
+// Rules: dao-lock phase_two, daowow-contracts-common validate_initial_funding,
+// settlement-type creation, and the native DAO's own withdrawal (RFC 0023).
+// ===========================================================================
+const {
+  buildDaoPhaseTwoTx, maturityOf, encodeWitnessArgs, withdrawingCellOccupied,
+} = require("../chain/dao-tx.js");
+const { decodeEntropyRecord } = require("../chain/seal-codec.js");
+const { decodeBatchCommitment } = require("../chain/ledger-codec.js");
+const { decodeEntryDataV1 } = require("../chain/entry-codec.js");
+const { decodeSchedule } = require("../chain/schedule.js");
+const { decodeSettlementFunding } = require("../chain/settlement-codec.js");
+const { deriveEntitlements, encodeEntitlementWitness } = require("../chain/entitlements.js");
+
+const D = V.computed_draw;
+const E2 = D.entitlements;
+const hexOf = (b) => Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
+const RAW2 = decodeRoundConfigV1(unhex(D.config));
+// The drawn round's own config, with the one field the fixture must own: the
+// DAO type hash. Nothing the entitlements depend on reads it... except the
+// commitment, so the commitment is taken from the vector, not recomputed.
+const CONFIG2 = { ...RAW2, daoType: { codeHash: scriptHash(NATIVE_DAO), hashType: 1 }, commitment: D.commitment };
+// The vector's config names placeholder scripts, so the fixture manifest says
+// the settlement script is deployed where the config says it is.
+const MANIFEST2 = {
+  ...MANIFEST,
+  scripts: {
+    ...MANIFEST.scripts,
+    "settlement-type": {
+      ...MANIFEST.scripts["settlement-type"],
+      codeHash: "0x" + RAW2.settlementType.codeHash, hashType: HASH_TYPE[RAW2.settlementType.hashType],
+    },
+  },
+};
+const RECORD = decodeEntropyRecord(unhex(D.record), 1);
+const SCHEDULE = decodeSchedule(unhex(D.schedule));
+const RECEIPT = decodeBatchCommitment(unhex(E2.receipt));
+const ENTRIES = E2.entries.map((h) => decodeEntryDataV1(unhex(h)));
+const CAPACITIES = E2.capacities.map(BigInt);
+const daoHeader = (number, epoch, ar) => ({
+  hash: "0x" + number.toString(16).padStart(64, "0"), number: "0x" + number.toString(16), epoch,
+  // dao field: C (8) | AR (8) | S (8) | U (8), little-endian.
+  dao: "0x" + "11".repeat(8) + u64leHex(ar) + "22".repeat(8) + "33".repeat(8),
+});
+const DEPOSIT_HEADER = daoHeader(23018766n, epochField(14170n, 700n, 1800n), 10000000000000000n);
+// Far from the deposit on purpose, so reading the wrong header is visibly wrong.
+const WITHDRAW_HEADER = daoHeader(23400000n, epochField(14351n, 100n, 1700n), 10023000000000000n);
+const lock2 = {
+  codeHash: "0x" + CONFIG2.daoLock.codeHash, hashType: HASH_TYPE[CONFIG2.daoLock.hashType],
+  args: "0x" + CONFIG2.roundId + u64leHex(0n) + CONFIG2.commitment + RECEIPT.digest,
+};
+const withdrawing = {
+  outPoint: { txHash: "0x" + "a1".repeat(32), index: 0 },
+  receiptOutPoint: { txHash: "0x" + "b2".repeat(32), index: 2 },
+  capacity: RECEIPT.inputCapacity,
+  lock: lock2, type: NATIVE_DAO,
+  data: "0x" + u64leHex(BigInt(DEPOSIT_HEADER.number)),
+};
+const base2 = (over = {}) => ({
+  manifest: MANIFEST2, config: CONFIG2, withdrawing,
+  depositHeader: DEPOSIT_HEADER, withdrawHeader: WITHDRAW_HEADER,
+  record: RECORD, recordOutPoint: { txHash: "0x" + "c3".repeat(32), index: 0 },
+  schedule: SCHEDULE, receipt: RECEIPT, entries: ENTRIES, capacities: CAPACITIES,
+  configCellOutPoint: { txHash: "0x" + "44".repeat(32), index: 0 },
+  daoTypeDep: { ...code("99", 2), script: NATIVE_DAO },
+  sponsor, ...over,
+});
+const OCCUPIED = 186n * CKB;
+const REALIZED = OCCUPIED
+  + ((RECEIPT.inputCapacity - OCCUPIED) * 10023000000000000n) / 10000000000000000n;
+
+test("the since is measured from the DEPOSIT, not the withdrawal", () => {
+  // Recorded as a live bug in ckb-transactions.feedback.md (2026-06-16): a
+  // scanner read the withdrawing cell's own block and computed W+180.
+  const { tx, maturity } = buildDaoPhaseTwoTx(base2());
+  const depositEpoch = BigInt(DEPOSIT_HEADER.epoch) & 0xffffffn;
+  const withdrawEpoch = BigInt(WITHDRAW_HEADER.epoch) & 0xffffffn;
+  assert.strictEqual(maturity.epoch, depositEpoch + 360n);
+  assert.strictEqual(tx.inputs[0].since & 0xffffffn, maturity.epoch);
+  assert.strictEqual(tx.inputs[0].since >> 56n, 0x20n, "an absolute epoch");
+  assert.notStrictEqual(maturity.epoch, withdrawEpoch + 180n);
+  assert.notStrictEqual(maturity.epoch, withdrawEpoch + 360n);
+});
+
+test("the since keeps the deposit's own fraction of its epoch", () => {
+  // RFC 0023: the cell matures at the same point WITHIN the epoch as it was
+  // deposited, a whole number of cycles later.
+  const { tx } = buildDaoPhaseTwoTx(base2());
+  const since = tx.inputs[0].since;
+  assert.strictEqual((since >> 24n) & 0xffffn, 700n);
+  assert.strictEqual((since >> 40n) & 0xffffn, 1800n);
+});
+
+test("maturity rounds the stay up to whole 180-epoch cycles, by fraction", () => {
+  const dep = epochField(1000n, 500n, 1000n);
+  const at = (number, index, length) => maturityOf(dep, epochField(number, index, length)).epoch;
+  assert.strictEqual(at(1001n, 0n, 1000n), 1180n);
+  assert.strictEqual(at(1180n, 499n, 1000n), 1180n, "just short of a full cycle: still the first");
+  assert.strictEqual(at(1180n, 500n, 1000n), 1180n, "exactly a full cycle");
+  assert.strictEqual(at(1180n, 501n, 1000n), 1360n, "one block past it: the next cycle");
+  assert.strictEqual(at(1180n, 251n, 500n), 1360n, "fractions compare by cross-multiplying, not by index");
+  assert.strictEqual(at(1181n, 0n, 1000n), 1360n);
+  assert.strictEqual(at(1360n, 500n, 1000n), 1360n);
+  assert.strictEqual(at(1360n, 501n, 1000n), 1540n);
+});
+
+test("the realised total is the native DAO's own figure: interest on free capacity only", () => {
+  assert.strictEqual(withdrawingCellOccupied(withdrawing), OCCUPIED);
+  const { tx, realized } = buildDaoPhaseTwoTx(base2());
+  assert.strictEqual(realized, REALIZED);
+  assert.strictEqual(BigInt(tx.outputs[0].capacity), REALIZED, "exactly, or the contract refuses");
+});
+
+test("the rates are read from the deposit's block and the withdrawal's block, that way round", () => {
+  // Only the ratio matters, so doubling both leaves the figure where it was.
+  const doubled = buildDaoPhaseTwoTx(base2({
+    depositHeader: daoHeader(23018766n, DEPOSIT_HEADER.epoch, 20000000000000000n),
+    withdrawHeader: daoHeader(23400000n, WITHDRAW_HEADER.epoch, 20046000000000000n),
+  }));
+  assert.strictEqual(doubled.realized, REALIZED);
+  // The two headers exchanged: the "withdrawal" rate is now the lower one.
+  assert.throws(() => buildDaoPhaseTwoTx(base2({
+    depositHeader: { ...DEPOSIT_HEADER, dao: WITHDRAW_HEADER.dao },
+    withdrawHeader: { ...WITHDRAW_HEADER, dao: DEPOSIT_HEADER.dao },
+  })), /rate/);
+});
+
+test("the settlement cell holds exactly what the contract will derive", () => {
+  const { tx, entitlements } = buildDaoPhaseTwoTx(base2());
+  const expected = deriveEntitlements({
+    config: CONFIG2, record: RECORD, schedule: SCHEDULE, batchId: 0n, receipt: RECEIPT,
+    entries: ENTRIES, capacities: CAPACITIES, realizedTotal: REALIZED,
+  });
+  const funding = decodeSettlementFunding(unhex(tx.outputsData[0].slice(2)));
+  assert.deepStrictEqual(funding, expected.funding);
+  assert.deepStrictEqual(entitlements.liabilities, expected.liabilities);
+  assert.strictEqual(funding.payoutCursor, 0n);
+  assert.ok(funding.liabilityCount > 0n);
+  assert.strictEqual(funding.realizedTotal, REALIZED);
+});
+
+test("the settlement cell is under the public settlement lock and this batch's type", () => {
+  const { tx } = buildDaoPhaseTwoTx(base2());
+  const st = MANIFEST2.scripts["settlement-type"];
+  assert.deepStrictEqual(tx.outputs[0].lock, { codeHash: st.codeHash, hashType: st.hashType, args: "0x00" });
+  assert.deepStrictEqual(tx.outputs[0].type, {
+    codeHash: st.codeHash, hashType: st.hashType,
+    args: "0x" + CONFIG2.commitment + u64leHex(0n) + RECEIPT.digest,
+  });
+  assert.strictEqual(tx.outputs[0].type.args.length, 2 + 72 * 2);
+});
+
+test("no output is a DAO cell, and the sponsor's change is the only other output", () => {
+  // validate_initial_funding refuses ANY output of the native DAO type.
+  const { tx, fee } = buildDaoPhaseTwoTx(base2());
+  assert.strictEqual(tx.outputs.length, 2);
+  for (const o of tx.outputs) assert.notDeepStrictEqual(o.type, NATIVE_DAO);
+  assert.strictEqual(tx.outputs[1].type, null);
+  assert.strictEqual(BigInt(tx.outputs[1].capacity), sponsor.capacity - fee);
+  assert.deepStrictEqual(tx.inputs.map((i) => i.previousOutput), [withdrawing.outPoint, sponsor.outPoint]);
+  assert.strictEqual(tx.inputs[1].since, 0n);
+});
+
+test("the header deps are the deposit's block then the withdrawal's", () => {
+  const { tx } = buildDaoPhaseTwoTx(base2());
+  assert.deepStrictEqual(tx.headerDeps, [DEPOSIT_HEADER.hash, WITHDRAW_HEADER.hash]);
+});
+
+test("the DAO input's witness names the deposit header and carries the batch evidence", async () => {
+  const { tx } = buildDaoPhaseTwoTx(base2());
+  const payload = encodeEntitlementWitness(SCHEDULE, ENTRIES, CAPACITIES);
+  assert.strictEqual(hexOf(payload), E2.witness, "the evidence is Rust's own encoding");
+  // Checked against the vendored CKB library's WitnessArgs, not our own reading of molecule.
+  const { ccc } = await import("../vendor/ccc.min.mjs");
+  const args = ccc.WitnessArgs.fromBytes(ccc.bytesFrom(tx.witnesses[0]));
+  assert.strictEqual(args.lock, undefined);
+  assert.strictEqual(args.inputType, "0x" + "00".repeat(8), "header dep index 0, as eight LE bytes");
+  assert.strictEqual(args.outputType, "0x" + E2.witness);
+  assert.strictEqual(tx.witnesses.length, 2);
+  assert.strictEqual(tx.witnesses[1], "0x");
+});
+
+test("the WitnessArgs encoder matches the CKB library for every mix of fields", async () => {
+  const { ccc } = await import("../vendor/ccc.min.mjs");
+  const some = [undefined, new Uint8Array(0), Uint8Array.from([1, 2, 3])];
+  for (const lock of some) for (const inputType of some) for (const outputType of some) {
+    const ours = "0x" + hexOf(encodeWitnessArgs({ lock, inputType, outputType }));
+    const theirs = ccc.hexFrom(ccc.WitnessArgs.from({ lock, inputType, outputType }).toBytes());
+    assert.strictEqual(ours, theirs);
+  }
+  // The classic DAO phase-two witness, from memory of the wire.
+  assert.strictEqual(
+    "0x" + hexOf(encodeWitnessArgs({ inputType: new Uint8Array(8) })),
+    "0x1c00000010000000100000001c000000080000000000000000000000");
+});
+
+test("the cell deps are the two scripts, the config, the DAO, the receipt, the record and the sponsor's lock", () => {
+  const { tx } = buildDaoPhaseTwoTx(base2());
+  const dl = MANIFEST2.scripts["dao-lock"], st = MANIFEST2.scripts["settlement-type"];
+  assert.deepStrictEqual(tx.cellDeps, [
+    { outPoint: dl.outPoint, depType: dl.depType },
+    { outPoint: st.outPoint, depType: st.depType },
+    { outPoint: { txHash: "0x" + "44".repeat(32), index: 0 }, depType: "code" },
+    code("99", 2),
+    { outPoint: withdrawing.receiptOutPoint, depType: "code" },
+    { outPoint: { txHash: "0x" + "c3".repeat(32), index: 0 }, depType: "code" },
+    ...sponsor.lockDeps,
+  ]);
+});
+
+test("a deposit that has not been through phase one is refused", () => {
+  assert.throws(() => buildDaoPhaseTwoTx(base2({ withdrawing: { ...withdrawing, data: "0x" + "00".repeat(8) } })),
+    /phase one/);
+  assert.throws(() => buildDaoPhaseTwoTx(base2({ withdrawing: { ...withdrawing, data: "0x" + u64leHex(5n) } })),
+    /deposit header/);
+  assert.throws(() => buildDaoPhaseTwoTx(base2({ withdrawing: { ...withdrawing, data: "0x" } })), /phase one/);
+});
+
+test("a withdrawal before the round's result is recorded is refused", () => {
+  // The contract needs the entropy record as a cell dep: prizes cannot be
+  // assigned to tickets until the draw is fixed.
+  assert.throws(() => buildDaoPhaseTwoTx(base2({ record: null })), /result/);
+  assert.throws(() => buildDaoPhaseTwoTx(base2({ recordOutPoint: null })), /result/);
+});
+
+test("a withdrawing cell that is not this batch's is refused", () => {
+  const otherDigest = { ...lock2, args: lock2.args.slice(0, -64) + "ee".repeat(32) };
+  assert.throws(() => buildDaoPhaseTwoTx(base2({ withdrawing: { ...withdrawing, lock: otherDigest } })), /receipt/);
+  const otherBatch = { ...lock2, args: lock2.args.slice(0, 66) + u64leHex(1n) + lock2.args.slice(82) };
+  assert.throws(() => buildDaoPhaseTwoTx(base2({ withdrawing: { ...withdrawing, lock: otherBatch } })), /accepted|receipt/);
+  assert.throws(() => buildDaoPhaseTwoTx(base2({ withdrawing: { ...withdrawing, capacity: withdrawing.capacity + 1n } })),
+    /capacity/);
+  assert.throws(() => buildDaoPhaseTwoTx(base2({ withdrawing: { ...withdrawing, type: null } })), /native DAO/);
+  assert.throws(() => buildDaoPhaseTwoTx(base2({ withdrawing: { ...withdrawing, lock: { ...lock2, codeHash: "0x" + "ee".repeat(32) } } })),
+    /DAOWOW lock/);
+});
+
+test("a manifest whose settlement script is not the config's is refused", () => {
+  // The real manifest's settlement script is not the vector config's.
+  assert.throws(() => buildDaoPhaseTwoTx(base2({ manifest: MANIFEST })), /settlement/);
+  const wrongKind = { ...MANIFEST2, scripts: { ...MANIFEST2.scripts, "settlement-type": { ...MANIFEST2.scripts["settlement-type"], hashType: "type" } } };
+  assert.throws(() => buildDaoPhaseTwoTx(base2({ manifest: wrongKind })), /settlement/);
+});
+
+test("phase two also takes only plain code deps, each once, and a sponsor that can pay", () => {
+  const group = { outPoint: { txHash: "0x" + "78".repeat(32), index: 0 }, depType: "depGroup" };
+  assert.throws(() => buildDaoPhaseTwoTx(base2({ sponsor: { ...sponsor, lockDeps: [group] } })), /dep group/);
+  assert.throws(() => buildDaoPhaseTwoTx(base2({ sponsor: { ...sponsor, capacity: 61n * CKB } })), /61 CKB/);
+  assert.throws(() => buildDaoPhaseTwoTx(base2({ configCellOutPoint: null })), /config cell/);
+});
